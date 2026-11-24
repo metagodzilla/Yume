@@ -5,6 +5,8 @@ from __future__ import annotations
 import base64
 import os
 import struct
+import threading
+import uuid
 import zlib
 from typing import Any
 
@@ -30,6 +32,10 @@ DIFFUSERS_IGNORE = (
 )
 
 _PIPE: Any = None
+_LOADED_VERSION: int | None = None
+_LOADS: dict[str, dict[str, Any]] = {}
+_LOAD_LOCK = threading.Lock()
+DEFAULT_VERSION = 1337429
 
 
 def mock_mode() -> bool:
@@ -73,11 +79,25 @@ def diffusers_ignore_patterns() -> tuple[str, ...]:
     return DIFFUSERS_IGNORE
 
 
+def loaded_version() -> int | None:
+    return _LOADED_VERSION
+
+
+def note_loaded(version_id: int) -> None:
+    global _LOADED_VERSION
+    _LOADED_VERSION = int(version_id)
+
+
+def mark_default_loaded() -> None:
+    note_loaded(DEFAULT_VERSION)
+
+
 def start_model() -> None:
     global _PIPE
     from yume_server.startup import mark, note_download
 
     if mock_mode():
+        mark_default_loaded()
         mark("ready", "Ready", done=1, total=1)
         return
     import torch
@@ -109,6 +129,7 @@ def start_model() -> None:
         )
         _PIPE.to("cuda")
         _PIPE.enable_vae_slicing()
+        mark_default_loaded()
         mark("ready", "Ready", done=1, total=1)
     except Exception as exc:
         mark("error", str(exc))
@@ -184,6 +205,7 @@ def _seed_list(body: Any) -> list[int]:
 def generate_images(body: Any) -> tuple[list[str], list[int], str, str]:
     seeds = _seed_list(body)
     consistency = _consistency(body)
+    chosen = selected_checkpoint_name(body)
     if mock_mode():
         from yume_server.metadata import embed_parameters, parameters_text
 
@@ -193,10 +215,10 @@ def generate_images(body: Any) -> tuple[list[str], list[int], str, str]:
         for seed in seeds:
             raw = base64.b64decode(_png(body.width, body.height, seed + bump))
             images.append(base64.b64encode(embed_parameters(raw, note)).decode("ascii"))
-        chosen = (getattr(body, "model", None) or "").strip() or "Animagine XL 4.0"
         return images, seeds, chosen, consistency
 
-    chosen = _activate_catalog(body)
+    if _PIPE is None:
+        raise RuntimeError("Model is not loaded.")
     _apply_scheduler(_PIPE, A1111_SAMPLERS.get(body.scheduler, body.scheduler))
     _apply_loras(_PIPE, body.loras)
     images: list[str] = []
@@ -273,39 +295,122 @@ def uses_loaded_pipeline(requested: str, models: list[dict[str, Any]]) -> bool:
     return match.get("versionId") == 1337429 and not match.get("path")
 
 
-def _activate_catalog(body: Any) -> str:
-    """Load a Civitai file from the cache. SD1.5, SDXL-family, and Flux each use their pipeline."""
-    global _PIPE
+def _checkpoints() -> list[dict[str, Any]]:
     from yume_server.catalog import list_models
 
-    requested = (getattr(body, "model", None) or "").strip()
-    models = list_models()
-    if uses_loaded_pipeline(requested, models):
-        if _PIPE is None and not mock_mode():
-            raise RuntimeError("Model is not loaded.")
-        return model_id()
-    match = next(
-        (
-            item
-            for item in models
-            if requested in {item.get("filename"), item.get("name"), str(item.get("versionId"))}
-        ),
+    return [item for item in list_models() if (item.get("type") or "Checkpoint") == "Checkpoint"]
+
+
+def find_checkpoint(requested: str | None) -> dict[str, Any] | None:
+    """Match an installed checkpoint by version id, then by filename or display name."""
+    models = _checkpoints()
+    text = (requested or "").strip()
+    if not text:
+        return _active_or_default(models)
+    if text.isdigit():
+        match = next((item for item in models if str(item.get("versionId")) == text), None)
+        if match:
+            return match
+    if text == model_id():
+        return next((item for item in models if item.get("versionId") == DEFAULT_VERSION), None) or _active_or_default(models)
+    return next(
+        (item for item in models if text in {item.get("filename"), item.get("name"), str(item.get("versionId") or "")}),
         None,
     )
-    if match is None:
+
+
+def _active_or_default(models: list[dict[str, Any]]) -> dict[str, Any] | None:
+    active = loaded_version()
+    if active is not None:
+        found = next((item for item in models if item.get("versionId") == active), None)
+        if found:
+            return found
+    return next((item for item in models if item.get("isDefault")), None) or (models[0] if models else None)
+
+
+def selected_checkpoint_name(body: Any) -> str:
+    requested = (getattr(body, "model", None) or "").strip()
+    match = find_checkpoint(requested)
+    if requested and match is None:
         raise ValueError("That checkpoint is not installed. Install it from Civitai first.")
-    path = match.get("path") or ""
+    if match is None:
+        return "Animagine XL 4.0"
+    loaded = loaded_version()
+    version = int(match.get("versionId") or 0)
+    if loaded is not None and version != int(loaded):
+        raise RuntimeError("That checkpoint is installed but not loaded. Tap Use and wait until it is ready.")
+    if loaded is None and not mock_mode():
+        raise RuntimeError("Model is not loaded.")
+    return str(match.get("name") or requested or "Animagine XL 4.0")
+
+
+def release_loaded() -> None:
+    """Drop the resident pipeline before another checkpoint is loaded or deleted."""
+    global _PIPE, _LOADED_VERSION
+    pipe = _PIPE
+    _PIPE = None
+    _LOADED_VERSION = None
+    if pipe is not None:
+        try:
+            pipe.to("cpu")
+        except Exception:
+            pass
+        del pipe
+    try:
+        import gc
+
+        gc.collect()
+    except Exception:
+        pass
+    if mock_mode():
+        return
+    try:
+        import torch
+
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+    except Exception:
+        pass
+
+
+def _load_default_diffusers() -> None:
+    global _PIPE
+    import torch
+    from diffusers import StableDiffusionXLPipeline
+    from huggingface_hub import snapshot_download
+
+    cache = os.environ.get("HF_HOME") or os.environ.get("YUME_MODEL_DIR") or "/models"
+    local = snapshot_download(
+        repo_id=model_id(),
+        cache_dir=os.path.join(cache, "hub"),
+        ignore_patterns=list(DIFFUSERS_IGNORE),
+        local_files_only=True,
+    )
+    pipe = StableDiffusionXLPipeline.from_pretrained(
+        local,
+        torch_dtype=torch.float16,
+        use_safetensors=True,
+        local_files_only=True,
+    )
+    pipe.to("cuda")
+    pipe.enable_vae_slicing()
+    _PIPE = pipe
+
+
+def _load_single_file(record: dict[str, Any]) -> None:
+    global _PIPE
+    path = record.get("path") or ""
     if not path or not os.path.exists(path) or os.path.getsize(path) < 1_000_000:
         raise ValueError("The weight file is not on disk yet. The first download of a checkpoint is several gigabytes.")
     import torch
 
     dtype = torch.float16
-    base = match.get("baseModel") or ""
-    if str(base).startswith("Flux"):
+    base = str(record.get("baseModel") or "")
+    if base.lower().startswith("flux"):
         from diffusers import FluxPipeline
 
         pipe = FluxPipeline.from_single_file(path, torch_dtype=dtype)
-    elif base == "SD 1.5":
+    elif base == "SD 1.5" or base.lower().startswith("sd 1"):
         from diffusers import StableDiffusionPipeline
 
         pipe = StableDiffusionPipeline.from_single_file(path, torch_dtype=dtype)
@@ -314,8 +419,97 @@ def _activate_catalog(body: Any) -> str:
 
         pipe = StableDiffusionXLPipeline.from_single_file(path, torch_dtype=dtype)
     pipe.to("cuda")
+    pipe.enable_vae_slicing()
     _PIPE = pipe
-    return match.get("name") or requested
+
+
+def _load_record(record: dict[str, Any]) -> None:
+    version = int(record.get("versionId") or 0)
+    if mock_mode():
+        note_loaded(version)
+        return
+    release_loaded()
+    if record.get("source") == "diffusers" or (version == DEFAULT_VERSION and not record.get("path")):
+        _load_default_diffusers()
+    else:
+        _load_single_file(record)
+    note_loaded(version)
+
+
+def _use_view(job: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "id": job["id"],
+        "versionId": job["versionId"],
+        "state": job["state"],
+        "stage": job["stage"],
+        "percent": job["percent"],
+        "error": job["error"],
+        "record": job["record"],
+    }
+
+
+def use_progress(job_id: str) -> dict[str, Any]:
+    with _LOAD_LOCK:
+        job = _LOADS.get(job_id)
+        if job is None:
+            raise KeyError(job_id)
+        return _use_view(job)
+
+
+def _set_use(job_id: str, **fields: Any) -> None:
+    with _LOAD_LOCK:
+        _LOADS[job_id].update(fields)
+
+
+def _run_use(job_id: str, version_id: int) -> None:
+    from yume_server.catalog import set_default
+
+    try:
+        _set_use(job_id, state="loading", stage="Freeing video memory", percent=None)
+        record = next(item for item in _checkpoints() if item.get("versionId") == version_id)
+        if not mock_mode():
+            release_loaded()
+        _set_use(job_id, state="loading", stage="Loading checkpoint", percent=None)
+        _load_record(record)
+        chosen = set_default(version_id)
+        _set_use(job_id, state="done", stage="Ready", percent=100, record=chosen, error="")
+    except Exception as exc:
+        _set_use(job_id, state="error", stage="Could not load", percent=None, error=str(exc) or "The checkpoint could not be loaded.")
+
+
+def start_use(version_id: int) -> dict[str, Any]:
+    """Load one installed checkpoint. The previous pipeline is released first so only one model stays in VRAM."""
+    from yume_server.catalog import set_default
+
+    record = next((item for item in _checkpoints() if item.get("versionId") == version_id), None)
+    if record is None:
+        raise FileNotFoundError("Install that checkpoint before using it.")
+    if loaded_version() == version_id and (mock_mode() or _PIPE is not None):
+        chosen = set_default(version_id)
+        return {
+            "id": "current",
+            "versionId": version_id,
+            "state": "done",
+            "stage": "Ready",
+            "percent": 100,
+            "error": "",
+            "record": chosen,
+        }
+    job_id = uuid.uuid4().hex[:12]
+    job = {
+        "id": job_id,
+        "versionId": version_id,
+        "state": "queued",
+        "stage": "Queued",
+        "percent": None,
+        "error": "",
+        "record": record,
+    }
+    with _LOAD_LOCK:
+        _LOADS[job_id] = job
+        view = _use_view(job)
+    threading.Thread(target=_run_use, args=(job_id, version_id), daemon=True).start()
+    return view
 
 
 def _open_reference(body: Any):

@@ -1,6 +1,7 @@
 import base64
 import os
 import struct
+import time
 
 import pytest
 from fastapi.testclient import TestClient
@@ -16,6 +17,172 @@ from yume_server.main import app  # noqa: E402
 def client() -> TestClient:
     with TestClient(app) as test:
         yield test
+
+
+def test_use_switches_the_loaded_checkpoint_by_id(client: TestClient) -> None:
+    headers = {"Authorization": "Bearer test-key"}
+    installed = client.post("/models/install", headers=headers, json={"versionId": 77})
+    assert installed.status_code == 200, installed.text
+    job = installed.json()
+    for _ in range(30):
+        progress = client.get(f"/models/install/{job['id']}", headers=headers).json()
+        if progress["state"] in {"done", "error"}:
+            job = progress
+            break
+    assert job["state"] == "done"
+    current = client.post(
+        "/generate",
+        headers=headers,
+        json={"prompt": "a shrine", "model": "1337429", "width": 512, "height": 512, "steps": 1, "scheduler": "euler_a"},
+    )
+    assert current.status_code == 200, current.text
+    assert current.json()["model"] == "Animagine XL 4.0"
+    early = client.post(
+        "/generate",
+        headers=headers,
+        json={"prompt": "a shrine", "model": "77", "width": 512, "height": 512, "steps": 1, "scheduler": "euler_a"},
+    )
+    assert early.status_code == 503
+    assert "not loaded" in early.json()["detail"].lower()
+    use = client.post("/models/use", headers=headers, json={"versionId": 77})
+    assert use.status_code == 200, use.text
+    loaded = use.json()
+    for _ in range(30):
+        if loaded["state"] in {"done", "error"}:
+            break
+        loaded = client.get(f"/models/use/{loaded['id']}", headers=headers).json()
+    assert loaded["state"] == "done"
+    listed = client.get("/models", headers=headers).json()
+    assert listed["activeVersionId"] == 77
+    switched = client.post(
+        "/generate",
+        headers=headers,
+        json={"prompt": "a shrine", "model": "77", "width": 512, "height": 512, "steps": 1, "scheduler": "euler_a"},
+    )
+    assert switched.status_code == 200, switched.text
+    assert switched.json()["model"] == "Civitai 77"
+    missing = client.post(
+        "/generate",
+        headers=headers,
+        json={"prompt": "a shrine", "model": "999999", "width": 512, "height": 512, "steps": 1, "scheduler": "euler_a"},
+    )
+    assert missing.status_code == 400
+    removed = client.delete("/models/77", headers=headers)
+    assert removed.status_code == 200, removed.text
+    fallback = removed.json().get("job")
+    if fallback:
+        for _ in range(30):
+            if fallback["state"] in {"done", "error"}:
+                break
+            fallback = client.get(f"/models/use/{fallback['id']}", headers=headers).json()
+        assert fallback["state"] == "done"
+    restored = client.post(
+        "/generate",
+        headers=headers,
+        json={"prompt": "a shrine", "model": "1337429", "width": 512, "height": 512, "steps": 1, "scheduler": "euler_a"},
+    )
+    assert restored.status_code == 200, restored.text
+
+
+def test_download_resumes_with_range_and_checks_the_hash(tmp_path, monkeypatch) -> None:
+    import hashlib
+
+    from yume_server import downloads
+
+    payload = b"abcdefghij"
+    digest = hashlib.sha256(payload).hexdigest()
+    calls = {"n": 0}
+
+    class Fake:
+        def __init__(self, status: int, headers: dict[str, str], chunks: list[bytes], fail: bool = False):
+            self.status = status
+            self.headers = headers
+            self._chunks = chunks
+            self._i = 0
+            self.fail = fail
+
+        def read(self, _size: int) -> bytes:
+            if self.fail and self._i >= 1:
+                raise ConnectionResetError("reset")
+            if self._i >= len(self._chunks):
+                return b""
+            chunk = self._chunks[self._i]
+            self._i += 1
+            return chunk
+
+        def __enter__(self) -> "Fake":
+            return self
+
+        def __exit__(self, *_args: object) -> bool:
+            return False
+
+    def fake_open(request, timeout=120):  # noqa: ANN001
+        calls["n"] += 1
+        header = {key.lower(): value for key, value in request.header_items()}
+        if calls["n"] == 1:
+            return Fake(200, {"Content-Length": "10"}, [b"abcde"], fail=True)
+        assert header.get("Range") == "bytes=5-" or header.get("range") == "bytes=5-"
+        return Fake(206, {"Content-Range": "bytes 5-9/10", "Content-Length": "5"}, [b"fghij"])
+
+    monkeypatch.setattr(downloads, "_urlopen", fake_open)
+    monkeypatch.setattr(downloads, "_sleep", lambda _seconds: None)
+    monkeypatch.setenv("YUME_LORA_DIR", str(tmp_path / "loras"))
+    monkeypatch.setenv("YUME_EMBEDDING_DIR", str(tmp_path / "embeddings"))
+    dest = tmp_path / "weight.safetensors"
+    downloads.download_resumable("http://example.test/weight", str(dest), {"User-Agent": "yume"}, expected_sha256=digest, total_hint=10)
+    assert dest.read_bytes() == payload
+    assert not dest.with_name("weight.safetensors.part").exists()
+    assert downloads.resource_root({"type": "LORA"}) != downloads.resource_root({"type": "TextualInversion"})
+
+
+def test_install_jobs_persist_across_restarts(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("YUME_MODEL_DIR", str(tmp_path))
+    monkeypatch.setenv("YUME_LORA_DIR", str(tmp_path / "loras"))
+    monkeypatch.setenv("YUME_MOCK", "1")
+    from yume_server import catalog
+
+    catalog._LOADED_DIR = None
+    catalog._INSTALLS.clear()
+    started = catalog.start_install(91, None, {"type": "LORA", "name": "Ribbon", "filename": "ribbon.safetensors"})
+    view = started
+    for _ in range(40):
+        view = catalog.install_progress(started["id"])
+        if view["state"] in {"done", "error"}:
+            break
+        time.sleep(0.02)
+    assert view["state"] == "done"
+    assert view["type"] == "LORA"
+    assert (tmp_path / "loras" / "ribbon.safetensors").exists()
+    catalog._LOADED_DIR = None
+    catalog._INSTALLS.clear()
+    catalog.ensure_jobs_loaded()
+    again = catalog.install_progress(started["id"])
+    assert again["state"] == "done" and again["name"] == "Ribbon"
+    with pytest.raises(ValueError):
+        catalog.pause_install(started["id"])
+    partial = tmp_path / "half.safetensors.part"
+    partial.write_bytes(b"12345")
+    catalog._INSTALLS["half"] = {
+        "id": "half",
+        "versionId": 92,
+        "state": "downloading",
+        "bytesDone": 1,
+        "bytesTotal": 10,
+        "bytesPerSecond": 0,
+        "etaSeconds": None,
+        "error": "",
+        "record": {"path": str(tmp_path / "half.safetensors"), "type": "TextualInversion", "name": "Easy"},
+        "type": "TextualInversion",
+        "name": "Easy",
+        "updatedAt": 1,
+    }
+    catalog._attach_control(catalog._INSTALLS["half"])
+    catalog._save_jobs(force=True)
+    catalog._LOADED_DIR = None
+    catalog._INSTALLS.clear()
+    catalog.ensure_jobs_loaded()
+    restored = catalog.install_progress("half")
+    assert restored["state"] == "paused" and restored["bytesDone"] == 5 and restored["type"] == "TextualInversion"
 
 
 def test_negative_seed_is_random_and_distinct(client: TestClient) -> None:
@@ -82,7 +249,7 @@ def test_generate_returns_pngs_seed_scheduler_and_loras(client: TestClient) -> N
     body = response.json()
     assert body["seeds"] == [42, 43]
     assert body["scheduler"] == "dpm_2m_karras"
-    assert body["model"] == "cagliostrolab/animagine-xl-4.0"
+    assert body["model"] == "Animagine XL 4.0"
     assert len(body["images"]) == 2
     raw = base64.b64decode(body["images"][0])
     assert raw.startswith(b"\x89PNG")
@@ -168,6 +335,9 @@ def test_default_checkpoint_is_installed_and_metadata_is_written(client: TestCli
             job = progress.json()
             break
     assert job["state"] == "done"
+    installs = client.get("/models/installs", headers=headers)
+    assert installs.status_code == 200
+    assert any(item["versionId"] == 42 for item in installs.json()["jobs"])
     chosen = client.post("/models/default", headers=headers, json={"versionId": 42})
     assert chosen.status_code == 200
     removed = client.delete("/models/42", headers=headers)
