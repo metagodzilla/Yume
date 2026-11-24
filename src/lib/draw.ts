@@ -5,6 +5,7 @@ import type { GeneratorState } from '@/src/lib/genstore';
 import { embedParameters } from '@/src/lib/pngmeta';
 import { renderDemoFrames } from '@/src/lib/render';
 import { classifyGatewayInput, generateUrl, saladErrorMessage } from '@/src/lib/salad';
+import { expandSeeds } from '@/src/lib/seeds';
 import { normalizeSaladKey } from '@/src/lib/saladCloud';
 import type { Character, SamplerId } from '@/src/lib/types';
 
@@ -163,8 +164,9 @@ export async function drawFrames(input: {
   character: Character | null;
   initPng?: Uint8Array | null;
   maskPng?: Uint8Array | null;
-}): Promise<{ pngs: Uint8Array[]; parameters: string; warning?: string }> {
-  const params = generationParams(input.state, input.prompt, input.seed);
+}): Promise<{ pngs: Uint8Array[]; parameters: string; seeds: number[]; warning?: string }> {
+  const seeds = input.seed < 0 ? expandSeeds(Math.floor(Math.random() * 2_147_483_647), input.state.count) : expandSeeds(input.seed, input.state.count);
+  const params = generationParams(input.state, input.prompt, seeds[0] ?? 0);
   const parameters = formatParameters(params);
   if (input.provider !== 'salad') {
     const pngs = renderDemoFrames({
@@ -173,11 +175,12 @@ export async function drawFrames(input: {
       aspectId: input.state.height >= input.state.width ? 'wallpaper' : 'landscape',
       character: input.character,
       count: input.state.count,
-      seed: input.seed,
-    }).map((png, index) => embedParameters(png, formatParameters({ ...params, seed: input.seed + index })));
+      seed: seeds[0] ?? 0,
+    }).map((png, index) => embedParameters(png, formatParameters({ ...params, seed: seeds[index] ?? seeds[0] ?? 0 })));
     return {
       pngs,
       parameters,
+      seeds,
       warning:
         input.provider === 'openai'
           ? 'OpenAI ignores checkpoints, LoRAs, and sampler names. Demo painted this frame and still wrote the Civitai metadata.'
@@ -217,7 +220,8 @@ export async function drawFrames(input: {
   }
   const raw = await response.text();
   if (!response.ok) throw new Error(saladErrorMessage({ aborted: false, status: response.status, body: raw, url: target }));
-  const body = JSON.parse(raw) as { images?: string[] };
+  const body = JSON.parse(raw) as { images?: string[]; seeds?: number[] };
   if (!body.images?.length) throw new Error('Salad returned no images.');
-  return { pngs: body.images.map((item) => base64ToBytes(item)), parameters };
+  const returned = Array.isArray(body.seeds) ? body.seeds.filter((seed) => typeof seed === 'number' && seed >= 0) : [];
+  return { pngs: body.images.map((item) => base64ToBytes(item)), parameters, seeds: returned.length ? returned : seeds };
 }

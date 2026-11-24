@@ -15,6 +15,7 @@ import { loraPage } from '@/src/lib/civitai';
 import { openLink } from '@/src/lib/openLink';
 import { patchGenerator, useGenerator } from '@/src/lib/genstore';
 import { endpointDiffersFromLive, LIVE_GATEWAY_URL, normalizeEndpoint } from '@/src/lib/salad';
+import { chooseSeeds } from '@/src/lib/seeds';
 import { persistPng, readApiKey, readSaladKey } from '@/src/lib/storage';
 import { uid } from '@/src/lib/id';
 import { useStudio } from '@/src/studio';
@@ -30,6 +31,7 @@ export default function GenerateScreen() {
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [negativeOpen, setNegativeOpen] = useState(false);
+  const [lastSeeds, setLastSeeds] = useState<number[]>([]);
   const checkpoint = gen.installed.find((item) => item.versionId === gen.checkpointId) ?? gen.installed[0];
   const latest = studio.history[0];
   const parsed = extractLoras(gen.prompt).loras;
@@ -52,7 +54,8 @@ export default function GenerateScreen() {
     setError(null);
     setStatus(studio.settings.provider === 'salad' ? 'Sending it to Salad…' : 'Drawing on this phone…');
     try {
-      const seed = gen.seedRandom ? Math.floor(Math.random() * 2_147_483_646) : Math.max(0, Number(gen.seed) || 0);
+      const chosen = chooseSeeds({ locked: !gen.seedRandom, seedText: gen.seed, count: gen.count });
+      const seed = chosen.requestSeed;
       const [saladKey] = await Promise.all([readSaladKey(), readApiKey()]);
       const result = await drawFrames({
         state: gen,
@@ -87,8 +90,8 @@ export default function GenerateScreen() {
         model: params.model,
         provider: studio.settings.provider === 'salad' ? 'salad' : 'demo',
         enhance: false,
-        seed,
-        seeds: result.pngs.map((_, index) => seed + index),
+        seed: (result.seeds[0] ?? chosen.seeds[0]) ?? null,
+        seeds: result.seeds.length ? result.seeds : chosen.seeds,
         steps: gen.steps,
         cfg: gen.cfg,
         sampler: samplerId(gen.sampler),
@@ -105,9 +108,9 @@ export default function GenerateScreen() {
         warning: result.warning,
       };
       await studio.rememberGeneration(record);
-      if (!gen.seedRandom) patchGenerator({ seed: String(seed) });
-      else patchGenerator({ seed: String(seed), seedRandom: false });
-      setStatus(result.warning ?? 'Saved. The PNG carries Automatic1111 parameters, so Civitai can read the resources.');
+      const used = result.seeds.length ? result.seeds : chosen.seeds;
+      setLastSeeds(used);
+      setStatus(`${result.warning ? `${result.warning} ` : ''}Seed ${used.join(', ')}.`);
     } catch (caught) {
       const message = caught instanceof Error ? caught.message : 'The image could not be drawn.';
       setError(message);
@@ -250,13 +253,14 @@ export default function GenerateScreen() {
         <View style={styles.row}>
           <TextInput
             testID="gen-seed"
-            value={gen.seed}
-            onChangeText={(seed) => patchGenerator({ seed, seedRandom: false })}
+            value={gen.seedRandom ? 'random' : gen.seed}
+            editable={!gen.seedRandom}
+            onChangeText={(seed) => patchGenerator({ seed: seed.replace(/[^\d]/g, ''), seedRandom: false })}
             keyboardType="number-pad"
             style={[styles.input, { flex: 1 }]}
           />
-          <Pressable onPress={() => patchGenerator({ seedRandom: true })}>
-            <Text style={styles.link}>{gen.seedRandom ? 'Seed random' : 'Use this seed'}</Text>
+          <Pressable testID="seed-lock" onPress={() => patchGenerator({ seedRandom: !gen.seedRandom })}>
+            <Text style={styles.link}>{gen.seedRandom ? 'Seed unlocked' : 'Seed locked'}</Text>
           </Pressable>
         </View>
         <Text style={styles.label}>Size · {checkpoint?.baseModel}</Text>
@@ -303,6 +307,11 @@ export default function GenerateScreen() {
           <Text style={styles.goText}>{busy ? 'Drawing…' : `Generate ${gen.count}`}</Text>
         </Pressable>
         {status ? <Text style={styles.ok}>{status}</Text> : null}
+        {lastSeeds.length ? (
+          <Pressable testID="reuse-seed" onPress={() => patchGenerator({ seed: String(lastSeeds[0]), seedRandom: false })}>
+            <Text style={styles.link}>Reuse seed {lastSeeds.join(', ')}</Text>
+          </Pressable>
+        ) : null}
         {error ? <Text style={styles.error}>{error}</Text> : null}
         {studio.settings.provider === 'salad' && endpointDiffersFromLive(studio.settings.saladEndpoint) ? (
           <Pressable testID="use-live-server" onPress={() => void studio.saveSaladEndpoint(LIVE_GATEWAY_URL)}>

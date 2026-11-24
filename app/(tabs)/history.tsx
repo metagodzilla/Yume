@@ -6,6 +6,7 @@ import { FrameGrid } from '@/components/FrameGrid';
 import { ago } from '@/src/lib/id';
 import { confirmAction } from '@/src/lib/confirm';
 import { aspectById, styleById } from '@/src/lib/presets';
+import { patchGenerator } from '@/src/lib/genstore';
 import { useStudio } from '@/src/studio';
 import { router } from 'expo-router';
 import { colors, font } from '@/src/theme';
@@ -52,7 +53,7 @@ export default function HistoryScreen() {
                   <Text style={styles.meta}>
                     {item.styleName || styleById(item.styleId).label} · {aspectById(item.aspectId).label} ·{' '}
                     {item.source === 'salad' ? 'Salad' : item.source === 'openai' ? 'OpenAI' : 'Demo'}
-                    {item.seed != null ? ` · seed ${item.seed}` : ''}
+                    {item.seeds?.length ? ` · seed ${item.seeds.join(', ')}` : item.seed != null ? ` · seed ${item.seed}` : ''}
                   </Text>
                   <Text style={styles.prompt} numberOfLines={3}>
                     {item.finalPrompt || item.userPrompt || item.characterName || 'Character sheet'}
@@ -87,6 +88,16 @@ export default function HistoryScreen() {
                     router.navigate('/');
                   }}>
                   <Text style={styles.remix}>Remix</Text>
+                </Pressable>
+                <Pressable
+                  accessibilityRole="button"
+                  onPress={() => {
+                    const seed = item.seeds?.[0] ?? item.seed;
+                    if (seed == null) return;
+                    patchGenerator({ seed: String(seed), seedRandom: false });
+                    router.navigate('/(tabs)/create');
+                  }}>
+                  <Text style={styles.remix}>Reuse seed</Text>
                 </Pressable>
               </View>
             </View>

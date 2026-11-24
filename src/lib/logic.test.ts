@@ -21,6 +21,7 @@ import { encodePng } from '@/src/lib/png';
 import { produceImages, resolveSeeds } from '@/src/lib/produce';
 import { renderDemoFrames } from '@/src/lib/render';
 import { describeUpdateError, downloadLabel } from '@/src/lib/apkInstall';
+import { chooseSeeds } from '@/src/lib/seeds';
 import { redactValue } from '@/src/lib/reportText';
 import { buildSaladGenerateBody, composeGenerationPrompt, sentPositiveText } from '@/src/lib/draw';
 import type { GeneratorState } from '@/src/lib/genstore';
@@ -414,6 +415,10 @@ assert(modelStep.steps[4]?.percent === 50 && modelStep.overall != null, 'model d
 const unknownStep = cloudChecklist({ hasEndpoint: true, groupStatus: 'deploying', allocating: 1 });
 assert(unknownStep.steps.find((step) => step.state === 'current')?.percent == null && unknownStep.overall == null, 'missing progress stays indeterminate');
 assert(areaCounts([{ area: 'Cloud', name: 'Health', status: 'pass', message: '', ms: 1 }, { area: 'Cloud', name: 'Ready', status: 'skip', message: '', ms: 0 }])[0]?.pass === 1, 'area summary');
+const unlocked = [chooseSeeds({ locked: false, seedText: '1', count: 2, rng: () => 0.1 }), chooseSeeds({ locked: false, seedText: '1', count: 2, rng: () => 0.2 })];
+assert(unlocked[0].seeds[0] !== unlocked[1].seeds[0] && unlocked[0].seeds[0] !== unlocked[0].seeds[1], 'unlocked seeds change and stay distinct');
+const lockedSeeds = chooseSeeds({ locked: true, seedText: '1', count: 2 });
+assert(lockedSeeds.requestSeed === 1 && lockedSeeds.seeds.join(',') === '1,2', 'locked seed is reused');
 assert(checksumMatches('abc', 'ABC'), 'checksum');
 assert(sessionCost(30 * 60 * 1000, 0.13) > 0.06 && sessionCost(30 * 60 * 1000, 0.13) < 0.07, 'half hour cost');
 assert(capWarning(1, 1)?.includes('over'), 'cap');
