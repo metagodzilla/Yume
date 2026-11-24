@@ -21,7 +21,10 @@ import { encodePng } from '@/src/lib/png';
 import { produceImages, resolveSeeds } from '@/src/lib/produce';
 import { renderDemoFrames } from '@/src/lib/render';
 import { buildSaladBody, saladErrorMessage } from '@/src/lib/salad';
+import { browsingParams, civitaiModelUrl, filterModels, loraPage, pickPreview, thumbnailUrl, type CivitaiModel } from '@/src/lib/civitai';
 import { buildYumeContainerGroup, choicesFromGpuClasses, costLine, describeDeploy, maskKey, pickDefaultGpu, serverUrlFromLink, shouldIdleStop } from '@/src/lib/saladCloud';
+import { capReached, cloudChecklist, deploymentForEndpoint, formatCostLine, sessionUsd } from '@/src/lib/cloudSteps';
+import { classifyHeat, estimatePowerWatts, shouldKeepScreenAwake, throttleFor, throttleSteps } from '@/src/lib/phonePower';
 import { composeSheet, decodePng } from '@/src/lib/sheet';
 import { applyInstruction, consistencyNote, expressionPrompt, undoVersion, viewPrompt } from '@/src/lib/turnaround';
 import type { Character } from '@/src/lib/types';
@@ -319,6 +322,8 @@ import {
   recover,
   resumeAll,
   resumeJob,
+  thermalPause,
+  thermalResume,
 } from '@/src/lib/queue';
 
 const demoConn = interpretConnection({ provider: 'demo', endpoint: '', hasKey: false });
@@ -448,7 +453,43 @@ assert(serverUrlFromLink('yume://setup?key=secret') === null, 'key-only link is 
 assert(maskKey('supersecretvalue') === '••••alue' && !maskKey('supersecretvalue').includes('supersecret'), 'key stays masked');
 assert(shouldIdleStop({ idleMinutes: 15, lastActivityMs: 0, now: 20 * 60_000, activeJobs: 0, running: true }) === false, 'missing activity does not stop');
 assert(shouldIdleStop({ idleMinutes: 15, lastActivityMs: 1_000, now: 16 * 60_000, activeJobs: 0, running: true }) === true, 'idle stop');
+const live = deploymentForEndpoint('https://persimmon-potato-w36vqxy5bseqmtk4.salad.cloud', null);
+assert(live?.organization === 'seeyeevang707' && live.project === 'default' && live.group === 'yume-server', 'live server identity');
+const downloading = cloudChecklist({
+  hasEndpoint: true,
+  groupStatus: 'running',
+  running: 1,
+  healthStatus: 200,
+  readyStatus: 503,
+  healthReady: false,
+  readyDetail: 'Model is still downloading.',
+});
+assert(downloading.phase === 'starting' && downloading.steps[4]?.state === 'current' && downloading.steps[3]?.state === 'done', 'model download step');
+assert(downloading.liveTitle.toLowerCase().includes('downloading model'), 'model download title');
+const locked = cloudChecklist({ hasEndpoint: true, healthStatus: 403, readyStatus: 403 });
+assert(locked.authBlocked && locked.steps[0]?.state === 'done' && locked.steps[1]?.state === 'current', 'gateway 403 needs the key');
+const readyCloud = cloudChecklist({ hasEndpoint: true, readyStatus: 200, healthStatus: 200 });
+assert(readyCloud.phase === 'running' && readyCloud.steps[5]?.state === 'current' && readyCloud.steps[4]?.state === 'done', 'ready step');
+assert(formatCostLine({ sessionUsd: sessionUsd(0, 0.44), hourly: 0.44, upMin: 0, cap: 5 }).includes('$0.00 this session') && formatCostLine({ sessionUsd: 0.41, hourly: 0.44, upMin: 0, cap: 5 }).includes('$4.59 left'), 'cost line');
+assert(capReached(5, 5) && !capReached(1, 0), 'session cap');
+assert(estimatePowerWatts(-1_500_000, 4000)?.toFixed(1) === '6.0', 'power estimate from current and voltage');
+assert(classifyHeat({ tempC: 43, thermalStatus: 0, lowPower: false }) === 'hot', 'hot battery');
+assert(classifyHeat({ tempC: 39, thermalStatus: null, lowPower: false }) === 'warm', 'warm battery');
+assert(throttleFor('hot').pauseQueue && throttleSteps(28, 4, throttleFor('warm')).count === 1, 'thermal throttle');
+assert(shouldKeepScreenAwake('background') === false && shouldKeepScreenAwake('active') === false, 'no wake lock');
+const hotQueue = thermalPause(enqueue(emptyQueue(), { id: 'hot', kind: 'offline-generate', title: 'Draw', createdAt: 1 }));
+assert(hotQueue.jobs[0]?.status === 'paused' && hotQueue.jobs[0]?.thermalHold, 'hot pause');
+assert(recover(hotQueue, true).state.jobs[0]?.status === 'paused', 'thermal hold survives reconnect');
+assert(thermalResume(hotQueue).jobs[0]?.status === 'waiting', 'cool resumes thermal hold');
 assert(shouldIdleStop({ idleMinutes: 15, lastActivityMs: 1_000, now: 16 * 60_000, activeJobs: 1, running: true }) === false, 'queue holds the server');
+assert(browsingParams('sfw').nsfw === 'false' && browsingParams('nsfw').browsingLevel === '28', 'civitai filter params');
+const sfwModel = { id: 1, name: 'Safe', type: 'LORA', nsfw: false, nsfwLevel: 1, modelVersions: [{ id: 9, modelId: 1, name: 'v', baseModel: 'SDXL 1.0', trainedWords: [], downloadUrl: '', files: [], images: [{ url: 'https://image.civitai.com/a/original=true/1.jpeg', nsfwLevel: 1, type: 'image' }, { url: 'https://image.civitai.com/a/original=true/1.mp4', type: 'video', nsfwLevel: 1 }] }] } as CivitaiModel;
+const nsfwModel = { id: 2, name: 'Adult', type: 'LORA', nsfw: true, nsfwLevel: 8, modelVersions: [{ id: 10, modelId: 2, name: 'v', baseModel: 'SDXL 1.0', trainedWords: [], downloadUrl: '', files: [], images: [{ url: 'https://image.civitai.com/a/original=true/2.jpeg', nsfwLevel: 1, type: 'image' }, { url: 'https://image.civitai.com/a/original=true/3.jpeg', nsfwLevel: 8, type: 'image' }] }] } as CivitaiModel;
+assert(filterModels([sfwModel, nsfwModel], 'sfw').length === 1 && filterModels([sfwModel, nsfwModel], 'nsfw')[0]?.id === 2, 'client nsfw split');
+assert(pickPreview(sfwModel, 'sfw')?.kind === 'image' && thumbnailUrl(pickPreview(sfwModel, 'sfw')?.url || '').includes('/width=450/'), 'thumbnail skips video and shrinks original');
+assert(pickPreview(nsfwModel, 'nsfw')?.url.endsWith('3.jpeg') && pickPreview(nsfwModel, 'sfw')?.url.endsWith('2.jpeg'), 'thumbnail follows the filter');
+assert(loraPage({ name: 'ribbon', modelId: 5, versionId: 9 }).url === civitaiModelUrl(5, 9), 'lora page uses ids');
+assert(loraPage({ name: 'ribbon' }).label === 'Search on Civitai', 'lora without ids searches');
 assert(saladErrorMessage({ aborted: true }).toLowerCase().includes('waking'), 'cold start copy');
 assert(saladErrorMessage({ aborted: false, status: 503 }).toLowerCase().includes('not ready'), '503 copy');
 

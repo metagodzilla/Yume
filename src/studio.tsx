@@ -28,6 +28,8 @@ import {
 } from '@/src/lib/library';
 import { produceImages } from '@/src/lib/produce';
 import { exportBundle } from '@/src/lib/library';
+import { throttleSteps } from '@/src/lib/phonePower';
+import { getThrottle } from '@/src/lib/thermalState';
 import {
   deleteImageUri,
   loadCharacters,
@@ -411,17 +413,29 @@ export function StudioProvider({ children }: { children: ReactNode }) {
     const started = Date.now();
     try {
       const [openaiKey, saladKey] = await Promise.all([readApiKey(), readSaladKey()]);
+      const throttle = getThrottle();
+      let provider = settings.provider;
+      if (throttle.preferCloud && settings.saladEndpoint.trim() && saladKey) provider = 'salad';
+      const scaled =
+        provider === 'demo' || settings.sourceMode === 'phone' ? throttleSteps(settings.steps, count, throttle) : { steps: settings.steps, count };
+      if (throttle.pauseQueue && provider !== 'salad') {
+        setError(throttle.notice || 'Phone is hot. The queue is paused until it cools.');
+        return;
+      }
+      if (scaled.steps !== settings.steps && throttle.pauseMs > 0) {
+        await new Promise((resolve) => setTimeout(resolve, throttle.pauseMs));
+      }
       const result = await produceImages({
-        provider: settings.provider,
+        provider,
         prompt: sent,
         negative: settings.negative,
         styleId,
         aspectId,
         character: selectedCharacter,
-        count,
+        count: scaled.count,
         width: settings.width,
         height: settings.height,
-        steps: settings.steps,
+        steps: scaled.steps,
         cfg: settings.cfg,
         sampler: settings.sampler,
         seedMode: settings.seedMode,

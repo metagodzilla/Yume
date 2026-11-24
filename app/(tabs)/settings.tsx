@@ -82,6 +82,9 @@ export default function SettingsScreen() {
           <Pressable testID="open-connect" onPress={() => router.push('/connect')}>
             <Text style={styles.link}>Connect</Text>
           </Pressable>
+          <Pressable testID="low-power" onPress={() => void studio.updateSettings({ lowPower: !studio.settings.lowPower })}>
+            <Text style={styles.link}>{studio.settings.lowPower ? 'Low-power mode on' : 'Low-power mode off'}</Text>
+          </Pressable>
         </View>
 
         <View style={styles.card}>

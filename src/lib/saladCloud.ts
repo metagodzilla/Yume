@@ -158,7 +158,7 @@ export function buildYumeContainerGroup(input: { apiKey: string; gpuClassId: str
       client_request_timeout: 100000,
       server_response_timeout: 100000,
     },
-    startup_probe: httpProbe('/ready', 60, 60, 10, 20),
+    startup_probe: httpProbe('/ready', 600, 60, 10, 20),
     readiness_probe: httpProbe('/ready', 0, 10, 5, 3),
     liveness_probe: httpProbe('/health', 30, 30, 5, 3),
   };

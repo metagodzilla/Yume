@@ -1,5 +1,6 @@
 import { useSyncExternalStore } from 'react';
 
+import type { ContentFilter } from '@/src/lib/civitai';
 import { DEFAULT_CHECKPOINT } from '@/src/lib/defaultModel';
 
 export type InstalledResource = {
@@ -31,7 +32,8 @@ export type GeneratorState = {
   qualityTags: boolean;
   triggers: boolean;
   checkpointId: number;
-  loras: { name: string; weight: number }[];
+  loras: { name: string; weight: number; modelId?: number; versionId?: number }[];
+  contentFilter: ContentFilter;
   embeddings: string;
   vae: string;
   hires: boolean;
@@ -85,6 +87,7 @@ export const initialGenerator = (): GeneratorState => ({
   mode: 'txt2img',
   denoise: 0.55,
   nsfw: false,
+  contentFilter: 'sfw',
   installed: [defaultResource()],
 });
 
@@ -101,9 +104,17 @@ export function getGenerator(): GeneratorState {
 }
 
 export function patchGenerator(patch: Partial<GeneratorState>) {
-  state = { ...state, ...patch };
+  const contentFilter = patch.contentFilter ?? state.contentFilter;
+  state = { ...state, ...patch, contentFilter, nsfw: contentFilter !== 'sfw' };
   emit();
   void persist();
+}
+
+export function toggleLora(lora: { name: string; weight: number; modelId?: number; versionId?: number }) {
+  const same = (item: GeneratorState['loras'][number]) =>
+    lora.versionId && item.versionId ? item.versionId === lora.versionId : item.name === lora.name;
+  const exists = state.loras.some(same);
+  patchGenerator({ loras: exists ? state.loras.filter((item) => !same(item)) : [...state.loras, lora] });
 }
 
 export function installLocal(resource: InstalledResource) {
@@ -151,7 +162,13 @@ export async function hydrateFromDisk() {
     const parsed = JSON.parse(raw) as Partial<GeneratorState>;
     const installed = Array.isArray(parsed.installed) && parsed.installed.length ? parsed.installed : [defaultResource()];
     if (!installed.some((item) => item.versionId === DEFAULT_CHECKPOINT.versionId)) installed.unshift(defaultResource());
-    state = { ...initialGenerator(), ...parsed, installed, nsfw: parsed.nsfw === true };
+    const contentFilter: ContentFilter =
+      parsed.contentFilter === 'all' || parsed.contentFilter === 'sfw' || parsed.contentFilter === 'nsfw'
+        ? parsed.contentFilter
+        : parsed.nsfw
+          ? 'all'
+          : 'sfw';
+    state = { ...initialGenerator(), ...parsed, installed, contentFilter, nsfw: contentFilter !== 'sfw' };
     emit();
   } catch {
     state = initialGenerator();

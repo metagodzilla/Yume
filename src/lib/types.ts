@@ -22,6 +22,8 @@ export type LoraSpec = {
   id: string;
   name: string;
   weight: number;
+  modelId?: number;
+  versionId?: number;
 };
 
 export type UserStyle = {
@@ -142,6 +144,7 @@ export type Settings = {
   sourceMode: 'cloud' | 'phone' | 'auto';
   setupComplete: boolean;
   idleStopMinutes: number;
+  lowPower: boolean;
 };
 
 export type Session = {
@@ -188,6 +191,7 @@ export const DEFAULT_SETTINGS: Settings = {
   sourceMode: 'auto',
   setupComplete: false,
   idleStopMinutes: 0,
+  lowPower: false,
 };
 
 export const DEFAULT_SESSION: Session = {

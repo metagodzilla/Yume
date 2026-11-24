@@ -4,8 +4,9 @@ import { useEffect, useState } from 'react';
 import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
-import { getCivitaiModel, versionFile, type CivitaiModel, type CivitaiVersion } from '@/src/lib/civitai';
-import { getGenerator, installLocal, patchGenerator, setDefaultCheckpoint, useGenerator } from '@/src/lib/genstore';
+import { civitaiModelUrl, getCivitaiModel, loraFileName, thumbnailUrl, versionFile, type CivitaiModel, type CivitaiVersion } from '@/src/lib/civitai';
+import { openLink } from '@/src/lib/openLink';
+import { getGenerator, installLocal, patchGenerator, setDefaultCheckpoint, toggleLora, useGenerator } from '@/src/lib/genstore';
 import { readCivitaiToken, readSaladKey } from '@/src/lib/storage';
 import { normalizeEndpoint, saladErrorMessage } from '@/src/lib/salad';
 import { useStudio } from '@/src/studio';
@@ -143,6 +144,22 @@ export default function ModelScreen() {
               File {file?.name ?? 'unknown'}
               {file?.hashes?.AutoV2 ? ` · hash ${file.hashes.AutoV2}` : ''}
             </Text>
+            <Pressable onPress={() => openLink(civitaiModelUrl(model.id, version.id))}>
+              <Text style={styles.link}>Open on Civitai</Text>
+            </Pressable>
+            {model.type === 'LORA' || model.type === 'LoCon' ? (
+              <Pressable
+                onPress={() =>
+                  toggleLora({
+                    name: loraFileName(version, model.name),
+                    weight: 0.8,
+                    modelId: model.id,
+                    versionId: version.id,
+                  })
+                }>
+                <Text style={styles.link}>Use this LoRA</Text>
+              </Pressable>
+            ) : null}
             <Pressable testID="model-install" style={styles.go} disabled={busy || installed} onPress={() => void install(version)}>
               <Text style={styles.goText}>{installed ? 'Installed' : busy ? 'Installing…' : 'Install'}</Text>
             </Pressable>

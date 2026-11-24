@@ -174,6 +174,8 @@ export function cleanLoras(loras: LoraSpec[]): LoraSpec[] {
       ...lora,
       name: lora.name.trim(),
       weight: Math.max(0, Math.min(2, Number(lora.weight) || 0)),
+      ...(lora.modelId ? { modelId: lora.modelId } : {}),
+      ...(lora.versionId ? { versionId: lora.versionId } : {}),
     }))
     .filter((lora) => lora.name.length > 0);
 }

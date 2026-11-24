@@ -2,7 +2,7 @@ import { useSyncExternalStore } from 'react';
 
 import { publishQueue } from 'yume-queue';
 
-import { counts, emptyQueue, enqueue, moveToTop, pauseAll, pauseJob, recover, resumeAll, resumeJob, cancelAll, cancelJob, markDone, noteJob, type JobKind, type JobStatus, type QueueState } from '@/src/lib/queue';
+import { counts, emptyQueue, enqueue, moveToTop, pauseAll, pauseJob, recover, resumeAll, resumeJob, cancelAll, cancelJob, markDone, noteJob, thermalPause, thermalResume, type JobKind, type JobStatus, type QueueState } from '@/src/lib/queue';
 
 let state: QueueState = emptyQueue(true);
 const listeners = new Set<() => void>();
@@ -90,5 +90,10 @@ export function reportJob(id: string, progress: number, reason: string, status: 
 
 export function finishJob(id: string) {
   state = markDone(state, id);
+  emit();
+}
+
+export function applyThermal(action: 'pause' | 'resume') {
+  state = action === 'pause' ? thermalPause(state) : thermalResume(state);
   emit();
 }

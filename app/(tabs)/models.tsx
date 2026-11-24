@@ -1,15 +1,21 @@
-import { Image } from 'expo-image';
 import { router } from 'expo-router';
 import { useEffect, useRef, useState } from 'react';
-import { Pressable, ScrollView, StyleSheet, Switch, Text, TextInput, View } from 'react-native';
+import { Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
-import { previewUrl, searchCivitai, type CivitaiModel } from '@/src/lib/civitai';
+import { ModelThumb } from '@/components/ModelThumb';
+import { civitaiModelUrl, loraFileName, loraPage, searchCivitai, type CivitaiModel, type ContentFilter } from '@/src/lib/civitai';
 import { BASE_MODELS, MODEL_TYPES, SORTS } from '@/src/lib/defaultModel';
-import { useGenerator } from '@/src/lib/genstore';
-import { patchGenerator } from '@/src/lib/genstore';
+import { patchGenerator, toggleLora, useGenerator } from '@/src/lib/genstore';
+import { openLink } from '@/src/lib/openLink';
 import { readCivitaiToken } from '@/src/lib/storage';
 import { colors, font } from '@/src/theme';
+
+const FILTERS: { id: ContentFilter; label: string }[] = [
+  { id: 'all', label: 'All' },
+  { id: 'sfw', label: 'SFW only' },
+  { id: 'nsfw', label: 'NSFW only' },
+];
 
 export default function ModelsScreen() {
   const gen = useGenerator();
@@ -34,7 +40,7 @@ export default function ModelsScreen() {
         type,
         baseModel: base,
         sort,
-        nsfw: gen.nsfw,
+        contentFilter: gen.contentFilter,
         cursor: nextCursor,
         token,
       });
@@ -53,23 +59,34 @@ export default function ModelsScreen() {
     void load(null, false);
     // The filters are the search. A new key reloads.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [type, base, sort, gen.nsfw]);
+  }, [type, base, sort, gen.contentFilter]);
 
   return (
     <SafeAreaView style={styles.safe} edges={['top']}>
       <ScrollView contentContainerStyle={styles.scroll} keyboardShouldPersistTaps="handled">
         <Text style={styles.kicker}>Civitai</Text>
         <Text style={styles.title}>Models</Text>
-        <TextInput
-          testID="model-search"
-          value={query}
-          onChangeText={setQuery}
-          onSubmitEditing={() => void load(null, false)}
-          placeholder="Search checkpoints, LoRAs, embeddings"
-          placeholderTextColor={colors.faint}
-          autoCapitalize="none"
-          style={styles.input}
-        />
+        <View style={styles.searchRow}>
+          <TextInput
+            testID="model-search"
+            value={query}
+            onChangeText={setQuery}
+            onSubmitEditing={() => void load(null, false)}
+            placeholder="Search checkpoints, LoRAs, embeddings"
+            placeholderTextColor={colors.faint}
+            autoCapitalize="none"
+            style={[styles.input, { flex: 1 }]}
+          />
+          {FILTERS.map((item) => (
+            <Pressable
+              key={item.id}
+              testID={`content-filter-${item.id}`}
+              onPress={() => patchGenerator({ contentFilter: item.id })}
+              style={[styles.chip, gen.contentFilter === item.id && styles.chipOn]}>
+              <Text style={styles.chipText}>{item.label}</Text>
+            </Pressable>
+          ))}
+        </View>
         <Pressable testID="model-search-go" onPress={() => void load(null, false)}>
           <Text style={styles.link}>{busy ? 'Searching…' : 'Search'}</Text>
         </Pressable>
@@ -94,36 +111,41 @@ export default function ModelsScreen() {
             </Pressable>
           ))}
         </View>
-        <View style={styles.nsfw}>
-          <Text style={styles.body}>Show NSFW models</Text>
-          <Switch
-            testID="nsfw-toggle"
-            value={gen.nsfw}
-            onValueChange={(nsfw) => patchGenerator({ nsfw })}
-            trackColor={{ false: '#3a2a44', true: colors.sakuraDeep }}
-            thumbColor={colors.text}
-          />
-        </View>
-        <Text style={styles.body}>NSFW is off unless you turn it on. Downloads that need a login use the Civitai token in Settings.</Text>
+        <Text style={styles.body}>
+          All, SFW only, or NSFW only applies to the list and to every thumbnail. SFW hides mature items. NSFW only hides safe items. A saved Civitai token is used only when a download needs it.
+        </Text>
         {error ? <Text style={styles.error}>{error}</Text> : null}
         {busy && items.length === 0 ? <Text style={styles.body}>Loading Civitai…</Text> : null}
         {items.map((model, index) => {
           const version = model.modelVersions?.[0];
-          const image = previewUrl(model, gen.nsfw);
+          const lora = model.type === 'LORA' || model.type === 'LoCon';
+          const selected = version ? gen.loras.some((item) => item.versionId === version.id) : false;
           return (
-            <Pressable
-              key={model.id}
-              testID={index === 0 ? 'model-result' : undefined}
-              style={styles.card}
-              onPress={() => router.push({ pathname: '/model', params: { id: String(model.id) } })}>
-              {image ? <Image source={{ uri: image }} style={styles.preview} contentFit="cover" /> : <View style={styles.preview} />}
-              <View style={{ flex: 1, gap: 4 }}>
-                <Text style={styles.name}>{model.name}</Text>
-                <Text style={styles.meta}>
-                  {model.type} · {version?.baseModel ?? 'unknown base'}
-                </Text>
-              </View>
-            </Pressable>
+            <View key={model.id} testID={index === 0 ? 'model-result' : undefined} style={styles.card}>
+              <Pressable
+                style={styles.cardMain}
+                onPress={() => openLink(civitaiModelUrl(model.id, version?.id))}
+                onLongPress={() => version && lora && toggleLora({ name: loraFileName(version, model.name), weight: 0.8, modelId: model.id, versionId: version.id })}>
+                <ModelThumb model={model} filter={gen.contentFilter} />
+                <View style={{ flex: 1, gap: 4 }}>
+                  <Text style={styles.name}>{model.name}</Text>
+                  <Text style={styles.meta}>
+                    {model.type} · {version?.baseModel ?? 'unknown base'}
+                  </Text>
+                </View>
+              </Pressable>
+              {lora && version ? (
+                <Pressable
+                  testID={index === 0 ? 'lora-use' : undefined}
+                  onPress={() => toggleLora({ name: loraFileName(version, model.name), weight: 0.8, modelId: model.id, versionId: version.id })}>
+                  <Text style={styles.link}>{selected ? 'Remove' : 'Use'}</Text>
+                </Pressable>
+              ) : (
+                <Pressable onPress={() => router.push({ pathname: '/model', params: { id: String(model.id) } })}>
+                  <Text style={styles.link}>Details</Text>
+                </Pressable>
+              )}
+            </View>
           );
         })}
         {cursor ? (
@@ -132,12 +154,25 @@ export default function ModelsScreen() {
           </Pressable>
         ) : null}
         <Text style={styles.label}>Installed on this phone's list</Text>
-        {gen.installed.map((item) => (
-          <Text key={item.versionId} style={styles.meta}>
-            {item.isDefault ? 'Default · ' : ''}
-            {item.name} {item.version} · {item.type}
-          </Text>
-        ))}
+        {gen.installed.map((item) => {
+          const page = loraPage({ name: item.name, modelId: item.modelId, versionId: item.versionId });
+          const lora = item.type === 'LORA' || item.type === 'LoCon';
+          return (
+            <View key={item.versionId} style={styles.row}>
+              <Pressable onPress={() => openLink(page.url)}>
+                <Text style={styles.meta}>
+                  {item.isDefault ? 'Default · ' : ''}
+                  {item.name} {item.version} · {item.type} · {page.label}
+                </Text>
+              </Pressable>
+              {lora ? (
+                <Pressable onPress={() => toggleLora({ name: item.filename.replace(/\.(safetensors|pt|ckpt|bin)$/i, ''), weight: 0.8, modelId: item.modelId, versionId: item.versionId })}>
+                  <Text style={styles.link}>Use</Text>
+                </Pressable>
+              ) : null}
+            </View>
+          );
+        })}
       </ScrollView>
     </SafeAreaView>
   );
@@ -148,6 +183,7 @@ const styles = StyleSheet.create({
   scroll: { padding: 16, gap: 10, paddingBottom: 32 },
   kicker: { color: colors.sakura, fontFamily: font.black, fontSize: 12, letterSpacing: 1, textTransform: 'uppercase' },
   title: { color: colors.text, fontFamily: font.logo, fontSize: 28 },
+  searchRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, alignItems: 'center' },
   input: {
     borderRadius: 14,
     borderWidth: 1,
@@ -164,8 +200,8 @@ const styles = StyleSheet.create({
   chipText: { color: colors.text, fontFamily: font.bold, fontSize: 13 },
   nsfw: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
   body: { color: colors.muted, fontFamily: font.semibold, fontSize: 14, lineHeight: 20 },
-  card: { flexDirection: 'row', gap: 10, borderRadius: 16, borderWidth: 1, borderColor: colors.line, backgroundColor: colors.card, padding: 8 },
-  preview: { width: 72, height: 96, borderRadius: 10, backgroundColor: colors.ink },
+  card: { flexDirection: 'row', gap: 10, alignItems: 'center', borderRadius: 16, borderWidth: 1, borderColor: colors.line, backgroundColor: colors.card, padding: 8 },
+  cardMain: { flex: 1, flexDirection: 'row', gap: 10, alignItems: 'center' },
   name: { color: colors.text, fontFamily: font.black, fontSize: 15 },
   meta: { color: colors.muted, fontFamily: font.semibold, fontSize: 13 },
   link: { color: colors.cyan, fontFamily: font.black, fontSize: 15 },

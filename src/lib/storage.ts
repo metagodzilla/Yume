@@ -142,6 +142,7 @@ export async function loadSettings(): Promise<Settings> {
     provider,
     setupComplete: settings.setupComplete === true || savedBefore,
     idleStopMinutes: clampRange(settings.idleStopMinutes, 0, 240, 0),
+    lowPower: settings.lowPower === true,
     openaiModel: legacyModel,
     enhance: settings.enhance !== false,
     expandSnippets: settings.expandSnippets !== false,

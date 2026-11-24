@@ -1,0 +1,14 @@
+plugins {
+  id 'com.android.library'
+  id 'expo-module-gradle-plugin'
+}
+
+group = 'app.yume.studio'
+version = '1.0.0'
+
+android {
+  namespace "expo.modules.yumedevice"
+  defaultConfig {
+    minSdk 24
+  }
+}

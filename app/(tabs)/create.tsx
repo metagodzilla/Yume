@@ -8,6 +8,8 @@ import { characterClause } from '@/src/lib/prompt';
 import { composeGenerationPrompt, drawFrames, generationParams, samplerId } from '@/src/lib/draw';
 import { SAMPLERS, sizesFor } from '@/src/lib/defaultModel';
 import { extractLoras } from '@/src/lib/a1111';
+import { loraPage } from '@/src/lib/civitai';
+import { openLink } from '@/src/lib/openLink';
 import { patchGenerator, useGenerator } from '@/src/lib/genstore';
 import { persistPng, readApiKey, readSaladKey } from '@/src/lib/storage';
 import { uid } from '@/src/lib/id';
@@ -86,7 +88,13 @@ export default function GenerateScreen() {
         width: gen.width,
         height: gen.height,
         saladModel: checkpoint?.filename ?? '',
-        loras: params.loras.map((lora, index) => ({ id: `${lora.name}-${index}`, name: lora.name, weight: lora.weight })),
+        loras: gen.loras.map((lora, index) => ({
+          id: `${lora.name}-${index}`,
+          name: lora.name,
+          weight: lora.weight,
+          ...(lora.modelId ? { modelId: lora.modelId } : {}),
+          ...(lora.versionId ? { versionId: lora.versionId } : {}),
+        })),
         warning: result.warning,
       };
       await studio.rememberGeneration(record);
@@ -174,11 +182,20 @@ export default function GenerateScreen() {
           </Pressable>
         </View>
         <View style={styles.row}>
-          {gen.loras.map((lora) => (
-            <Pressable key={`${lora.name}-${lora.weight}`} onPress={() => patchGenerator({ loras: gen.loras.filter((item) => item !== lora) })}>
-              <Text style={styles.chip}>{`<lora:${lora.name}:${lora.weight}>`}</Text>
-            </Pressable>
-          ))}
+          {gen.loras.map((lora) => {
+            const page = loraPage(lora);
+            return (
+              <View key={`${lora.name}-${lora.versionId ?? lora.weight}`} style={styles.chipButton}>
+                <Pressable onPress={() => openLink(page.url)}>
+                  <Text style={styles.chipText}>{page.label === 'Search on Civitai' ? `Search ${lora.name}` : lora.name}</Text>
+                </Pressable>
+                <Text style={styles.chipText}>{lora.weight}</Text>
+                <Pressable onPress={() => patchGenerator({ loras: gen.loras.filter((item) => item !== lora) })}>
+                  <Text style={styles.chipText}>×</Text>
+                </Pressable>
+              </View>
+            );
+          })}
           {parsed.map((lora) => (
             <Text key={`tag-${lora.name}`} style={styles.chip}>
               from prompt {lora.name}:{lora.weight}

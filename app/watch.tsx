@@ -3,6 +3,8 @@ import { router, useLocalSearchParams } from 'expo-router';
 import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
+import { loraPage } from '@/src/lib/civitai';
+import { openLink } from '@/src/lib/openLink';
 import { useStudio } from '@/src/studio';
 import { colors, font } from '@/src/theme';
 
@@ -38,6 +40,16 @@ export default function WatchScreen() {
           <Pressable onPress={() => router.push('/(tabs)/cast')}>
             <Text style={styles.link}>Send to 3D</Text>
           </Pressable>
+        </View>
+        <View style={styles.row}>
+          {item.loras.map((lora) => {
+            const page = loraPage(lora);
+            return (
+              <Pressable key={lora.id} onPress={() => openLink(page.url)}>
+                <Text style={styles.link}>{page.label === 'Search on Civitai' ? `Search ${lora.name}` : lora.name}</Text>
+              </Pressable>
+            );
+          })}
         </View>
         <Text style={styles.heading}>Related</Text>
         {studio.history

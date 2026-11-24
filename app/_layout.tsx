@@ -15,6 +15,7 @@ import 'react-native-reanimated';
 
 import { AppErrorBoundary } from '@/components/ErrorBoundary';
 import { IdleStop } from '@/components/IdleStop';
+import { ThermalGuard } from '@/components/ThermalGuard';
 import { Viewer } from '@/components/Viewer';
 import { installErrorHooks } from '@/src/lib/log';
 import { StudioProvider, useStudio } from '@/src/studio';
@@ -62,6 +63,7 @@ export default function RootLayout() {
     <StudioProvider>
       <FirstLaunch />
       <IdleStop />
+      <ThermalGuard />
       <StatusBar style="light" />
       <ThemeProvider value={navTheme}>
         <View style={phone.outer}>

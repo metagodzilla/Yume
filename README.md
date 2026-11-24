@@ -4,6 +4,8 @@ Yume is a phone app for drawing anime images in the style of a Civitai / Automat
 
 The starting checkpoint is Animagine XL 4.0 v4.0 (Civitai version `1337429`). See [server/DEPLOY.md](server/DEPLOY.md) for the license fields and the download.
 
+Version 1.4.0 puts cloud progress, session cost, phone temperature, and GPU stats on the home panel. The live gateway is `yume-server` in project `default`. GPU watts appear after the server image is rebuilt.
+
 Version 1.3.0 adds a first-launch wizard (Salad, phone only, or demo), a Connect screen, server start/stop/delete, and an idle auto-stop. A setup link is `yume://setup?url=...` and never includes the API key.
 
 Version 1.2.0 adds a home status row for the Salad server, an in-app APK update (`npm run release` writes `releases/latest.json` and the checksum; you host the APK and paste that URL into Settings), a cloud checklist, a problem report with secrets removed, and a queue that survives leaving the app. Phone mode is aimed at a Galaxy S25 Ultra (512×768, 8 steps, Hexagon NPU when the Qualcomm runtime is present). This build does not ship Qualcomm’s QNN SDK and will not pretend a preview is an on-device diffusion result. Expo’s JS update service is not used, because it needs their signed update server.

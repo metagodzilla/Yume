@@ -15,6 +15,7 @@ export type Job = {
   serverJobId?: string;
   retries: number;
   error?: string;
+  thermalHold?: boolean;
 };
 
 export type QueueState = {
@@ -95,7 +96,7 @@ export function moveToTop(state: QueueState, id: string): QueueState {
 export function recover(state: QueueState, online: boolean): { state: QueueState; effects: QueueEffect[] } {
   const effects: QueueEffect[] = [];
   const jobs = state.jobs.map((job) => {
-    if (job.pausedByUser) return job;
+    if (job.pausedByUser || job.thermalHold) return job;
     if (!online && (job.status === 'waiting' || job.status === 'running')) {
       return { ...job, status: 'paused' as const, pausedByUser: false, reason: 'Waiting for a connection.' };
     }
@@ -148,6 +149,26 @@ export function markFailed(state: QueueState, id: string, error: string, online:
     return { state: { ...next, online }, effects: online ? [{ type: 'retry', id, delayMs: backoff(job.retries + 1) }] : [] };
   }
   return { state: mapJob(state, id, (item) => ({ ...item, status: 'failed', error })), effects: [] };
+}
+
+export function thermalPause(state: QueueState): QueueState {
+  return {
+    ...state,
+    jobs: state.jobs.map((job) =>
+      job.status === 'waiting' || job.status === 'running'
+        ? { ...job, status: 'paused' as const, pausedByUser: false, thermalHold: true, reason: 'Phone is hot. Paused until it cools.' }
+        : job,
+    ),
+  };
+}
+
+export function thermalResume(state: QueueState): QueueState {
+  return {
+    ...state,
+    jobs: state.jobs.map((job) =>
+      job.thermalHold && job.status === 'paused' ? { ...job, status: 'waiting' as const, thermalHold: false, reason: undefined } : job,
+    ),
+  };
 }
 
 export function counts(state: QueueState): { running: number; waiting: number; paused: number } {

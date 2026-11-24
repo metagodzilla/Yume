@@ -176,6 +176,7 @@ def test_stats_diagnostics_and_jobs(client: TestClient) -> None:
     body = stats.json()
     assert body["model"] == "Animagine XL 4.0"
     assert "gpu" in body and "diskFreeMb" in body
+    assert body["powerWatts"] is None
     diag = client.get("/diagnostics", headers=headers)
     assert diag.status_code == 200
     names = [item["name"] for item in diag.json()["checks"]]
@@ -206,12 +207,21 @@ def test_stats_diagnostics_and_jobs(client: TestClient) -> None:
     assert paused.json()["status"] in {"paused", "cancelled", "done"}
 
 
-def test_default_checkpoint_comes_from_huggingface_and_civitai_needs_a_token() -> None:
-    from yume_server.catalog import CivitaiAuthError, DEFAULT_RECORD, HF_ANIMAGINE_URL, download_plan
+def test_default_checkpoint_comes_from_huggingface_and_civitai_needs_a_token(tmp_path, monkeypatch) -> None:
+    from yume_server.catalog import CivitaiAuthError, DEFAULT_RECORD, HF_ANIMAGINE_URL, download_plan, ensure_default
+    from yume_server.generate import diffusers_ignore_patterns
 
     url, headers = download_plan(DEFAULT_RECORD, None)
     assert url == HF_ANIMAGINE_URL
     assert "Authorization" not in headers
+    ignored = diffusers_ignore_patterns()
+    assert "animagine-xl-4.0.safetensors" in ignored
+    assert "animagine-xl-4.0-opt.safetensors" in ignored
+    monkeypatch.setenv("YUME_MODEL_DIR", str(tmp_path))
+    monkeypatch.setenv("YUME_MOCK", "1")
+    record = ensure_default()
+    assert record["source"] == "diffusers"
+    assert not (tmp_path / "animagine-xl-4.0.safetensors").exists()
     with pytest.raises(CivitaiAuthError, match="CIVITAI_TOKEN"):
         download_plan({"versionId": 42, "filename": "other.safetensors"}, None)
     _, authed = download_plan({"versionId": 42, "filename": "other.safetensors"}, "test-token")
