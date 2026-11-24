@@ -74,7 +74,7 @@ cd android
 cd "$ROOT"
 
 APK="android/app/build/outputs/apk/release/app-release.apk"
-OUT="dist/yume-1.4.7.apk"
+OUT="dist/yume-1.4.8.apk"
 mkdir -p dist
 cp "$APK" "$OUT"
 ls -lh "$OUT"

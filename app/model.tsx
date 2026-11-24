@@ -7,7 +7,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { civitaiModelUrl, getCivitaiModel, loraFileName, thumbnailUrl, versionFile, type CivitaiModel, type CivitaiVersion } from '@/src/lib/civitai';
 import { openLink } from '@/src/lib/openLink';
 import { applyCheckpoint, getGenerator, patchGenerator, rememberServerModels, setDefaultCheckpoint, toggleLora } from '@/src/lib/genstore';
-import { defaultsForBase, toInstalled, type CatalogCheckpoint } from '@/src/lib/checkpoints';
+import { toInstalled, type CatalogCheckpoint } from '@/src/lib/checkpoints';
 import { runCheckpointUse } from '@/src/lib/checkpointUse';
 import { changeContainerGroup, liveContainerGroup } from '@/src/lib/cloudActions';
 import { deploymentForEndpoint } from '@/src/lib/cloudSteps';
@@ -207,7 +207,6 @@ export default function ModelScreen() {
                 onPress={() => {
                   void (async () => {
                     if (!version || busy) return;
-                    const defaults = defaultsForBase(version.baseModel);
                     const resource = {
                       versionId: version.id,
                       modelId: model.id,
@@ -239,7 +238,7 @@ export default function ModelScreen() {
                           },
                         });
                       }
-                      applyCheckpoint(toInstalled(resource), defaults);
+                      applyCheckpoint(toInstalled(resource));
                       setStatus('This checkpoint is loaded.');
                     } catch (caught) {
                       setError(caught instanceof Error ? caught.message : 'The checkpoint could not be loaded.');

@@ -15,7 +15,7 @@ import { SAMPLERS, sizesFor } from '@/src/lib/defaultModel';
 import { extractLoras } from '@/src/lib/a1111';
 import { loraPage } from '@/src/lib/civitai';
 import { openLink } from '@/src/lib/openLink';
-import { patchGenerator, useGenerator } from '@/src/lib/genstore';
+import { patchGenerator, resetModelDefaults, useGenerator } from '@/src/lib/genstore';
 import { endpointDiffersFromLive, LIVE_GATEWAY_URL, normalizeEndpoint } from '@/src/lib/salad';
 import { chooseSeeds } from '@/src/lib/seeds';
 import { persistPng, readApiKey, readSaladKey } from '@/src/lib/storage';
@@ -247,6 +247,11 @@ export default function GenerateScreen() {
             </Text>
           ))}
         </View>
+        <Pressable
+          testID="reset-model-defaults"
+          onPress={() => resetModelDefaults(checkpoint?.baseModel ?? '', checkpoint?.name ?? '')}>
+          <Text style={styles.link}>Reset to model defaults</Text>
+        </Pressable>
         <Text style={styles.label}>Sampler</Text>
         <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.row}>
           {SAMPLERS.map((sampler) => (

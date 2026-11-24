@@ -1,5 +1,6 @@
 import { extractLoras, formatParameters, plainPrompt, type GenerationParams } from '@/src/lib/a1111';
 import { bytesToBase64, base64ToBytes } from '@/src/lib/base64';
+import { familyPreset } from '@/src/lib/checkpoints';
 import { DEFAULT_CHECKPOINT } from '@/src/lib/defaultModel';
 import type { GeneratorState } from '@/src/lib/genstore';
 import { embedParameters } from '@/src/lib/pngmeta';
@@ -34,8 +35,9 @@ export function composeGenerationPrompt(state: GeneratorState, characterText = '
         .filter(Boolean)
         .join(', ')
     : '';
+  const preset = familyPreset(checkpoint?.baseModel ?? '', checkpoint?.name ?? '');
   const bits = [
-    state.qualityTags ? DEFAULT_CHECKPOINT.quality : '',
+    state.qualityTags ? preset.quality : '',
     state.triggers ? (checkpoint?.triggers ?? []).join(', ') : '',
     loraTriggers,
     characterText.trim(),
@@ -105,6 +107,7 @@ export type SaladGenerateBody = {
   strength: number;
   reference_image: string | null;
   mask: string | null;
+  prediction_type: 'epsilon' | 'v_prediction';
 };
 
 export function buildSaladGenerateBody(
@@ -140,6 +143,7 @@ export function buildSaladGenerateBody(
     strength: state.denoise,
     reference_image: initPng ? bytesToBase64(initPng) : null,
     mask: maskPng ? bytesToBase64(maskPng) : null,
+    prediction_type: state.vPrediction ? 'v_prediction' : 'epsilon',
   };
 }
 

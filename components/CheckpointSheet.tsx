@@ -3,7 +3,7 @@ import { useEffect, useState } from 'react';
 import { Modal, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 
 import { deleteCatalogCheckpoint, fetchCatalog, pollUseJob, runCheckpointUse } from '@/src/lib/checkpointUse';
-import { baseLabel, defaultsForBase, modelCardPress, toInstalled, type CatalogCheckpoint } from '@/src/lib/checkpoints';
+import { baseLabel, modelCardPress, toInstalled, type CatalogCheckpoint } from '@/src/lib/checkpoints';
 import { confirmAction } from '@/src/lib/confirm';
 import { applyCheckpoint, getGenerator, removeLocal, replaceServerCheckpoints, useGenerator } from '@/src/lib/genstore';
 import { normalizeEndpoint } from '@/src/lib/salad';
@@ -68,10 +68,9 @@ export function CheckpointSheet({ visible, onClose }: { visible: boolean; onClos
 
   async function onUse(item: CatalogCheckpoint) {
     if (using != null) return;
-    const defaults = defaultsForBase(item.baseModel || '', item.recommended);
     const resource = toInstalled(item);
     if (studio.settings.provider !== 'salad') {
-      applyCheckpoint(resource, defaults);
+      applyCheckpoint(resource);
       setActiveId(item.versionId);
       setStage('Ready');
       setPercent(100);
@@ -97,7 +96,7 @@ export function CheckpointSheet({ visible, onClose }: { visible: boolean; onClos
           setPercent(nextPercent);
         },
       });
-      applyCheckpoint(resource, defaults);
+      applyCheckpoint(resource);
       setActiveId(item.versionId);
       setStage('Ready');
       setPercent(100);
@@ -129,8 +128,7 @@ export function CheckpointSheet({ visible, onClose }: { visible: boolean; onClos
           });
           setUsing(null);
           if (finished.record) {
-            const defaults = defaultsForBase(finished.record.baseModel || '', finished.record.recommended);
-            applyCheckpoint(toInstalled(finished.record), defaults);
+            applyCheckpoint(toInstalled(finished.record));
           }
         }
         const catalog = await fetchCatalog(endpoint, key);

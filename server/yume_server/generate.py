@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import base64
+import json
 import os
+import re
 import struct
 import threading
 import uuid
@@ -136,7 +138,40 @@ def start_model() -> None:
         raise
 
 
-def _apply_scheduler(pipe: Any, name: str) -> None:
+def looks_v_prediction(record: dict[str, Any] | None, path: str = "") -> bool:
+    """Illustrious is epsilon. NoobAI and some SDXL finetunes are v-prediction."""
+    fields = " ".join(str((record or {}).get(key) or "") for key in ("filename", "name", "version", "predictionType", "baseModel"))
+    if re.search(r"v[\s_-]?pred|v_prediction", fields, re.IGNORECASE):
+        return True
+    explicit = str((record or {}).get("predictionType") or "").lower()
+    if explicit in {"v", "v_prediction", "vpred"}:
+        return True
+    if not path or not os.path.exists(path):
+        return False
+    try:
+        with open(path, "rb") as handle:
+            length = int.from_bytes(handle.read(8), "little")
+            if length <= 0 or length > 5_000_000:
+                return False
+            header = json.loads(handle.read(length))
+        meta = header.get("__metadata__") or {}
+        pred = str(meta.get("modelspec.prediction_type") or meta.get("prediction_type") or "").lower()
+        return pred in {"v", "v_prediction", "vpred"}
+    except (OSError, json.JSONDecodeError, UnicodeError, ValueError):
+        return False
+
+
+def scheduler_updates(v_prediction: bool) -> dict[str, Any]:
+    if not v_prediction:
+        return {}
+    return {"prediction_type": "v_prediction", "rescale_betas_zero_snr": True, "timestep_spacing": "trailing"}
+
+
+def clip_skip_index(clip_skip: int) -> int:
+    return -max(1, min(12, int(clip_skip or 2)))
+
+
+def _apply_scheduler(pipe: Any, name: str, v_prediction: bool = False) -> None:
     from diffusers import (
         DDIMScheduler,
         DPMSolverMultistepScheduler,
@@ -145,7 +180,8 @@ def _apply_scheduler(pipe: Any, name: str) -> None:
         LCMScheduler,
     )
 
-    config = pipe.scheduler.config
+    config = dict(pipe.scheduler.config)
+    config.update(scheduler_updates(v_prediction or bool(getattr(pipe, "_yume_vpred", False))))
     if name == "euler_a":
         pipe.scheduler = EulerAncestralDiscreteScheduler.from_config(config)
     elif name == "euler":
@@ -158,6 +194,44 @@ def _apply_scheduler(pipe: Any, name: str) -> None:
         pipe.scheduler = DDIMScheduler.from_config(config)
     elif name == "lcm":
         pipe.scheduler = LCMScheduler.from_config(config)
+
+
+class _ClipSkipEncoder:
+    """SDXL reads hidden_states[-2]. Put the requested clip-skip layer there."""
+
+    def __init__(self, inner: Any, skip: int) -> None:
+        self._inner = inner
+        self._skip = skip
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._inner, name)
+
+    def __call__(self, *args: Any, **kwargs: Any) -> Any:
+        kwargs["output_hidden_states"] = True
+        output = self._inner(*args, **kwargs)
+        states = getattr(output, "hidden_states", None)
+        if not states:
+            return output
+        rewritten = list(states)
+        if len(rewritten) >= 2:
+            rewritten[-2] = states[clip_skip_index(self._skip)]
+            try:
+                output.hidden_states = tuple(rewritten)
+            except Exception:
+                return output
+        return output
+
+
+def _use_clip_skip(pipe: Any, clip_skip: int) -> None:
+    skip = max(1, min(4, int(clip_skip or 2)))
+    for attr in ("text_encoder", "text_encoder_2"):
+        encoder = getattr(pipe, attr, None)
+        if isinstance(encoder, _ClipSkipEncoder):
+            encoder._skip = skip
+            continue
+        if encoder is None:
+            continue
+        setattr(pipe, attr, _ClipSkipEncoder(encoder, skip))
 
 
 def _apply_loras(pipe: Any, loras: list[Any]) -> None:
@@ -219,7 +293,12 @@ def generate_images(body: Any) -> tuple[list[str], list[int], str, str]:
 
     if _PIPE is None:
         raise RuntimeError("Model is not loaded.")
-    _apply_scheduler(_PIPE, A1111_SAMPLERS.get(body.scheduler, body.scheduler))
+    requested_prediction = str(getattr(body, "prediction_type", "") or "").lower()
+    v_prediction = requested_prediction == "v_prediction" or (
+        requested_prediction not in {"epsilon", "eps"} and bool(getattr(_PIPE, "_yume_vpred", False))
+    )
+    _apply_scheduler(_PIPE, A1111_SAMPLERS.get(body.scheduler, body.scheduler), v_prediction)
+    _use_clip_skip(_PIPE, int(getattr(body, "clip_skip", 2) or 2))
     _apply_loras(_PIPE, body.loras)
     images: list[str] = []
     strength = float(getattr(body, "strength", 0.45) or 0.45)
@@ -420,6 +499,7 @@ def _load_single_file(record: dict[str, Any]) -> None:
         pipe = StableDiffusionXLPipeline.from_single_file(path, torch_dtype=dtype)
     pipe.to("cuda")
     pipe.enable_vae_slicing()
+    pipe._yume_vpred = looks_v_prediction(record, path)
     _PIPE = pipe
 
 

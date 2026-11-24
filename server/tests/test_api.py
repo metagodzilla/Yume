@@ -185,6 +185,16 @@ def test_install_jobs_persist_across_restarts(tmp_path, monkeypatch) -> None:
     assert restored["state"] == "paused" and restored["bytesDone"] == 5 and restored["type"] == "TextualInversion"
 
 
+def test_v_prediction_is_detected_and_clip_skip_is_indexed() -> None:
+    from yume_server.generate import clip_skip_index, looks_v_prediction, scheduler_updates
+
+    assert looks_v_prediction({"filename": "noobai-xl-vpred.safetensors", "baseModel": "NoobAI"})
+    assert not looks_v_prediction({"filename": "prefectious_nsfw.fp16.safetensors", "name": "Prefectious XL NSFW", "baseModel": "Illustrious"})
+    assert scheduler_updates(True)["rescale_betas_zero_snr"] is True
+    assert scheduler_updates(False) == {}
+    assert clip_skip_index(2) == -2 and clip_skip_index(1) == -1
+
+
 def test_negative_seed_is_random_and_distinct(client: TestClient) -> None:
     headers = {"Authorization": "Bearer test-key"}
     payload = {"prompt": "a shrine", "width": 512, "height": 512, "count": 2, "steps": 1, "seed": -1, "scheduler": "euler_a"}

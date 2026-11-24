@@ -21,7 +21,7 @@ import { encodePng } from '@/src/lib/png';
 import { produceImages, resolveSeeds } from '@/src/lib/produce';
 import { renderDemoFrames } from '@/src/lib/render';
 import { describeUpdateError, downloadLabel } from '@/src/lib/apkInstall';
-import { baseFamily, baseLabel, defaultsForBase, modelCardPress, routeLeavesCreate } from '@/src/lib/checkpoints';
+import { baseFamily, baseLabel, defaultsForBase, familyPreset, modelCardPress, routeLeavesCreate } from '@/src/lib/checkpoints';
 import { chooseSeeds } from '@/src/lib/seeds';
 import { redactValue } from '@/src/lib/reportText';
 import { buildSaladGenerateBody, composeGenerationPrompt, sentPositiveText } from '@/src/lib/draw';
@@ -652,6 +652,7 @@ const previewState = {
   denoise: 0.55,
   nsfw: false,
   contentFilter: 'sfw',
+  vPrediction: false,
   installed: [{ versionId: 1337429, modelId: 1, name: 'Animagine XL 4.0', version: 'v4', type: 'Checkpoint', baseModel: 'SDXL 1.0', filename: 'animagine-xl-4.0.safetensors', hash: '1d5b43ff75', sha256: '', triggers: [], isDefault: true }],
 } as GeneratorState;
 const previewBody = buildSaladGenerateBody(previewState, composeGenerationPrompt(previewState), 1);
@@ -661,6 +662,10 @@ assert(previewBody.model === '1337429' && previewBody.model_name === 'Animagine 
 assert(modelCardPress().action === 'open-sheet' && modelCardPress().browse === '/(tabs)/explore' && routeLeavesCreate('/models') && !routeLeavesCreate(modelCardPress().browse), 'model card opens the sheet');
 assert(baseFamily('Illustrious') === 'Illustrious' && baseFamily('Pony') === 'Pony' && baseLabel('SDXL 1.0') === 'SDXL', 'base family');
 assert(defaultsForBase('Pony').clipSkip === 2 && defaultsForBase('Pony').width === 832 && defaultsForBase('SD 1.5').height === 768 && defaultsForBase('Flux.1 D').clipSkip === 1, 'base defaults');
+const illustrious = familyPreset('Illustrious', 'Prefectious XL NSFW');
+assert(illustrious.cfg === 5 && illustrious.steps === 28 && illustrious.sampler === 'Euler a' && illustrious.quality.includes('very aesthetic') && !illustrious.quality.includes('high score') && illustrious.negative.includes('shiny skin'), 'illustrious preset drops animagine score tags');
+assert(familyPreset('Pony').quality.startsWith('score_9'), 'pony uses score tags');
+assert(familyPreset('NoobAI', 'NoobAI XL v-pred').vPrediction && familyPreset('Illustrious').vPrediction === false, 'v-pred is detected from the name');
 assert(sentPositiveText(previewState).includes('masterpiece') && sentPositiveText(previewState).includes('1girl') && sentPositiveText(previewState).includes('<lora:ribbon:0.8>'), 'final prompt matches the request');
 assert(installFailureMessage(502, 'error code: 502').retry && installFailureMessage(401, 'Civitai needs your API key').message.includes('Civitai needs your API key'), 'install 502 retries and 401 explains the token');
 assert(RECONNECTING === 'Reconnecting', 'reconnect copy');

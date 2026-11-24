@@ -75,6 +75,7 @@ class GenerateIn(BaseModel):
     hires_upscaler: str = "Latent"
     hires_steps: int = 15
     mask: str | None = None
+    prediction_type: str | None = None
 
 
 def _check_key(request: Request) -> None:

@@ -1,6 +1,7 @@
 import { useSyncExternalStore } from 'react';
 
 import type { ContentFilter } from '@/src/lib/civitai';
+import { familyPreset } from '@/src/lib/checkpoints';
 import { DEFAULT_CHECKPOINT } from '@/src/lib/defaultModel';
 
 export type InstalledResource = {
@@ -45,6 +46,7 @@ export type GeneratorState = {
   denoise: number;
   nsfw: boolean;
   installed: InstalledResource[];
+  vPrediction: boolean;
 };
 
 export const defaultResource = (): InstalledResource => ({
@@ -89,6 +91,7 @@ export const initialGenerator = (): GeneratorState => ({
   nsfw: false,
   contentFilter: 'sfw',
   installed: [defaultResource()],
+  vPrediction: false,
 });
 
 let state = initialGenerator();
@@ -123,7 +126,8 @@ export function installLocal(resource: InstalledResource) {
   patchGenerator({ installed, checkpointId: resource.type === 'Checkpoint' ? resource.versionId : state.checkpointId });
 }
 
-export function applyCheckpoint(resource: InstalledResource, defaults: { clipSkip: number; width: number; height: number }) {
+export function applyCheckpoint(resource: InstalledResource) {
+  const preset = familyPreset(resource.baseModel, resource.name);
   const installed = [
     ...state.installed
       .filter((item) => item.versionId !== resource.versionId)
@@ -133,9 +137,30 @@ export function applyCheckpoint(resource: InstalledResource, defaults: { clipSki
   patchGenerator({
     installed,
     checkpointId: resource.type === 'Checkpoint' ? resource.versionId : state.checkpointId,
-    clipSkip: defaults.clipSkip,
-    width: defaults.width,
-    height: defaults.height,
+    sampler: preset.sampler,
+    steps: preset.steps,
+    cfg: preset.cfg,
+    clipSkip: preset.clipSkip,
+    width: preset.width,
+    height: preset.height,
+    negative: preset.negative,
+    qualityTags: true,
+    vPrediction: preset.vPrediction,
+  });
+}
+
+export function resetModelDefaults(baseModel: string, name = '') {
+  const preset = familyPreset(baseModel, name);
+  patchGenerator({
+    sampler: preset.sampler,
+    steps: preset.steps,
+    cfg: preset.cfg,
+    clipSkip: preset.clipSkip,
+    width: preset.width,
+    height: preset.height,
+    negative: preset.negative,
+    qualityTags: true,
+    vPrediction: preset.vPrediction,
   });
 }
 

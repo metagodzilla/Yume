@@ -49,21 +49,130 @@ export function baseLabel(baseModel: string): string {
   return family;
 }
 
+export type FamilyPreset = {
+  sampler: string;
+  steps: number;
+  cfg: number;
+  clipSkip: number;
+  width: number;
+  height: number;
+  quality: string;
+  negative: string;
+  vPrediction: boolean;
+};
+
+const ILLUSTRIOUS_NEGATIVE =
+  'lowres, worst quality, bad quality, bad anatomy, bad hands, text, error, missing fingers, extra digit, fewer digits, cropped, jpeg artifacts, signature, watermark, artist name, username, blurry, 3d, shiny skin, oversaturated';
+
+export function isVPrediction(name: string): boolean {
+  return /v[\s_-]?pred|v_prediction/i.test(name);
+}
+
+export function familyPreset(baseModel: string, name = ''): FamilyPreset {
+  const family = baseFamily(baseModel);
+  const text = `${name} ${baseModel}`;
+  const vPrediction = isVPrediction(text);
+  if (/animagine/i.test(text)) {
+    return {
+      sampler: 'Euler a',
+      steps: 25,
+      cfg: 6,
+      clipSkip: 2,
+      width: 832,
+      height: 1216,
+      quality: 'masterpiece, high score, great score, absurdres',
+      negative:
+        'lowres, bad anatomy, bad hands, text, error, missing finger, extra digits, fewer digits, cropped, worst quality, low quality, low score, bad score, average score, signature, watermark, username, blurry',
+      vPrediction: false,
+    };
+  }
+  if (family === 'Illustrious') {
+    return {
+      sampler: 'Euler a',
+      steps: 28,
+      cfg: 5,
+      clipSkip: 2,
+      width: 832,
+      height: 1216,
+      quality: 'masterpiece, best quality, amazing quality, very aesthetic, absurdres',
+      negative: ILLUSTRIOUS_NEGATIVE,
+      vPrediction,
+    };
+  }
+  if (family === 'Pony') {
+    return {
+      sampler: 'Euler a',
+      steps: 25,
+      cfg: 7,
+      clipSkip: 2,
+      width: 832,
+      height: 1216,
+      quality: 'score_9, score_8_up, score_7_up, score_6_up, score_5_up, score_4_up',
+      negative: 'score_6, score_5, score_4, score_3, score_2, score_1, source_pony, worst quality, low quality, bad anatomy, signature, watermark',
+      vPrediction,
+    };
+  }
+  if (family === 'NoobAI') {
+    return {
+      sampler: 'Euler a',
+      steps: 28,
+      cfg: vPrediction ? 4.5 : 5,
+      clipSkip: 2,
+      width: 832,
+      height: 1216,
+      quality: 'masterpiece, best quality, amazing quality, very aesthetic, absurdres',
+      negative: ILLUSTRIOUS_NEGATIVE,
+      vPrediction,
+    };
+  }
+  if (family === 'Flux') {
+    return {
+      sampler: 'Euler',
+      steps: 28,
+      cfg: 3.5,
+      clipSkip: 1,
+      width: 1024,
+      height: 1024,
+      quality: '',
+      negative: '',
+      vPrediction: false,
+    };
+  }
+  if (family === 'SD 1.5') {
+    return {
+      sampler: 'Euler a',
+      steps: 28,
+      cfg: 7,
+      clipSkip: 2,
+      width: 512,
+      height: 768,
+      quality: 'masterpiece, best quality',
+      negative: 'lowres, bad anatomy, bad hands, text, error, missing fingers, extra digit, fewer digits, cropped, worst quality, low quality, signature, watermark, username, blurry',
+      vPrediction: false,
+    };
+  }
+  return {
+    sampler: 'Euler a',
+    steps: 28,
+    cfg: 5,
+    clipSkip: 2,
+    width: 832,
+    height: 1216,
+    quality: 'masterpiece, best quality, very aesthetic, absurdres',
+    negative: 'lowres, worst quality, bad quality, bad anatomy, bad hands, signature, watermark, username, blurry',
+    vPrediction,
+  };
+}
+
 export function defaultsForBase(
   baseModel: string,
   recommended?: { clipSkip?: number; width?: number; height?: number },
 ): { clipSkip: number; width: number; height: number } {
-  const family = baseFamily(baseModel);
-  const fallback =
-    family === 'SD 1.5'
-      ? { clipSkip: 2, width: 512, height: 768 }
-      : family === 'Flux'
-        ? { clipSkip: 1, width: 1024, height: 1024 }
-        : { clipSkip: 2, width: 832, height: 1216 };
+  const preset = familyPreset(baseModel);
   return {
-    clipSkip: numberOr(recommended?.clipSkip, fallback.clipSkip),
-    width: numberOr(recommended?.width, fallback.width),
-    height: numberOr(recommended?.height, fallback.height),
+    clipSkip: numberOr(recommended?.clipSkip, preset.clipSkip),
+    width: numberOr(recommended?.width, preset.width),
+    height: numberOr(recommended?.height, preset.height),
   };
 }
 
