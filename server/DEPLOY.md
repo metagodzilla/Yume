@@ -25,7 +25,7 @@ Rough idle cost if you leave one RTX 3090 running at Low: about $0.127 per hour,
 The publish workflow builds the GPU target and pushes:
 
 - `ghcr.io/metagodzilla/yume-server:latest`
-- `ghcr.io/metagodzilla/yume-server:1.2.0`
+- `ghcr.io/metagodzilla/yume-server:1.4.0`
 
 A package created from a private repository is private. Salad cannot pull a private GHCR image until you either make **only the package** public, or give Salad registry credentials.
 
@@ -79,7 +79,7 @@ In [portal.salad.com](https://portal.salad.com): Organization, then Project, the
   - Load balancer: least connections (better for a GPU that should not take two heavy jobs at once)
   - Client and server timeouts: `100000` (the API maximum; that is also the default)
 - **Probes**
-  - Startup: HTTP GET `/ready` port 8080, initial delay 60s, period 60s, timeout 10s, failure threshold 20. That gives the model download about 20 minutes before Salad reallocates the node. The schema allows at most 20 failures and a 1200s initial delay.
+  - Startup: HTTP GET `/ready` port 8080, initial delay **600s**, period 60s, timeout 10s, failure threshold 20. The 600s delay plus 20 failures is about 30 minutes. A 60s delay was too short: the first boot used to download Animagine twice and took about 21 minutes. The schema allows at most 20 failures and a 1200s initial delay.
   - Readiness: HTTP GET `/ready` port 8080, period 10s, failure threshold 3.
   - Liveness: HTTP GET `/health` port 8080, period 30s, failure threshold 3.
 - **Autostart:** on in the portal. The public API defaults this to false, so the example script starts the group in a second call.
@@ -193,28 +193,29 @@ Response: `{ "glb": "<base64>", "model": "microsoft/TRELLIS-image-large", "mode"
 
 ## Default checkpoint
 
-The picture container installs one checkpoint the first time it starts, before `/ready` turns 200. It is **Animagine XL 4.0**, version **v4.0**.
+The picture container loads one checkpoint the first time it starts, before `/ready` turns 200. It is **Animagine XL 4.0**, version **v4.0**.
+
+Startup uses the Hugging Face diffusers layout only (`model_index.json`, `unet`, `vae`, `text_encoder`, `text_encoder_2`, tokenizers). It does **not** also download `animagine-xl-4.0.safetensors` or `animagine-xl-4.0-opt.safetensors`. Those root files are the same weights a second time (about 6.9 GB plus another ~7 GB of diffusers folders) and were why the first boot took about 21 minutes.
 
 - Civitai model: [1188071](https://civitai.com/models/1188071)
 - Version id: `1337429`
-- File: `animagine-xl-4.0.safetensors` (about 6.6 GB)
-- Download: `https://huggingface.co/cagliostrolab/animagine-xl-4.0/resolve/main/animagine-xl-4.0.safetensors`
-- Civitai’s download URL for this version returns 401 unless a token is sent, so the server does not use it for the default file. Other Civitai checkpoints and LoRAs still install from `https://civitai.com/api/download/models/{versionId}` when `CIVITAI_TOKEN` is set on the container, or when the phone sends the token it saved in Settings (`X-Civitai-Token`). If neither is set, install returns a clear 401 telling you to add the token. The default Animagine file does not need one.
+- Single-file checkpoint, not downloaded on boot: `animagine-xl-4.0.safetensors` (about 6.9 GB) at `https://huggingface.co/cagliostrolab/animagine-xl-4.0/resolve/main/animagine-xl-4.0.safetensors`
+- Civitai’s download URL for this version returns 401 unless a token is sent, so the server does not use it for the default model. Other Civitai checkpoints and LoRAs still install from `https://civitai.com/api/download/models/{versionId}` when `CIVITAI_TOKEN` is set on the container, or when the phone sends the token it saved in Settings (`X-Civitai-Token`). If neither is set, install returns a clear 401 telling you to add the token. The default Animagine load does not need one.
 - SHA256: `1D5B43FF75B6AB598502D4C779D2FBFA3DCECA51C60C3B609640A60772333916`
 - Model hash written into PNGs: `1d5b43ff75` (AutoV2)
 - Base model: SDXL 1.0
-- Civitai license fields on that model: credit not required (`allowNoCredit`), commercial use includes Image, Rent, RentCivit, Sell, and SellMerge, derivatives allowed, a different license allowed. The weights themselves are the CreativeML Open RAIL++-M release. This app does not redistribute the file. The server downloads it into `YUME_MODEL_DIR` (default `/models`) on first boot.
+- Civitai license fields on that model: credit not required (`allowNoCredit`), commercial use includes Image, Rent, RentCivit, Sell, and SellMerge, derivatives allowed, a different license allowed. The weights themselves are the CreativeML Open RAIL++-M release. This app does not redistribute the file. The diffusers folders land in the Hugging Face cache under `HF_HOME` (default `/models`) on first boot.
 - The model's NSFW flag is false (level 3).
 
 The version's own sample images use **Euler a**, **25 steps**, and **CFG 6**, with a negative prompt about lowres, bad anatomy, bad hands, text, extra digits, and watermarks. The app uses those as the starting sampler, steps, CFG, and negative prompt. It also turns on the score tags `masterpiece, high score, great score, absurdres` and clip skip 2. Clip skip 2 is the setting in Animagine XL 4.0's own prompting guide; the sample metadata does not itself set clip skip. The size default is 832×1216. The phone lists this checkpoint as **Default**. Any other installed checkpoint can replace it.
 
 Pony, Illustrious, and NoobAI checkpoints are SDXL-shaped files and load with the SDXL pipeline. SD 1.5 uses the SD 1.5 pipeline. Flux uses `FluxPipeline` when that diffusers build is installed; it wants a 24 GB GPU. Mock mode records those settings and does not load the weights.
 
-`POST /models/install` with `{ "versionId": 1337429 }` downloads that version. `GET /models` lists the cache. `POST /models/default` changes the default. `DELETE /models/{versionId}` removes one, and will not remove the last checkpoint. A Civitai token, when a file needs a logged-in download, is sent as `X-Civitai-Token` and is not written to logs.
+`POST /models/install` with `{ "versionId": 1337429 }` registers the default model and does not fetch the single-file checkpoint. Other version ids still download their file. `GET /models` lists the cache. `POST /models/default` changes the default. `DELETE /models/{versionId}` removes one, and will not remove the last checkpoint. A Civitai token, when a file needs a logged-in download, is sent as `X-Civitai-Token` and is not written to logs.
 
 Samplers accepted by name: Euler a, Euler, DPM++ 2M, DPM++ 2M Karras, DPM++ SDE Karras, DDIM, LMS, Heun, UniPC, LCM. Hires fix generates smaller, resizes with Lanczos, then runs img2img at the hires denoise. LoRAs arrive as `{ "name", "weight" }` from `<lora:name:weight>` tags. Each PNG gets an Automatic1111 `parameters` text chunk: prompt, negative, Steps, Sampler, CFG scale, Seed, Size, Model, Model hash, Lora hashes, Clip skip, and Hires when it was used.
 
-The first boot includes that 6.6 GB download plus the load into VRAM. Give the startup probe the same long window as before (about 20 minutes). A new Salad node has empty disk and downloads the file again. Set `YUME_MODEL_DIR` to the container disk so the cache survives a process restart on the same node.
+The first boot downloads the diffusers folders once (about 7 GB) and then loads them into VRAM. Set the startup probe `initial_delay_seconds` to 600 so Salad waits ten minutes before the first `/ready` check, then allows about twenty more minutes of failures. A new Salad node has empty disk and downloads the folders again. `HF_HOME` and `YUME_MODEL_DIR` should stay on the container disk so the cache survives a process restart on the same node.
 
 ## Status, jobs, and diagnostics
 

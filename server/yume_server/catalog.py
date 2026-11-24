@@ -70,12 +70,18 @@ def list_models() -> list[dict[str, Any]]:
 
 
 def ensure_default() -> dict[str, Any]:
+    """Register Animagine without downloading the single-file checkpoint.
+
+    Startup loads the diffusers folders once. The root ``*.safetensors`` files
+    are the same weights again, so they are not fetched here.
+    """
     data = load_catalog()
     found = next((item for item in data["models"] if item.get("versionId") == DEFAULT_VERSION), None)
     if found:
         return found
     record = dict(DEFAULT_RECORD)
-    _materialize(record, None)
+    record["source"] = "diffusers"
+    record["path"] = ""
     data["models"].insert(0, record)
     save_catalog(data)
     return record

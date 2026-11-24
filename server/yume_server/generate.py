@@ -22,6 +22,12 @@ A1111_SAMPLERS = {
     "LCM": "lcm",
 }
 DEFAULT_MODEL = "cagliostrolab/animagine-xl-4.0"
+# The repo also publishes these single-file checkpoints. Loading the diffusers
+# folders already fetches the weights, so these files must not be downloaded too.
+DIFFUSERS_IGNORE = (
+    "animagine-xl-4.0.safetensors",
+    "animagine-xl-4.0-opt.safetensors",
+)
 
 _PIPE: Any = None
 
@@ -63,17 +69,29 @@ def _png(width: int, height: int, seed: int) -> str:
     return base64.b64encode(png).decode("ascii")
 
 
+def diffusers_ignore_patterns() -> tuple[str, ...]:
+    return DIFFUSERS_IGNORE
+
+
 def start_model() -> None:
     global _PIPE
     if mock_mode():
         return
     import torch
     from diffusers import StableDiffusionXLPipeline
+    from huggingface_hub import snapshot_download
 
+    cache = os.environ.get("HF_HOME") or os.environ.get("YUME_MODEL_DIR") or "/models"
+    local = snapshot_download(
+        repo_id=model_id(),
+        cache_dir=os.path.join(cache, "hub"),
+        ignore_patterns=list(DIFFUSERS_IGNORE),
+    )
     _PIPE = StableDiffusionXLPipeline.from_pretrained(
-        model_id(),
+        local,
         torch_dtype=torch.float16,
         use_safetensors=True,
+        local_files_only=True,
     )
     _PIPE.to("cuda")
     _PIPE.enable_vae_slicing()

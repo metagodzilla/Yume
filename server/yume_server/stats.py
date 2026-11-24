@@ -28,6 +28,8 @@ def collect() -> dict[str, Any]:
         "model": "Animagine XL 4.0",
         "modelLoaded": os.environ.get("YUME_READY", "1") != "0",
         "source": gpu.get("source") or ("mock" if mock else "host"),
+        "powerWatts": gpu.get("power"),
+        "powerLimitWatts": gpu.get("powerLimit"),
     }
 
 
@@ -40,11 +42,15 @@ def _gpu() -> dict[str, Any]:
         name = pynvml.nvmlDeviceGetName(handle)
         mem = pynvml.nvmlDeviceGetMemoryInfo(handle)
         util = pynvml.nvmlDeviceGetUtilizationRates(handle)
+        power = _nvml_watts(lambda: pynvml.nvmlDeviceGetPowerUsage(handle))
+        limit = _nvml_watts(lambda: pynvml.nvmlDeviceGetPowerManagementLimit(handle))
         return {
             "name": name.decode() if isinstance(name, bytes) else str(name),
             "used": int(mem.used / (1024 * 1024)),
             "total": int(mem.total / (1024 * 1024)),
             "util": int(util.gpu),
+            "power": power,
+            "powerLimit": limit,
             "source": "pynvml",
         }
     except Exception:
@@ -53,16 +59,43 @@ def _gpu() -> dict[str, Any]:
         import subprocess
 
         out = subprocess.check_output(
-            ["nvidia-smi", "--query-gpu=name,memory.used,memory.total,utilization.gpu", "--format=csv,noheader,nounits"],
+            ["nvidia-smi", "--query-gpu=name,memory.used,memory.total,utilization.gpu,power.draw,power.limit", "--format=csv,noheader,nounits"],
             text=True,
             timeout=3,
         ).strip().splitlines()
         if out:
-            name, used, total, util = [part.strip() for part in out[0].split(",")]
-            return {"name": name, "used": int(float(used)), "total": int(float(total)), "util": int(float(util)), "source": "nvidia-smi"}
+            parts = [part.strip() for part in out[0].split(",")]
+            name, used, total, util = parts[:4]
+            power = _smi_float(parts[4]) if len(parts) > 4 else None
+            limit = _smi_float(parts[5]) if len(parts) > 5 else None
+            return {
+                "name": name,
+                "used": int(float(used)),
+                "total": int(float(total)),
+                "util": int(float(util)),
+                "power": power,
+                "powerLimit": limit,
+                "source": "nvidia-smi",
+            }
     except Exception:
         pass
     return {}
+
+
+def _nvml_watts(read: Any) -> float | None:
+    try:
+        return round(float(read()) / 1000.0, 1)
+    except Exception:
+        return None
+
+
+def _smi_float(value: str) -> float | None:
+    try:
+        if not value or value.upper() == "N/A":
+            return None
+        return float(value)
+    except ValueError:
+        return None
 
 
 def _ram() -> dict[str, Any]:

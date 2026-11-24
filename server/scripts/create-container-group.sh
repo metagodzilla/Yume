@@ -47,7 +47,7 @@ BODY="$(cat <<EOF
   },
   "startup_probe": {
     "http": { "path": "/ready", "port": 8080, "scheme": "http", "headers": [] },
-    "initial_delay_seconds": 60,
+    "initial_delay_seconds": 600,
     "period_seconds": 60,
     "timeout_seconds": 10,
     "success_threshold": 1,
