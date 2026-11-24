@@ -10,7 +10,7 @@ import { OFFLINE_MODEL, offlineBlockedReason } from '@/src/lib/offline';
 import { cancelJob, emptyQueue, enqueue, pauseJob, resumeJob } from '@/src/lib/queue';
 import { rememberFault } from '@/src/lib/reportText';
 import { deleteImageUri, persistPng, readCivitaiToken, readPng, readSaladKey } from '@/src/lib/storage';
-import { checkGithubRelease } from '@/src/lib/updates';
+import { checkGithubRelease, decideReleaseCheck, parseGithubRelease, readInstalledVersionCode } from '@/src/lib/updates';
 import { APP_VERSION, APP_VERSION_CODE } from '@/src/lib/version';
 import { type CheckRow, type CheckStatus } from '@/src/lib/checkRows';
 import { modelCardPress, routeLeavesCreate } from '@/src/lib/checkpoints';
@@ -248,7 +248,31 @@ export async function runAppCheck(input: { endpoint: string }): Promise<CheckRow
     rows.push(row('Connect', 'Settings', 'pass', 0, `${endpoint ? 'Gateway URL is valid.' : 'No URL saved.'} ${storedKey ? 'Salad key is stored.' : 'No Salad key stored.'}`));
   }
 
-  const update = await timed(() => checkGithubRelease(APP_VERSION, APP_VERSION_CODE));
+  const sampleRelease = parseGithubRelease({
+    tag_name: 'v1.4.6',
+    body: 'versionCode: 11\n\nInstall only shows Installed when the server has the file.',
+    assets: [{ name: 'yume-1.4.6.apk', browser_download_url: 'https://github.com/metagodzilla/Yume/releases/download/v1.4.6/yume-1.4.6.apk' }],
+  });
+  const offered = decideReleaseCheck({ status: 200, release: sampleRelease, localVersion: '1.4.5', localCode: 10 });
+  const emptyNotModified = decideReleaseCheck({ status: 304, release: null, localVersion: '1.4.5', localCode: 10 });
+  const limited = decideReleaseCheck({ status: 429, release: null, localVersion: '1.4.5', localCode: 10 });
+  const nativeCode = readInstalledVersionCode('10', 99);
+  const updaterOk =
+    sampleRelease.versionCode === 11 &&
+    Boolean(offered.apkUrl) &&
+    offered.label.startsWith('Update available') &&
+    emptyNotModified.bad &&
+    !emptyNotModified.label.includes('Up to date') &&
+    limited.bad &&
+    !limited.label.includes('Up to date') &&
+    nativeCode === 10;
+  rows.push(
+    updaterOk
+      ? row('Updates', 'Version compare', 'pass', 0, 'versionCode 11 is newer than 10. A 304 or rate limit is not treated as up to date.')
+      : row('Updates', 'Version compare', 'fail', 0, 'The updater can still hide a newer versionCode.'),
+  );
+
+  const update = await timed(() => checkGithubRelease(APP_VERSION, APP_VERSION_CODE, fetch, { force: true }));
   if (update.error || !update.value) {
     rows.push(row('Updates', 'GitHub release', 'fail', update.ms, update.error || 'The update check failed.'));
   } else if (update.value.bad) {

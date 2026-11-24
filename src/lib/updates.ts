@@ -92,31 +92,100 @@ export function releaseStatus(
   return { available: false, label: 'Up to date' };
 }
 
+export function readInstalledVersionCode(nativeBuildVersion: string | null | undefined, fallback: number): number {
+  const parsed = Number.parseInt(String(nativeBuildVersion ?? '').trim(), 10);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+}
+
+export type ReleaseDecision = {
+  label: string;
+  apkUrl: string | null;
+  bad: boolean;
+  retry: boolean;
+  latestVersion: string | null;
+  latestCode: number | null;
+};
+
+export function decideReleaseCheck(input: {
+  status: number;
+  release: GithubRelease | null;
+  localVersion: string;
+  localCode: number;
+}): ReleaseDecision {
+  if (input.status === 304 && !input.release) {
+    return { label: 'GitHub returned 304 without a release. Tap Update to try again.', apkUrl: null, bad: true, retry: true, latestVersion: null, latestCode: null };
+  }
+  if (input.status === 403 || input.status === 429) {
+    return { label: 'GitHub rate limit. Tap Update to try again.', apkUrl: null, bad: true, retry: false, latestVersion: null, latestCode: null };
+  }
+  if (input.status === 404) {
+    return { label: 'No GitHub release yet', apkUrl: null, bad: false, retry: false, latestVersion: null, latestCode: null };
+  }
+  if (!input.release || input.status >= 400) {
+    return { label: `HTTP ${input.status}. GitHub rejected the update check.`, apkUrl: null, bad: true, retry: false, latestVersion: null, latestCode: null };
+  }
+  const status = releaseStatus(input.localVersion, input.localCode, input.release);
+  return {
+    label: status.label,
+    apkUrl: status.available ? input.release.apkUrl : null,
+    bad: false,
+    retry: false,
+    latestVersion: input.release.version,
+    latestCode: input.release.versionCode,
+  };
+}
+
+let cachedRelease: GithubRelease | null = null;
+let cachedEtag: string | null = null;
+
+export type UpdateCheckResult = ReleaseDecision & { checkedAt: number };
+
 export async function checkGithubRelease(
   localVersion: string,
   localCode: number,
   fetchImpl: typeof fetch = fetch,
-): Promise<{ label: string; apkUrl: string | null; bad: boolean }> {
+  options?: { force?: boolean },
+): Promise<UpdateCheckResult> {
+  const checkedAt = Date.now();
+  const headers: Record<string, string> = {
+    Accept: 'application/vnd.github+json',
+    'User-Agent': 'yume',
+    'Cache-Control': 'no-cache, no-store',
+    Pragma: 'no-cache',
+  };
+  if (!options?.force && cachedEtag) headers['If-None-Match'] = cachedEtag;
   let response: Response;
   try {
-    response = await fetchImpl(GITHUB_LATEST_RELEASE, {
-      headers: { Accept: 'application/vnd.github+json', 'User-Agent': 'yume' },
+    response = await fetchImpl(`${GITHUB_LATEST_RELEASE}?ts=${checkedAt}`, {
+      headers,
+      cache: 'no-store',
     });
   } catch (caught) {
     const message = caught instanceof Error ? caught.message : 'The phone could not reach GitHub.';
-    return { label: message, apkUrl: null, bad: true };
+    return { label: message, apkUrl: null, bad: true, retry: false, latestVersion: null, latestCode: null, checkedAt };
   }
-  if (response.status === 404) return { label: 'No GitHub release yet', apkUrl: null, bad: false };
+  if (response.status === 304) {
+    if (!cachedRelease && !options?.force) return checkGithubRelease(localVersion, localCode, fetchImpl, { force: true });
+    const decided = decideReleaseCheck({ status: 304, release: cachedRelease, localVersion, localCode });
+    return { ...decided, checkedAt };
+  }
+  if (response.status === 403 || response.status === 429) {
+    return { ...decideReleaseCheck({ status: response.status, release: null, localVersion, localCode }), checkedAt };
+  }
+  if (response.status === 404) {
+    return { ...decideReleaseCheck({ status: 404, release: null, localVersion, localCode }), checkedAt };
+  }
   if (!response.ok) {
-    const text = (await response.text()).replace(/\s+/g, ' ').slice(0, 180);
-    return { label: `HTTP ${response.status}. ${text || 'GitHub rejected the update check.'}`, apkUrl: null, bad: true };
+    const text = (await response.text()).replace(/\s+/g, ' ').slice(0, 140);
+    return { label: `HTTP ${response.status}. ${text || 'GitHub rejected the update check.'}`, apkUrl: null, bad: true, retry: false, latestVersion: null, latestCode: null, checkedAt };
   }
   try {
     const release = parseGithubRelease(await response.json());
-    const status = releaseStatus(localVersion, localCode, release);
-    return { label: status.label, apkUrl: status.available ? release.apkUrl : null, bad: false };
+    cachedRelease = release;
+    cachedEtag = response.headers.get('etag');
+    return { ...decideReleaseCheck({ status: response.status, release, localVersion, localCode }), checkedAt };
   } catch (caught) {
     const message = caught instanceof Error ? caught.message : 'The GitHub release could not be read.';
-    return { label: message, apkUrl: null, bad: true };
+    return { label: message, apkUrl: null, bad: true, retry: false, latestVersion: null, latestCode: null, checkedAt };
   }
 }

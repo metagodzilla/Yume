@@ -325,7 +325,7 @@ assert(readParameters(taggedPng)?.includes('Model hash: 1d5b43ff75'), 'png dropp
 import { interpretConnection } from '@/src/lib/connection';
 import { profileFor, offlineBlockedReason } from '@/src/lib/offline';
 import { buildReport, redact } from '@/src/lib/report';
-import { checksumMatches, parseGithubRelease, parseManifest, releaseStatus, updateAvailable } from '@/src/lib/updates';
+import { checksumMatches, decideReleaseCheck, parseGithubRelease, parseManifest, readInstalledVersionCode, releaseStatus, updateAvailable } from '@/src/lib/updates';
 import { errorText } from '@/src/lib/civitai';
 import { capWarning, sessionCost } from '@/src/lib/usage';
 import {
@@ -414,6 +414,17 @@ assert(releaseStatus('1.4.1', 6, release).label === 'Update available v1.4.2', '
 assert(releaseStatus('1.4.2', 7, release).label === 'Up to date', 'same release');
 assert(releaseStatus('1.4.3', 8, { version: '1.4.4', versionCode: 9 }).label === 'Update available v1.4.4', 'older versionCode is offered 1.4.4');
 assert(releaseStatus('1.4.4', 9, { version: '1.4.4', versionCode: 9 }).label === 'Up to date', 'same versionCode is current');
+const newerNotes = parseGithubRelease({
+  tag_name: 'v1.4.6',
+  body: 'versionCode: 11\n\nInstall only shows Installed when the server has the file.',
+  assets: [{ name: 'yume-1.4.6.apk', browser_download_url: 'https://example.com/yume-1.4.6.apk' }],
+});
+assert(newerNotes.versionCode === 11 && releaseStatus('1.4.5', 10, newerNotes).available, 'release notes versionCode offers 1.4.6');
+const emptyCache = decideReleaseCheck({ status: 304, release: null, localVersion: '1.4.5', localCode: 10 });
+assert(emptyCache.bad && emptyCache.retry && !emptyCache.label.includes('Up to date'), '304 without a body is not up to date');
+const rateLimit = decideReleaseCheck({ status: 429, release: null, localVersion: '1.4.5', localCode: 10 });
+assert(rateLimit.bad && !rateLimit.label.includes('Up to date'), 'rate limit is not up to date');
+assert(readInstalledVersionCode('10', 99) === 10 && readInstalledVersionCode('', 12) === 12, 'native versionCode wins when present');
 assert(pullPercent({ instances: [{ state: 'creating', details: 'Pulling, 37% complete' }] }) === 37, 'salad pull percent');
 assert(pullPercent({ state: 'running' }) === null, 'no fake pull percent');
 const modelStep = cloudChecklist({ hasEndpoint: true, healthStatus: 200, readyStatus: 503, healthReady: false, modelDone: 50, modelTotal: 100 });
