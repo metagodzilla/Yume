@@ -17,7 +17,7 @@ export const CHECKLIST = [
   'Ready',
 ] as const;
 
-export type CloudPhase = 'starting' | 'running' | 'stopped';
+export type CloudPhase = 'starting' | 'running' | 'stopping' | 'stopped';
 
 export type ChecklistStep = {
   label: string;
@@ -111,6 +111,10 @@ export function cloudChecklist(input: {
     const steps = paint(-1, input);
     return { phase: 'stopped', pill: 'Stopped', liveTitle: 'Cloud is stopped', steps, authBlocked: false, overall: null };
   }
+  if (input.groupStatus === 'stopping') {
+    const steps = paint(-1, input);
+    return { phase: 'stopping', pill: 'Stopping', liveTitle: 'Stopping', steps, authBlocked, overall: null };
+  }
   if (input.groupStatus === 'stopped' || input.groupStatus === 'succeeded') {
     const steps = paint(-1, input);
     return { phase: 'stopped', pill: 'Stopped', liveTitle: 'Cloud is stopped', steps, authBlocked, overall: null };
@@ -148,7 +152,8 @@ export function cloudChecklist(input: {
   return { phase, pill, liveTitle, steps, authBlocked, overall: overallPercent(steps) };
 }
 
-export function formatCostLine(input: { sessionUsd: number; hourly: number; upMin: number; cap: number }): string {
+export function formatCostLine(input: { sessionUsd: number; hourly: number; upMin: number; cap: number; final?: boolean }): string {
+  if (input.final) return `Final session cost ${money(input.sessionUsd)} · timer stopped`;
   const base = `${money(input.sessionUsd)} this session · ${money(input.hourly)}/h · Up ${Math.max(0, Math.round(input.upMin))} min`;
   if (input.cap <= 0) return `${base} · session cap off`;
   const left = Math.max(0, input.cap - input.sessionUsd);

@@ -30,9 +30,12 @@ import { downloadButtons, downloadKind, downloadPercent, formatEta, formatSpeed,
 import { installFailureMessage } from '@/src/lib/modelInstall';
 import { buildSaladBody, classifyGatewayInput, generateUrl, LIVE_GATEWAY_URL, migrateKeyStoredAsUrl, normalizeEndpoint, redactSecrets, saladErrorMessage } from '@/src/lib/salad';
 import { browsingParams, civitaiModelUrl, filterModels, loraPage, pickPreview, thumbnailUrl, type CivitaiModel } from '@/src/lib/civitai';
-import { buildYumeContainerGroup, choicesFromGpuClasses, costLine, describeDeploy, groupStatusOf, maskKey, normalizeSaladKey, pickDefaultGpu, saladFailureMessage, saladRequest, serverUrlFromLink, shouldIdleStop } from '@/src/lib/saladCloud';
-import { validateSaladKey } from '@/src/lib/cloudActions';
+import { buildYumeContainerGroup, choicesFromGpuClasses, costLine, describeDeploy, groupStatusOf, maskKey, normalizeSaladKey, pickDefaultGpu, saladFailureMessage, saladRequest, serverUrlFromLink, shouldIdleStop, shouldIdleWarn } from '@/src/lib/saladCloud';
+import { containerGroupUrl, liveContainerGroup, validateSaladKey } from '@/src/lib/cloudActions';
 import { capReached, checkLine, cloudChecklist, deploymentForEndpoint, formatCostLine, resolveHourly, RTX_4090_LOW_HOURLY, sessionUsd, uptimeSeconds } from '@/src/lib/cloudSteps';
+import { CLOUD_STOP_CHECK } from '@/src/lib/cloudRun';
+import { dropTiles, filterTiles, galleryTiles, reusePatch } from '@/src/lib/gallery';
+import type { Generation } from '@/src/lib/types';
 import { pullPercent } from '@/src/lib/saladCloud';
 import { areaCounts } from '@/src/lib/checkRows';
 import { classifyHeat, estimatePowerWatts, shouldKeepScreenAwake, throttleFor, throttleSteps } from '@/src/lib/phonePower';
@@ -488,6 +491,47 @@ assert(serverUrlFromLink('yume://setup?key=secret') === null, 'key-only link is 
 assert(maskKey('supersecretvalue') === '••••alue' && !maskKey('supersecretvalue').includes('supersecret'), 'key stays masked');
 assert(shouldIdleStop({ idleMinutes: 15, lastActivityMs: 0, now: 20 * 60_000, activeJobs: 0, running: true }) === false, 'missing activity does not stop');
 assert(shouldIdleStop({ idleMinutes: 15, lastActivityMs: 1_000, now: 16 * 60_000, activeJobs: 0, running: true }) === true, 'idle stop');
+assert(shouldIdleWarn({ idleMinutes: 15, lastActivityMs: 1_000, now: 1_000 + 14 * 60_000, activeJobs: 0, running: true }) === true, 'idle warning one minute before');
+assert(shouldIdleWarn({ idleMinutes: 0, lastActivityMs: 1_000, now: 20 * 60_000, activeJobs: 0, running: true }) === false, 'idle warning stays off by default');
+assert(cloudChecklist({ hasEndpoint: true, groupStatus: 'stopping' }).phase === 'stopping', 'stopping phase');
+assert(formatCostLine({ sessionUsd: 1.25, hourly: 0.253, upMin: 10, cap: 5, final: true }).startsWith('Final session cost'), 'final session cost');
+assert(CLOUD_STOP_CHECK.status === 'skip' && CLOUD_STOP_CHECK.runs === false && CLOUD_STOP_CHECK.message.includes('does not stop'), 'check never stops the cloud');
+assert(containerGroupUrl(liveContainerGroup()).endsWith('/containers/yume-server'), 'stop targets yume-server');
+const galleryItem = {
+  id: 'g1',
+  createdAt: 10,
+  userPrompt: 'shrine',
+  enhancedPrompt: 'shrine',
+  finalPrompt: 'shrine maiden',
+  negative: 'lowres',
+  styleId: 'watercolor',
+  styleName: 'Animagine',
+  aspectId: 'wallpaper',
+  count: 2,
+  characterId: null,
+  characterName: null,
+  imageUris: ['a.png', 'b.png'],
+  source: 'demo',
+  model: 'Animagine XL 4.0',
+  provider: 'demo',
+  enhance: false,
+  seed: 1,
+  seeds: [1, 2],
+  steps: 25,
+  cfg: 6,
+  sampler: 'euler_a',
+  width: 832,
+  height: 1216,
+  saladModel: '',
+  loras: [],
+  favoriteIndexes: [1],
+  durationMs: 1200,
+} as Generation;
+const tiles = galleryTiles([galleryItem]);
+assert(tiles.length === 2 && tiles[1]?.favorite === true, 'gallery lists each saved picture');
+assert(filterTiles(tiles, { favoritesOnly: true }).length === 1 && filterTiles(tiles, { query: 'maiden' }).length === 2, 'gallery filters favorites and prompts');
+assert(dropTiles([galleryItem], [{ generationId: 'g1', index: 0 }]).next[0]?.imageUris[0] === 'b.png', 'gallery delete removes one picture');
+assert(reusePatch(galleryItem, 1).seed === '2' && reusePatch(galleryItem, 1).seedRandom === false, 'reuse settings locks that seed');
 const live = deploymentForEndpoint('https://persimmon-potato-w36vqxy5bseqmtk4.salad.cloud', null);
 assert(live?.organization === 'seeyeevang707' && live.project === 'default' && live.group === 'yume-server', 'live server identity');
 const downloading = cloudChecklist({

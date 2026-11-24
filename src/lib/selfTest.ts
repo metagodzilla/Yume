@@ -1,6 +1,7 @@
 import { PermissionsAndroid, Platform } from 'react-native';
 
 import { containerGroupUrl, liveContainerGroup } from '@/src/lib/cloudActions';
+import { CLOUD_STOP_CHECK } from '@/src/lib/cloudRun';
 import { civitaiModelUrl, filterModels, getCivitaiModel, modelPasses, pickPreview, searchCivitai, thumbnailUrl } from '@/src/lib/civitai';
 import { classifyGatewayInput, normalizeEndpoint } from '@/src/lib/salad';
 import { normalizeSaladKey, pullPercent } from '@/src/lib/saladCloud';
@@ -130,6 +131,8 @@ export async function runCloudCheck(input: { endpoint: string; apiKey: string })
       ),
     );
   }
+
+  rows.push(row('Cloud', 'Stop', CLOUD_STOP_CHECK.status, 0, CLOUD_STOP_CHECK.runs ? 'Stop was sent.' : CLOUD_STOP_CHECK.message));
 
   rememberFailures('check', rows);
   return rows;

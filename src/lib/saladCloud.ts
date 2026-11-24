@@ -232,10 +232,19 @@ export function buildYumeContainerGroup(input: { apiKey: string; gpuClassId: str
   };
 }
 
+export function idleRemainingMs(input: { idleMinutes: number; lastActivityMs: number; now: number; activeJobs: number; running: boolean }): number | null {
+  if (input.idleMinutes <= 0 || !input.running || input.activeJobs > 0 || !input.lastActivityMs) return null;
+  return input.lastActivityMs + input.idleMinutes * 60_000 - input.now;
+}
+
+export function shouldIdleWarn(input: { idleMinutes: number; lastActivityMs: number; now: number; activeJobs: number; running: boolean }): boolean {
+  const left = idleRemainingMs(input);
+  return left != null && left > 0 && left <= 60_000;
+}
+
 export function shouldIdleStop(input: { idleMinutes: number; lastActivityMs: number; now: number; activeJobs: number; running: boolean }): boolean {
-  if (input.idleMinutes <= 0 || !input.running || input.activeJobs > 0) return false;
-  if (!input.lastActivityMs) return false;
-  return input.now - input.lastActivityMs >= input.idleMinutes * 60_000;
+  const left = idleRemainingMs(input);
+  return left != null && left <= 0;
 }
 
 export class SaladApiError extends Error {

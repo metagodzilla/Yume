@@ -5,7 +5,7 @@ import { Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { CheckpointSheet } from '@/components/CheckpointSheet';
-import { FrameGrid } from '@/components/FrameGrid';
+import { Gallery } from '@/components/Gallery';
 import { characterClause } from '@/src/lib/prompt';
 import { composeGenerationPrompt, drawFrames, generationParams, samplerId, sentPositiveText } from '@/src/lib/draw';
 import { sendClientReport } from '@/src/lib/clientReport';
@@ -55,6 +55,7 @@ export default function GenerateScreen() {
     }
     setBusy(true);
     setError(null);
+    const started = Date.now();
     setStatus(studio.settings.provider === 'salad' ? 'Sending it to Salad…' : 'Drawing on this phone…');
     try {
       const chosen = chooseSeeds({ locked: !gen.seedRandom, seedText: gen.seed, count: gen.count });
@@ -109,6 +110,7 @@ export default function GenerateScreen() {
           ...(lora.versionId ? { versionId: lora.versionId } : {}),
         })),
         warning: result.warning,
+        durationMs: Date.now() - started,
       };
       await studio.rememberGeneration(record);
       const used = result.seeds.length ? result.seeds : chosen.seeds;
@@ -327,24 +329,7 @@ export default function GenerateScreen() {
             <Text style={styles.link}>Use live server</Text>
           </Pressable>
         ) : null}
-        {latest ? (
-          <>
-            <Text style={styles.label}>Latest</Text>
-            <FrameGrid
-              uris={latest.imageUris}
-              aspectId={latest.aspectId}
-              onPress={(index) =>
-                studio.openViewer({
-                  images: latest.imageUris,
-                  index,
-                  prompt: latest.finalPrompt,
-                  title: latest.styleName,
-                  filename: `${latest.id}.png`,
-                })
-              }
-            />
-          </>
-        ) : null}
+        <Gallery variant="strip" />
         <View style={styles.row}>
           <Pressable onPress={() => router.push('/(tabs)/cast')}>
             <Text style={styles.link}>Cast</Text>

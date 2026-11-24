@@ -26,6 +26,7 @@ import {
   styleByStoredId,
   upsertStyle,
 } from '@/src/lib/library';
+import { dropTiles, withFavorite } from '@/src/lib/gallery';
 import { produceImages } from '@/src/lib/produce';
 import { classifyGatewayInput, migrateKeyStoredAsUrl } from '@/src/lib/salad';
 import { normalizeSaladKey } from '@/src/lib/saladCloud';
@@ -143,6 +144,8 @@ type StudioContextValue = {
   clearError: () => void;
   generate: () => Promise<void>;
   rememberGeneration: (record: Generation) => Promise<void>;
+  toggleFavorite: (id: string, index: number) => Promise<void>;
+  removeGalleryTiles: (keys: { generationId: string; index: number }[]) => Promise<void>;
   viewer: ViewerState | null;
   openViewer: (viewer: ViewerState) => void;
   closeViewer: () => void;
@@ -371,6 +374,29 @@ export function StudioProvider({ children }: { children: ReactNode }) {
     [history],
   );
 
+  const persistHistory = useCallback(async (next: Generation[]) => {
+    setHistory(next);
+    await saveHistory(next);
+  }, []);
+
+  const toggleFavorite = useCallback(
+    async (id: string, index: number) => {
+      const next = history.map((item) => (item.id === id ? withFavorite(item, index) : item));
+      await persistHistory(next);
+    },
+    [history, persistHistory],
+  );
+
+  const removeGalleryTiles = useCallback(
+    async (keys: { generationId: string; index: number }[]) => {
+      const { next, removed } = dropTiles(history, keys);
+      await persistHistory(next);
+      await Promise.all(removed.map((uri) => deleteImageUri(uri)));
+      setViewer(null);
+    },
+    [history, persistHistory],
+  );
+
   const clearHistory = useCallback(async () => {
     const previous = history;
     setHistory([]);
@@ -511,6 +537,7 @@ export function StudioProvider({ children }: { children: ReactNode }) {
         saladModel: settings.saladModel,
         loras: settings.loras,
         warning: result.warning,
+        durationMs: Date.now() - started,
       };
       const combined = [record, ...history];
       const next = combined.slice(0, HISTORY_LIMIT);
@@ -684,6 +711,8 @@ export function StudioProvider({ children }: { children: ReactNode }) {
         await saveHistory(next);
         if (combined.length > HISTORY_LIMIT) await dropImages(combined.slice(HISTORY_LIMIT));
       },
+      toggleFavorite,
+      removeGalleryTiles,
       viewer,
       openViewer: setViewer,
       closeViewer: () => setViewer(null),
@@ -708,6 +737,8 @@ export function StudioProvider({ children }: { children: ReactNode }) {
       history,
       deleteGeneration,
       clearHistory,
+      toggleFavorite,
+      removeGalleryTiles,
       remix,
       settings,
       updateSettings,

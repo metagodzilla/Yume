@@ -116,6 +116,8 @@ export type Generation = {
   saladModel: string;
   loras: LoraSpec[];
   warning?: string;
+  durationMs?: number;
+  favoriteIndexes?: number[];
 };
 
 export type Settings = {
@@ -158,12 +160,19 @@ export type Session = {
   selectedCharacterId: string | null;
 };
 
+export type ViewerFrame = {
+  generationId: string;
+  imageIndex: number;
+};
+
 export type ViewerState = {
   images: string[];
   index: number;
   prompt: string;
   title: string;
   filename: string;
+  generationId?: string;
+  frames?: ViewerFrame[];
 };
 
 export const DEFAULT_SETTINGS: Settings = {

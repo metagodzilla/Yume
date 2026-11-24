@@ -1,12 +1,13 @@
 import * as Clipboard from 'expo-clipboard';
 import { router, useFocusEffect } from 'expo-router';
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import { Image } from 'expo-image';
 import { ActivityIndicator, AppState, Platform, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
 
 import { clientReportBody, fetchServerErrors, sendClientReport } from '@/src/lib/clientReport';
 import { rememberFault, reportDocument, type ServerFault } from '@/src/lib/reportText';
-import { changeContainerGroup, containerGroupUrl, readContainerGroup, readContainerInstances } from '@/src/lib/cloudActions';
+import { changeContainerGroup, containerGroupUrl, liveContainerGroup, readContainerGroup, readContainerInstances } from '@/src/lib/cloudActions';
+import { beginCloudStart, beginCloudStop, cloudRunState, finishCloudStop, noteLiveSession, subscribeCloudRun } from '@/src/lib/cloudRun';
 import { capReached, checkLine, cloudChecklist, deploymentForEndpoint, formatCostLine, hostOf, LIVE_GATEWAY, resolveHourly, sessionUsd, type CheckLine, type ChecklistStep } from '@/src/lib/cloudSteps';
 import { confirmAction } from '@/src/lib/confirm';
 import { probe, type Probe } from '@/src/lib/connection';
@@ -50,7 +51,8 @@ export function StatusPanel({ preview = '' }: { preview?: string }) {
   const [stats, setStats] = useState<CloudStats>(emptyStats());
   const [phone, setPhone] = useState<PhoneReading | null>(null);
   const [steps, setSteps] = useState<ChecklistStep[]>([]);
-  const [phase, setPhase] = useState<'starting' | 'running' | 'stopped'>('stopped');
+  const [phase, setPhase] = useState<'starting' | 'running' | 'stopping' | 'stopped'>('stopped');
+  const run = useSyncExternalStore(subscribeCloudRun, cloudRunState, cloudRunState);
   const [pill, setPill] = useState('Stopped');
   const [liveTitle, setLiveTitle] = useState('Cloud is stopped');
   const [checkNote, setCheckNote] = useState(CHECK_HELP);
@@ -85,6 +87,12 @@ export function StatusPanel({ preview = '' }: { preview?: string }) {
   });
   const cap = Number(studio.settings.spendCap) || 0;
   const spent = sessionUsd(upSec, rate);
+  const shownPhase = run.mode === 'stopping' ? 'stopping' : phase;
+  const frozen = run.mode !== 'live';
+  const shownSpent = frozen && run.frozenUsd != null ? run.frozenUsd : spent;
+  const shownUpSec = frozen && run.frozenUpSec != null ? run.frozenUpSec : shownPhase === 'stopped' ? 0 : upSec;
+  const startEnabled = shownPhase === 'stopped' || pill === 'Failed';
+  const stopEnabled = shownPhase === 'running' || shownPhase === 'starting';
   const wrongServer = endpointDiffersFromLive(studio.settings.saladEndpoint);
 
   const refresh = useCallback(async (report = false) => {
@@ -184,7 +192,13 @@ export function StatusPanel({ preview = '' }: { preview?: string }) {
       setStats(nextStats);
       setQuote({ priority, gpu: groupGpu, live: hostOf(saved) === LIVE_GATEWAY.host });
       const measured = typeof nextStats.uptimeSec === 'number' && nextStats.uptimeSec > 0 ? nextStats.uptimeSec : saladUp;
-      if (view.phase === 'stopped') setUpSec(0);
+      if (view.phase === 'stopped') {
+        if (cloudRunState().mode === 'stopping') {
+          finishCloudStop();
+          setNote(`Stopped. Final session cost ${money(cloudRunState().frozenUsd ?? 0)}.`);
+        }
+        setUpSec(0);
+      }
       else if (measured > 0) setUpSec(measured);
       setPhone(await readPhone());
       if (report) {
@@ -296,30 +310,39 @@ export function StatusPanel({ preview = '' }: { preview?: string }) {
   }, [studio.loading, throttle.heat, throttle.refreshMs]);
 
   useEffect(() => {
-    if (preview === 'model' || !capReached(spent, cap) || capped.current) return;
+    if (run.mode === 'live') noteLiveSession(spent, upSec);
+  }, [run.mode, spent, upSec]);
+
+  useEffect(() => {
+    if (preview === 'model' || !capReached(spent, cap) || capped.current || run.mode !== 'live') return;
     capped.current = true;
     void (async () => {
       const endpoint = studio.settings.saladEndpoint.trim();
-      const deployment = deploymentForEndpoint(endpoint, await readCloudDeployment());
+      const deployment = deploymentForEndpoint(endpoint, await readCloudDeployment()) ?? liveContainerGroup();
       const key = await readSaladKey();
-      if (!deployment || !key) {
+      if (!key) {
+        capped.current = false;
         setNote(`Session cap ${money(cap)} was reached. Save the Salad key to stop yume-server automatically.`);
         return;
       }
+      beginCloudStop(spent, upSec);
       try {
         await changeContainerGroup({ apiKey: key, deployment, action: 'stop' });
-        setNote(`Stopped the cloud at the ${money(cap)} session cap.`);
+        setNote(`Stopping at the ${money(cap)} session cap. Final session cost ${money(spent)}.`);
+        void refresh();
       } catch (caught) {
+        beginCloudStart();
+        capped.current = false;
         setNote(caught instanceof Error ? caught.message : 'The session cap was reached, and the stop call failed.');
       }
     })();
-  }, [cap, preview, spent, studio.settings.saladEndpoint]);
+  }, [cap, preview, refresh, run.mode, spent, studio.settings.saladEndpoint, upSec]);
 
   async function startCloud() {
     const endpoint = studio.settings.saladEndpoint.trim();
-    const deployment = deploymentForEndpoint(endpoint, await readCloudDeployment());
+    const deployment = deploymentForEndpoint(endpoint, await readCloudDeployment()) ?? liveContainerGroup();
     const key = await readSaladKey();
-    if (!deployment || !key) {
+    if (!key) {
       setNote('Save the Salad API key in Connect. This server is yume-server in project default.');
       router.push('/connect');
       return;
@@ -327,6 +350,8 @@ export function StatusPanel({ preview = '' }: { preview?: string }) {
     const ok = await confirmAction('Start cloud?', `Starting bills about ${money(rate)} per hour once the instance is running.`, 'Start');
     if (!ok) return;
     try {
+      beginCloudStart();
+      capped.current = false;
       await changeContainerGroup({ apiKey: key, deployment, action: 'start' });
       await writeCloudDeployment({ ...deployment, hourlyUsd: rate });
       await touchCloudActivity();
@@ -349,10 +374,10 @@ export function StatusPanel({ preview = '' }: { preview?: string }) {
         <View style={styles.header}>
           <View style={{ flex: 1 }}>
             <Text style={styles.name}>Yume</Text>
-            <Text style={styles.sub}>Cloud · {phase}</Text>
+            <Text style={styles.sub}>Cloud · {shownPhase}</Text>
           </View>
           <View style={styles.pill}>
-            <Text style={styles.pillText}>{pill}</Text>
+            <Text style={styles.pillText}>{shownPhase === 'stopping' ? 'Stopping' : pill}</Text>
           </View>
         </View>
         {job ? (
@@ -369,8 +394,11 @@ export function StatusPanel({ preview = '' }: { preview?: string }) {
           </View>
         ) : null}
         <View style={[styles.row, styles.actions]}>
-          <Pressable testID="start-server" style={styles.white} onPress={() => void startCloud()}>
+          <Pressable testID="start-server" disabled={!startEnabled} style={[styles.white, !startEnabled && styles.disabled]} onPress={() => void startCloud()}>
             <Text style={styles.whiteText}>Start cloud</Text>
+          </Pressable>
+          <Pressable testID="stop-server" disabled={!stopEnabled} style={[styles.white, !stopEnabled && styles.disabled]} onPress={() => void stopCloud('stop')}>
+            <Text style={styles.whiteText}>{shownPhase === 'stopping' ? 'Stopping...' : 'Stop cloud'}</Text>
           </Pressable>
           <Pressable
             testID="check-cloud"
@@ -418,11 +446,11 @@ export function StatusPanel({ preview = '' }: { preview?: string }) {
             <Text style={styles.link}>Use live server</Text>
           </Pressable>
         ) : null}
-        <Text testID="cost-line" style={styles.cost}>{formatCostLine({ sessionUsd: spent, hourly: rate, upMin: upSec / 60, cap })}</Text>
+        <Text testID="cost-line" style={styles.cost}>{formatCostLine({ sessionUsd: shownSpent, hourly: rate, upMin: shownUpSec / 60, cap, final: frozen })}</Text>
         <View testID="live-card" style={styles.live}>
           <Text style={styles.kicker}>LIVE</Text>
           <Text style={styles.liveTitle}>{liveTitle}</Text>
-          <Text style={styles.help}>Elapsed {clock(phase === 'stopped' ? 0 : cloudStart.current ? now - cloudStart.current : now - stepSince.current)}</Text>
+          <Text style={styles.help}>Elapsed {clock(frozen || shownPhase === 'stopped' ? shownUpSec * 1000 : cloudStart.current ? now - cloudStart.current : now - stepSince.current)}</Text>
           <ProgressBar percent={overall} />
           {steps.map((step) => (
             <View key={step.label} style={styles.step}>
@@ -447,7 +475,7 @@ export function StatusPanel({ preview = '' }: { preview?: string }) {
           {phone?.appCpuPercent == null ? 'n/a' : `${phone.appCpuPercent.toFixed(0)}% estimate`} · RAM {phone?.appRssMb == null ? 'n/a' : `${phone.appRssMb} MB`}
         </Text>
         <Text style={styles.help}>
-          Cloud {stats.gpu && stats.gpu !== 'Unknown' ? stats.gpu : 'n/a'} · {phase} · Up {Math.round(upSec / 60)} min · {money(rate)}/h · {money(spent)} session · GPU power {gpuPower} · util{' '}
+          Cloud {stats.gpu && stats.gpu !== 'Unknown' ? stats.gpu : 'n/a'} · {shownPhase} · Up {Math.round(shownUpSec / 60)} min · {money(rate)}/h · {money(shownSpent)} session · GPU power {gpuPower} · util{' '}
           {stats.utilPercent ?? 'n/a'}% · VRAM {stats.vramUsedMb ?? 'n/a'}/{stats.vramTotalMb ?? 'n/a'} MB
         </Text>
         <Text style={styles.help}>
@@ -471,13 +499,23 @@ export function StatusPanel({ preview = '' }: { preview?: string }) {
             keyboardType="decimal-pad"
             style={styles.input}
           />
+          <Text style={styles.fieldLabel}>Idle auto-stop</Text>
+          <View style={styles.row}>
+            {[
+              { minutes: 0, label: 'Off' },
+              { minutes: 15, label: '15 min' },
+              { minutes: 30, label: '30 min' },
+              { minutes: 60, label: '60 min' },
+            ].map((choice) => (
+              <Pressable key={choice.minutes} onPress={() => void studio.updateSettings({ idleStopMinutes: choice.minutes })}>
+                <Text style={[styles.chip, studio.settings.idleStopMinutes === choice.minutes && styles.current]}>{choice.label}</Text>
+              </Pressable>
+            ))}
+          </View>
         </View>
         <View style={styles.row}>
           <Pressable onPress={() => router.push('/connect')}>
             <Text style={styles.link}>Connect</Text>
-          </Pressable>
-          <Pressable testID="stop-server" onPress={() => void stopCloud('stop')}>
-            <Text style={styles.link}>Stop</Text>
           </Pressable>
           <Pressable testID="delete-server" onPress={() => void stopCloud('delete')}>
             <Text style={styles.link}>Delete</Text>
@@ -492,27 +530,29 @@ export function StatusPanel({ preview = '' }: { preview?: string }) {
 
   async function stopCloud(action: 'stop' | 'delete') {
     const endpoint = studio.settings.saladEndpoint.trim();
-    const deployment = deploymentForEndpoint(endpoint, await readCloudDeployment());
+    const deployment = deploymentForEndpoint(endpoint, await readCloudDeployment()) ?? liveContainerGroup();
     const key = await readSaladKey();
-    if (!deployment || !key) {
+    if (!key) {
       setNote('Cloud setup has no Salad key yet.');
       return;
     }
     const warning =
       action === 'stop'
-        ? `A running server costs about ${money(rate)} per hour until it stops.`
+        ? `Stop yume-server now? The session cost stays at ${money(shownSpent)} and the timer stops.`
         : `Delete removes yume-server. A running GPU is billed until it stops.`;
-    const ok = await confirmAction(action === 'stop' ? 'Stop the server?' : 'Delete the server?', warning, action === 'stop' ? 'Stop' : 'Delete');
+    const ok = await confirmAction(action === 'stop' ? 'Stop cloud?' : 'Delete the server?', warning, action === 'stop' ? 'Stop' : 'Delete');
     if (!ok) return;
+    if (action === 'stop') beginCloudStop(shownSpent, shownUpSec);
     try {
       await changeContainerGroup({ apiKey: key, deployment, action });
       if (action === 'delete') {
         await writeCloudDeployment(null);
         await studio.saveSaladEndpoint('');
       }
-      setNote(action === 'stop' ? 'Stop requested.' : 'Server deleted.');
+      setNote(action === 'stop' ? 'Stopping. The cost timer is stopped.' : 'Server deleted.');
       void refresh();
     } catch (caught) {
+      if (action === 'stop') beginCloudStart();
       setNote(caught instanceof Error ? caught.message : 'Salad did not accept that.');
     }
   }
@@ -591,6 +631,7 @@ const styles = StyleSheet.create({
   row: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, alignItems: 'center' },
   actions: { zIndex: 50, elevation: 50 },
   white: { flex: 1, backgroundColor: '#f4f4f4', borderRadius: 16, paddingVertical: 16, alignItems: 'center', flexDirection: 'row', justifyContent: 'center', gap: 8 },
+  disabled: { opacity: 0.35 },
   whiteText: { color: '#161616', fontFamily: font.black, fontSize: 16 },
   help: { color: colors.muted, fontFamily: font.semibold, fontSize: 13, lineHeight: 18 },
   cost: { color: colors.text, fontFamily: font.bold, fontSize: 14, lineHeight: 20 },

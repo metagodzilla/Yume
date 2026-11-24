@@ -73,6 +73,8 @@ export default function HistoryScreen() {
                     prompt: item.finalPrompt || item.enhancedPrompt || item.userPrompt,
                     title: item.characterName || item.styleName || 'Yume',
                     filename: `yume-${item.id}-${index + 1}.png`,
+                    generationId: item.id,
+                    frames: item.imageUris.map((_, imageIndex) => ({ generationId: item.id, imageIndex })),
                   })
                 }
               />
