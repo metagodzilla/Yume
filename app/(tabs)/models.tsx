@@ -4,7 +4,7 @@ import { Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { ModelThumb } from '@/components/ModelThumb';
-import { civitaiModelUrl, loraFileName, loraPage, searchCivitai, type CivitaiModel, type ContentFilter } from '@/src/lib/civitai';
+import { civitaiModelUrl, errorText, loraFileName, loraPage, searchCivitai, type CivitaiModel, type ContentFilter } from '@/src/lib/civitai';
 import { BASE_MODELS, MODEL_TYPES, SORTS } from '@/src/lib/defaultModel';
 import { patchGenerator, toggleLora, useGenerator } from '@/src/lib/genstore';
 import { openLink } from '@/src/lib/openLink';
@@ -35,21 +35,32 @@ export default function ModelsScreen() {
     setError(null);
     try {
       const token = await readCivitaiToken();
-      const page = await searchCivitai({
-        query,
-        type,
-        baseModel: base,
-        sort,
-        contentFilter: gen.contentFilter,
-        cursor: nextCursor,
-        token,
-      });
+      const filter = gen.contentFilter;
+      const minimum = filter === 'all' ? 1 : 8;
+      let pageCursor = nextCursor ?? null;
+      let matched: CivitaiModel[] = [];
+      let pages = 0;
+      do {
+        const page = await searchCivitai({
+          query,
+          type,
+          baseModel: base,
+          sort,
+          contentFilter: filter,
+          cursor: pageCursor,
+          token,
+        });
+        if (ticket !== request.current) return;
+        matched = matched.concat(page.items);
+        pageCursor = page.nextCursor;
+        pages += 1;
+      } while (matched.length < minimum && pageCursor && pages < 5);
       if (ticket !== request.current) return;
-      setItems((current) => (append ? [...current, ...page.items] : page.items));
-      setCursor(page.nextCursor);
+      setItems((current) => (append ? [...current, ...matched] : matched));
+      setCursor(pageCursor);
     } catch (caught) {
       if (ticket !== request.current) return;
-      setError(caught instanceof Error ? caught.message : 'Civitai could not be reached.');
+      setError(errorText(caught));
     } finally {
       if (ticket === request.current) setBusy(false);
     }
@@ -114,7 +125,14 @@ export default function ModelsScreen() {
         <Text style={styles.body}>
           All, SFW only, or NSFW only applies to the list and to every thumbnail. SFW hides mature items. NSFW only hides safe items. A saved Civitai token is used only when a download needs it.
         </Text>
-        {error ? <Text style={styles.error}>{error}</Text> : null}
+        {error ? (
+          <View>
+            <Text testID="search-error" style={styles.error}>{error}</Text>
+            <Pressable testID="search-retry" onPress={() => void load(null, false)}>
+              <Text style={styles.link}>Retry</Text>
+            </Pressable>
+          </View>
+        ) : null}
         {busy && items.length === 0 ? <Text style={styles.body}>Loading Civitai…</Text> : null}
         {items.map((model, index) => {
           const version = model.modelVersions?.[0];

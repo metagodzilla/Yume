@@ -3,6 +3,7 @@ import { router } from 'expo-router';
 import { Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
+import { UpdateCheck } from '@/components/UpdateCheck';
 import { confirmAction } from '@/src/lib/confirm';
 import { readCivitaiToken, writeCivitaiToken } from '@/src/lib/storage';
 import { useStudio } from '@/src/studio';
@@ -41,20 +42,9 @@ export default function SettingsScreen() {
         <View style={styles.card}>
           <Text style={styles.cardTitle}>App update</Text>
           <Text style={styles.body}>
-            Paste the HTTPS address of releases/latest.json. Yume compares the version code, downloads the APK, checks the checksum, and opens the Android installer. You allow installs from Yume once. There is no Expo account. JavaScript-only OTA updates are not wired up: the Expo update protocol needs a signed update server, and skipping that is more reliable than a half-working one.
+            Check for updates looks at the latest GitHub release of metagodzilla/Yume, finds the APK, and compares its version name and versionCode with this install. Tap again when an update is available to download it. You allow installs from Yume once.
           </Text>
-          <TextInput
-            testID="update-url"
-            value={studio.settings.updateManifestUrl}
-            onChangeText={(updateManifestUrl) => void studio.updateSettings({ updateManifestUrl })}
-            placeholder="https://example.com/latest.json"
-            placeholderTextColor={colors.faint}
-            autoCapitalize="none"
-            style={styles.input}
-          />
-          <Pressable testID="check-updates" onPress={() => void studio.updateSettings({ updateManifestUrl: studio.settings.updateManifestUrl.trim() })}>
-            <Text style={styles.link}>Check for updates</Text>
-          </Pressable>
+          <UpdateCheck />
           <Text style={styles.label}>Cloud hourly rate (USD)</Text>
           <TextInput
             testID="hourly-rate"

@@ -310,7 +310,8 @@ assert(readParameters(taggedPng)?.includes('Model hash: 1d5b43ff75'), 'png dropp
 import { interpretConnection } from '@/src/lib/connection';
 import { profileFor, offlineBlockedReason } from '@/src/lib/offline';
 import { buildReport, redact } from '@/src/lib/report';
-import { checksumMatches, parseManifest, updateAvailable } from '@/src/lib/updates';
+import { checksumMatches, parseGithubRelease, parseManifest, releaseStatus, updateAvailable } from '@/src/lib/updates';
+import { errorText } from '@/src/lib/civitai';
 import { capWarning, sessionCost } from '@/src/lib/usage';
 import {
   cancelJob,
@@ -386,6 +387,16 @@ assert(cancelJob(failed.state, 'd').jobs[0]?.status === 'cancelled', 'cancel');
 
 const manifest = parseManifest('{"version":"1.2.0","versionCode":9,"apkUrl":"https://example.com/yume.apk","sha256":"ABC"}');
 assert(updateAvailable(3, manifest) && !updateAvailable(9, manifest), 'version code compare');
+const zod = { error: { name: 'ZodError', message: 'Invalid input: expected number, received string' } };
+assert(errorText(zod).includes('expected number') && !errorText(zod).includes('[object Object]'), 'civitai error stays text');
+const release = parseGithubRelease({
+  tag_name: 'v1.4.2',
+  body: 'versionCode: 7\n',
+  assets: [{ name: 'yume-1.4.2.apk', browser_download_url: 'https://github.com/metagodzilla/Yume/releases/download/v1.4.2/yume-1.4.2.apk' }],
+});
+assert(release.version === '1.4.2' && release.versionCode === 7 && release.apkUrl.endsWith('.apk'), 'github release apk');
+assert(releaseStatus('1.4.1', 6, release).label === 'Update available v1.4.2', 'newer release');
+assert(releaseStatus('1.4.2', 7, release).label === 'Up to date', 'same release');
 assert(checksumMatches('abc', 'ABC'), 'checksum');
 assert(sessionCost(30 * 60 * 1000, 0.13) > 0.06 && sessionCost(30 * 60 * 1000, 0.13) < 0.07, 'half hour cost');
 assert(capWarning(1, 1)?.includes('over'), 'cap');

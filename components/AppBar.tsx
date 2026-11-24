@@ -1,6 +1,7 @@
 import { router } from 'expo-router';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 
+import { UpdateCheck } from '@/components/UpdateCheck';
 import { counts } from '@/src/lib/queue';
 import { useQueue } from '@/src/lib/queuestore';
 import { colors, font } from '@/src/theme';
@@ -10,16 +11,21 @@ export function AppBar({ dot }: { dot?: string }) {
   const total = counts(queue);
   const badge = total.running + total.waiting + total.paused;
   return (
-    <View style={styles.bar}>
-      <Text style={styles.logo}>Yume</Text>
-      <View style={styles.actions}>
-        <View style={[styles.dot, { backgroundColor: dot ?? colors.faint }]} />
-        <Pressable testID="bell" onPress={() => router.push('/(tabs)/queue')} hitSlop={8}>
-          <Text style={styles.icon}>Queue{badge ? ` ${badge}` : ''}</Text>
-        </Pressable>
-        <Pressable testID="avatar" onPress={() => router.push('/(tabs)/settings')} hitSlop={8}>
-          <Text style={styles.icon}>You</Text>
-        </Pressable>
+    <View>
+      <View style={styles.bar}>
+        <Text style={styles.logo}>Yume</Text>
+        <View style={styles.actions}>
+          <View style={[styles.dot, { backgroundColor: dot ?? colors.faint }]} />
+          <Pressable testID="bell" onPress={() => router.push('/(tabs)/queue')} hitSlop={8}>
+            <Text style={styles.icon}>Queue{badge ? ` ${badge}` : ''}</Text>
+          </Pressable>
+          <Pressable testID="avatar" onPress={() => router.push('/(tabs)/settings')} hitSlop={8}>
+            <Text style={styles.icon}>You</Text>
+          </Pressable>
+        </View>
+      </View>
+      <View style={styles.update}>
+        <UpdateCheck compact testID="check-updates-home" />
       </View>
     </View>
   );
@@ -31,4 +37,5 @@ const styles = StyleSheet.create({
   actions: { flexDirection: 'row', alignItems: 'center', gap: 12 },
   dot: { width: 10, height: 10, borderRadius: 5 },
   icon: { color: colors.text, fontFamily: font.black, fontSize: 13 },
+  update: { paddingHorizontal: 12, paddingBottom: 4 },
 });
