@@ -1,7 +1,8 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
+import { describeUpdateError, downloadLabel } from '@/src/lib/apkInstall';
 import { installReleaseApk } from '@/src/lib/installApk';
 import { checkGithubRelease } from '@/src/lib/updates';
 import { APP_VERSION, APP_VERSION_CODE } from '@/src/lib/version';
@@ -13,38 +14,53 @@ export function UpdateCheck() {
   const [detail, setDetail] = useState<string | null>(null);
   const [available, setAvailable] = useState(false);
   const [busy, setBusy] = useState(false);
+  const generation = useRef(0);
 
   async function refresh() {
+    const mine = ++generation.current;
     const result = await checkGithubRelease(APP_VERSION, APP_VERSION_CODE);
+    if (mine !== generation.current) return result;
     setAvailable(Boolean(result.apkUrl));
-    setDetail(result.bad ? result.label : result.apkUrl ? result.label : result.label === 'Up to date' ? null : result.label);
     return result;
   }
 
   useEffect(() => {
-    void refresh().catch(() => setDetail('Could not check for updates.'));
+    const mine = ++generation.current;
+    void checkGithubRelease(APP_VERSION, APP_VERSION_CODE)
+      .then((result) => {
+        if (mine !== generation.current) return;
+        setAvailable(Boolean(result.apkUrl));
+        setDetail(result.label);
+      })
+      .catch(() => {
+        if (mine === generation.current) setDetail('Could not check for updates.');
+      });
   }, []);
 
   async function onPress() {
     if (busy) return;
     setBusy(true);
-    setLabel('Checking…');
+    setLabel('Checking...');
+    setDetail('Checking...');
     try {
       const result = await refresh();
       if (result.apkUrl) {
-        setLabel('Installing…');
-        await installReleaseApk(result.apkUrl);
+        setLabel('Downloading');
+        setDetail('Downloading 0%');
+        await installReleaseApk(result.apkUrl, (progress) => {
+          const percent = progress.totalBytes > 0 ? Math.min(100, Math.round((progress.bytesWritten / progress.totalBytes) * 100)) : null;
+          setLabel(percent == null ? 'Downloading' : `${percent}%`);
+          setDetail(downloadLabel(progress));
+        });
         setLabel('Update');
-        setDetail('The installer is open. Allow installs from Yume if Android asks.');
+        setDetail('The installer is open.');
       } else {
         setLabel('Update');
         setDetail(result.label);
       }
     } catch (caught) {
-      const message = caught instanceof Error ? caught.message : 'The update could not be installed.';
       setLabel('Update');
-      setDetail(message);
-      setAvailable(false);
+      setDetail(describeUpdateError(caught));
     } finally {
       setBusy(false);
     }
@@ -53,7 +69,17 @@ export function UpdateCheck() {
   return (
     <>
       <View pointerEvents="box-none" style={[styles.wrap, { top: insets.top + 6 }]}>
-        <Pressable testID="check-updates" onPress={() => void onPress()} style={styles.button} hitSlop={8}>
+        <Pressable
+          testID="check-updates"
+          onPressIn={() => {
+            if (busy) return;
+            setLabel('Checking...');
+            setDetail('Checking...');
+          }}
+          onPress={() => void onPress()}
+          style={styles.button}
+          hitSlop={8}
+        >
           <Text style={styles.text}>{label}</Text>
           {available ? <View testID="update-badge" style={styles.badge} /> : null}
         </Pressable>

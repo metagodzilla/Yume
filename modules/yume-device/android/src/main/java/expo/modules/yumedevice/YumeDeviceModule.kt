@@ -1,15 +1,19 @@
 package expo.modules.yumedevice
 
 import android.app.ActivityManager
+import android.content.ActivityNotFoundException
+import android.content.ClipData
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
+import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.BatteryManager
 import android.os.Build
 import android.os.PowerManager
 import android.os.Process
 import android.os.SystemClock
+import android.provider.Settings
 import expo.modules.kotlin.modules.Module
 import expo.modules.kotlin.modules.ModuleDefinition
 import java.io.File
@@ -22,11 +26,38 @@ class YumeDeviceModule : Module() {
     }
     Function("installApk") { contentUri: String ->
       val context = appContext.reactContext ?: throw IllegalStateException("Yume is not attached to Android yet.")
-      val intent = Intent(Intent.ACTION_VIEW).apply {
-        setDataAndType(Uri.parse(contentUri), "application/vnd.android.package-archive")
-        addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_ACTIVITY_NEW_TASK)
+      val uri = Uri.parse(contentUri)
+      if (uri.scheme != "content") {
+        throw IllegalArgumentException("The installer needs a content URI from Yume's file provider.")
       }
-      context.startActivity(intent)
+      if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O && !context.packageManager.canRequestPackageInstalls()) {
+        val settings = Intent(Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES).apply {
+          data = Uri.parse("package:${context.packageName}")
+          addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        }
+        try {
+          context.startActivity(settings)
+        } catch (_: ActivityNotFoundException) {
+          throw IllegalStateException("Android did not open the install-permission screen for Yume. Open Settings, Apps, Yume, and allow install unknown apps.")
+        }
+        throw IllegalStateException("Android is asking Yume for permission to install apps. Turn on Allow from this source, then tap Update again.")
+      }
+      val intent = Intent(Intent.ACTION_VIEW).apply {
+        setDataAndType(uri, "application/vnd.android.package-archive")
+        addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_ACTIVITY_NEW_TASK)
+        clipData = ClipData.newRawUri("yume-update", uri)
+      }
+      val matches = context.packageManager.queryIntentActivities(intent, PackageManager.MATCH_DEFAULT_ONLY)
+      for (info in matches) {
+        context.grantUriPermission(info.activityInfo.packageName, uri, Intent.FLAG_GRANT_READ_URI_PERMISSION)
+      }
+      try {
+        context.startActivity(intent)
+      } catch (_: ActivityNotFoundException) {
+        throw IllegalStateException("Android has no installer that can open this APK.")
+      } catch (_: SecurityException) {
+        throw IllegalStateException("Android blocked Yume from handing the APK to the installer.")
+      }
     }
   }
 }

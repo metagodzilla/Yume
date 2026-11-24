@@ -20,6 +20,7 @@ import { buildMockGlb, parseGlb } from '@/src/lib/glb';
 import { encodePng } from '@/src/lib/png';
 import { produceImages, resolveSeeds } from '@/src/lib/produce';
 import { renderDemoFrames } from '@/src/lib/render';
+import { describeUpdateError, downloadLabel } from '@/src/lib/apkInstall';
 import { buildSaladBody, classifyGatewayInput, generateUrl, LIVE_GATEWAY_URL, migrateKeyStoredAsUrl, normalizeEndpoint, redactSecrets, saladErrorMessage } from '@/src/lib/salad';
 import { browsingParams, civitaiModelUrl, filterModels, loraPage, pickPreview, thumbnailUrl, type CivitaiModel } from '@/src/lib/civitai';
 import { buildYumeContainerGroup, choicesFromGpuClasses, costLine, describeDeploy, groupStatusOf, maskKey, pickDefaultGpu, serverUrlFromLink, shouldIdleStop } from '@/src/lib/saladCloud';
@@ -532,6 +533,11 @@ assert(pickPreview(sfwModel, 'sfw')?.kind === 'image' && thumbnailUrl(pickPrevie
 assert(pickPreview(nsfwModel, 'nsfw')?.url.endsWith('3.jpeg') && pickPreview(nsfwModel, 'sfw')?.url.endsWith('2.jpeg'), 'thumbnail follows the filter');
 assert(loraPage({ name: 'ribbon', modelId: 5, versionId: 9 }).url === civitaiModelUrl(5, 9), 'lora page uses ids');
 assert(loraPage({ name: 'ribbon' }).label === 'Search on Civitai', 'lora without ids searches');
+assert(downloadLabel({ bytesWritten: 38_334_282, totalBytes: 76_668_564 }).includes('50%') && downloadLabel({ bytesWritten: 38_334_282, totalBytes: 76_668_564 }).includes('73.1'), 'apk download percent');
+assert(downloadLabel({ bytesWritten: 2048, totalBytes: 0 }).startsWith('Downloading'), 'apk download without a length');
+const denial = describeUpdateError(new Error('java.lang.SecurityException: Permission Denial: reading expo.modules.filesystem.FileSystemFileProvider'));
+assert(denial.includes('blocked Yume') && !denial.includes('Permission Denial') && !denial.includes('FileSystemFileProvider'), 'installer error stays readable');
+assert(describeUpdateError(new Error('Android is asking Yume for permission to install apps. Turn on Allow from this source, then tap Update again.')).includes('Allow from this source'), 'unknown-apps prompt stays');
 assert(saladErrorMessage({ aborted: true }).toLowerCase().includes('waking'), 'cold start copy');
 assert(saladErrorMessage({ aborted: false, status: 503 }).toLowerCase().includes('not ready'), '503 copy');
 
