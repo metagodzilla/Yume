@@ -228,20 +228,37 @@ def generate_images(body: Any) -> tuple[list[str], list[int], str, str]:
     return images, seeds, chosen, consistency
 
 
+def uses_loaded_pipeline(requested: str, models: list[dict[str, Any]]) -> bool:
+    """The default Animagine checkpoint is already loaded from diffusers, not a single file."""
+    text = (requested or "").strip()
+    if text in {"", model_id()}:
+        return True
+    match = next(
+        (item for item in models if text in {item.get("filename"), item.get("name"), str(item.get("versionId") or "")}),
+        None,
+    )
+    if match is None:
+        return False
+    if match.get("source") == "diffusers":
+        return True
+    return match.get("versionId") == 1337429 and not match.get("path")
+
+
 def _activate_catalog(body: Any) -> str:
     """Load a Civitai file from the cache. SD1.5, SDXL-family, and Flux each use their pipeline."""
     global _PIPE
     from yume_server.catalog import list_models
 
     requested = (getattr(body, "model", None) or "").strip()
-    if requested in {"", model_id()}:
-        if _PIPE is None:
+    models = list_models()
+    if uses_loaded_pipeline(requested, models):
+        if _PIPE is None and not mock_mode():
             raise RuntimeError("Model is not loaded.")
         return model_id()
     match = next(
         (
             item
-            for item in list_models()
+            for item in models
             if requested in {item.get("filename"), item.get("name"), str(item.get("versionId"))}
         ),
         None,
@@ -249,8 +266,8 @@ def _activate_catalog(body: Any) -> str:
     if match is None:
         raise ValueError("That checkpoint is not installed. Install it from Civitai first.")
     path = match.get("path") or ""
-    if not os.path.exists(path) or os.path.getsize(path) < 1_000_000:
-        raise RuntimeError("The weight file is not on disk yet. The first download of a checkpoint is several gigabytes.")
+    if not path or not os.path.exists(path) or os.path.getsize(path) < 1_000_000:
+        raise ValueError("The weight file is not on disk yet. The first download of a checkpoint is several gigabytes.")
     import torch
 
     dtype = torch.float16

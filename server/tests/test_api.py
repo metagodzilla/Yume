@@ -141,6 +141,15 @@ def test_default_checkpoint_is_installed_and_metadata_is_written(client: TestCli
     assert default["hash"] == "1d5b43ff75"
     installed = client.post("/models/install", headers=headers, json={"versionId": 42})
     assert installed.status_code == 200, installed.text
+    job = installed.json()
+    assert job["id"]
+    for _ in range(30):
+        progress = client.get(f"/models/install/{job['id']}", headers=headers)
+        assert progress.status_code == 200, progress.text
+        if progress.json()["state"] in {"done", "error"}:
+            job = progress.json()
+            break
+    assert job["state"] == "done"
     chosen = client.post("/models/default", headers=headers, json={"versionId": 42})
     assert chosen.status_code == 200
     removed = client.delete("/models/42", headers=headers)
@@ -226,6 +235,76 @@ def test_default_checkpoint_comes_from_huggingface_and_civitai_needs_a_token(tmp
         download_plan({"versionId": 42, "filename": "other.safetensors"}, None)
     _, authed = download_plan({"versionId": 42, "filename": "other.safetensors"}, "test-token")
     assert authed["Authorization"] == "Bearer test-token"
+
+
+def test_app_generate_payload_is_not_a_server_error(client: TestClient) -> None:
+    headers = {"Authorization": "Bearer test-key", "Salad-Api-Key": "test-key"}
+    payload = {
+        "prompt": "masterpiece, high score, great score, absurdres, 1girl",
+        "negative_prompt": "lowres",
+        "width": 832,
+        "height": 1216,
+        "count": 1,
+        "seed": 1,
+        "steps": 25,
+        "cfg": 6,
+        "scheduler": "Euler a",
+        "model": "Animagine XL 4.0",
+        "model_name": "Animagine XL 4.0",
+        "model_hash": "1d5b43ff75",
+        "clip_skip": 2,
+        "loras": [],
+        "embeddings": [],
+        "vae": None,
+        "hires_scale": None,
+        "hires_denoise": 0.45,
+        "hires_upscaler": "Latent",
+        "hires_steps": 15,
+        "mode": "txt2img",
+        "strength": 0.55,
+        "reference_image": None,
+        "mask": None,
+    }
+    response = client.post("/generate", headers=headers, json=payload)
+    assert response.status_code == 200, response.text
+    missing = client.post("/generate", headers=headers, json={**payload, "loras": [{"name": "", "weight": 0.8}]})
+    assert missing.status_code == 400
+    assert "name" in missing.json()["detail"].lower()
+
+
+def test_errors_hide_secrets_and_keep_a_client_report(client: TestClient, tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("YUME_MODEL_DIR", str(tmp_path))
+    from yume_server.errors import list_errors, sanitize
+
+    hidden = sanitize({"authorization": "salad_cloud_user_secret", "prompt": "token=abc salad_cloud_user_secret"})
+    assert hidden["authorization"] == "[redacted]"
+    assert "secret" not in hidden["prompt"]
+    headers = {"Authorization": "Bearer test-key"}
+    stored = client.post(
+        "/client-report",
+        headers=headers,
+        json={"appVersion": "1.4.4", "versionCode": 9, "device": "android", "errors": [{"message": "HTTP 500"}], "request": {"endpoint": "/generate", "status": 500, "apiKey": "salad_cloud_user_secret"}},
+    )
+    assert stored.status_code == 200, stored.text
+    listed = client.get("/errors", headers=headers)
+    assert listed.status_code == 200
+    blob = listed.text
+    assert "salad_cloud_user_secret" not in blob
+    assert any(item.get("source") == "client" for item in listed.json()["errors"])
+    assert client.get("/errors").status_code == 401
+
+
+def test_default_name_uses_the_loaded_pipeline(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("YUME_MODEL_DIR", str(tmp_path))
+    monkeypatch.setenv("YUME_MOCK", "1")
+    from yume_server.catalog import ensure_default, list_models
+    from yume_server.generate import uses_loaded_pipeline
+
+    ensure_default()
+    models = list_models()
+    assert uses_loaded_pipeline("Animagine XL 4.0", models)
+    assert uses_loaded_pipeline("cagliostrolab/animagine-xl-4.0", models)
+    assert not uses_loaded_pipeline("anime-2d-ill_v3.fp16.safetensors", models)
 
 
 def test_unknown_checkpoint_is_rejected_outside_mock() -> None:
