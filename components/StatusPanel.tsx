@@ -1,6 +1,7 @@
 import * as Clipboard from 'expo-clipboard';
 import { router, useFocusEffect } from 'expo-router';
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { Image } from 'expo-image';
 import { ActivityIndicator, AppState, Platform, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
 
 import { clientReportBody, fetchServerErrors, sendClientReport } from '@/src/lib/clientReport';
@@ -14,14 +15,16 @@ import { thermalStatusName } from '@/src/lib/phonePower';
 import { counts } from '@/src/lib/queue';
 import { queueAction, useQueue } from '@/src/lib/queuestore';
 import { endpointDiffersFromLive, LIVE_GATEWAY_URL, normalizeEndpoint, redactSecrets } from '@/src/lib/salad';
-import { groupStatusOf, instanceCounts, normalizeSaladKey } from '@/src/lib/saladCloud';
+import { groupStatusOf, instanceCounts, normalizeSaladKey, pullPercent } from '@/src/lib/saladCloud';
+import { areaCounts, type CheckRow } from '@/src/lib/checkRows';
+import { runAppCheck, runCloudCheck } from '@/src/lib/selfTest';
 import { readCloudDeployment, readSaladKey, touchCloudActivity, writeCloudDeployment } from '@/src/lib/storage';
 import { getThrottle } from '@/src/lib/thermalState';
 import { emptyStats, money, type CloudStats } from '@/src/lib/usage';
 import { useStudio } from '@/src/studio';
 import { colors, font } from '@/src/theme';
 
-const CHECK_HELP = 'CHECK calls /health, /ready, and /stats on the gateway. The saved Salad key is sent, because this gateway rejects unsigned requests with 403.';
+const CHECK_HELP = 'CHECK tests the cloud. Test app checks this phone without calling the GPU.';
 
 const saladHeaders = (key: string) => ({
   Authorization: `Bearer ${key}`,
@@ -52,9 +55,15 @@ export function StatusPanel({ preview = '' }: { preview?: string }) {
   const [liveTitle, setLiveTitle] = useState('Cloud is stopped');
   const [checkNote, setCheckNote] = useState(CHECK_HELP);
   const [checks, setChecks] = useState<CheckLine[]>([]);
+  const [cloudRows, setCloudRows] = useState<CheckRow[]>([]);
+  const [appRows, setAppRows] = useState<CheckRow[]>([]);
+  const [openRow, setOpenRow] = useState<string | null>(null);
+  const [overall, setOverall] = useState<number | null>(null);
   const [serverErrors, setServerErrors] = useState<ServerFault[]>([]);
   const [openError, setOpenError] = useState<number | null>(null);
   const [checking, setChecking] = useState(false);
+  const [appTesting, setAppTesting] = useState(false);
+  const [appNote, setAppNote] = useState('Test app stays on this phone, then uploads the report only if the server answers.');
   const [note, setNote] = useState<string | null>(null);
   const [upSec, setUpSec] = useState(0);
   const [quote, setQuote] = useState({ priority: '', gpu: '', live: false });
@@ -94,6 +103,7 @@ export function StatusPanel({ preview = '' }: { preview?: string }) {
       let priority = '';
       let groupGpu = deployment?.gpuName || '';
       let groupError = '';
+      let groupPull: number | null = null;
       const groupUrl = deployment ? containerGroupUrl(deployment) : '';
       if (key && deployment) {
         try {
@@ -111,16 +121,20 @@ export function StatusPanel({ preview = '' }: { preview?: string }) {
               saladUp = Math.max(0, (Date.now() - parsed) / 1000);
             }
           }
+          let pull = pullPercent(group);
           if (running === 0 && groupStatus !== 'stopped' && groupStatus !== 'succeeded') {
             try {
-              const extra = instanceCounts(await readContainerInstances(key, deployment));
+              const instances = await readContainerInstances(key, deployment);
+              const extra = instanceCounts(instances);
               allocating = Math.max(allocating, extra.allocating);
               creating = Math.max(creating, extra.creating);
               running = Math.max(running, extra.running);
+              pull = pullPercent(instances) ?? pull;
             } catch {
               // The group GET already has the counts when Salad returns them.
             }
           }
+          groupPull = pull;
         } catch (error) {
           groupError = error instanceof Error ? error.message : 'Salad container-group GET failed.';
         }
@@ -134,6 +148,8 @@ export function StatusPanel({ preview = '' }: { preview?: string }) {
       const statsUrl = saved ? `${saved}/stats` : '';
       const health = saved ? await probe(healthUrl, { headers }, 8000) : undefined;
       const ready = saved ? await probe(readyUrl, { headers }, 8000) : undefined;
+      const startup = saved ? await probe(`${saved}/startup`, { headers }, 8000) : undefined;
+      const startupBody = startup?.body as { bytesDone?: number; bytesTotal?: number } | undefined;
       const probeError = [groupError, health?.error, ready?.error].filter(Boolean).join(' ');
       const view = cloudChecklist({
         hasEndpoint: Boolean(saved),
@@ -146,7 +162,11 @@ export function StatusPanel({ preview = '' }: { preview?: string }) {
         healthReady: health?.body?.ready,
         readyDetail: textOf(ready) || textOf(health),
         probeError: probeError || undefined,
+        pullPercent: groupPull,
+        modelDone: typeof startupBody?.bytesDone === 'number' ? startupBody.bytesDone : null,
+        modelTotal: typeof startupBody?.bytesTotal === 'number' ? startupBody.bytesTotal : null,
       });
+      setOverall(view.overall);
       setPhase(view.phase);
       setPill(view.pill);
       setLiveTitle(view.liveTitle);
@@ -186,22 +206,53 @@ export function StatusPanel({ preview = '' }: { preview?: string }) {
 
   function onCheck() {
     setChecking(true);
-    setCheckNote('Checking...');
-    void refresh(true)
-      .finally(() => setChecking(false))
-      .then(async () => {
-        const endpoint = normalizeEndpoint(studio.settings.saladEndpoint);
-        const key = normalizeSaladKey((await readSaladKey()) || '');
-        if (!endpoint || !key) return;
-        try {
-          await sendClientReport(endpoint, key);
-          setServerErrors(await fetchServerErrors(endpoint, key));
-        } catch (caught) {
-          const message = caught instanceof Error ? caught.message : 'Could not read server errors.';
-          rememberFault({ time: Date.now(), source: 'check', message, endpoint });
-          setServerErrors([{ message }]);
+    setCheckNote('Checking the cloud...');
+    setCloudRows([]);
+    setOpenRow(null);
+    void (async () => {
+      const endpoint = normalizeEndpoint(studio.settings.saladEndpoint);
+      const key = normalizeSaladKey((await readSaladKey()) || '');
+      try {
+        const rows = await runCloudCheck({ endpoint, apiKey: key });
+        setCloudRows(rows);
+        setCheckNote('Cloud check finished.');
+        await refresh(false);
+        if (endpoint && key) await sendClientReport(endpoint, key).catch(() => undefined);
+      } catch (caught) {
+        const message = caught instanceof Error ? caught.message : 'The cloud check failed.';
+        setCheckNote(message);
+        setCloudRows([{ area: 'Cloud', name: 'CHECK', status: 'fail', message, ms: 0 }]);
+      } finally {
+        setChecking(false);
+      }
+    })();
+  }
+
+  function onAppTest() {
+    setAppTesting(true);
+    setAppNote('Testing this phone...');
+    setAppRows([]);
+    setOpenRow(null);
+    void (async () => {
+      const endpoint = normalizeEndpoint(studio.settings.saladEndpoint);
+      const key = normalizeSaladKey((await readSaladKey()) || '');
+      try {
+        const rows = await runAppCheck({ endpoint: studio.settings.saladEndpoint });
+        setAppRows(rows);
+        setAppNote('App test finished.');
+        if (endpoint && key) {
+          const health = await probe(`${endpoint}/health`, { headers: saladHeaders(key) }, 8000);
+          if (health.ok) await sendClientReport(endpoint, key).catch(() => undefined);
+          else setAppNote('App test finished. The report stayed on the phone because the server did not answer.');
         }
-      });
+      } catch (caught) {
+        const message = caught instanceof Error ? caught.message : 'The app test failed.';
+        setAppNote(message);
+        setAppRows([{ area: 'App', name: 'Test', status: 'fail', message, ms: 0 }]);
+      } finally {
+        setAppTesting(false);
+      }
+    })();
   }
 
   useFocusEffect(
@@ -326,23 +377,25 @@ export function StatusPanel({ preview = '' }: { preview?: string }) {
             accessibilityRole="button"
             style={styles.white}
             onPressIn={() => {
+              if (checking) return;
               setChecking(true);
-              setCheckNote('Checking...');
+              setCheckNote('Checking the cloud...');
+              setCloudRows([]);
             }}
             onPress={onCheck}
           >
             {checking ? <ActivityIndicator testID="check-spinner" color="#161616" /> : null}
             <Text style={styles.whiteText}>{checking ? 'Checking...' : 'CHECK'}</Text>
           </Pressable>
+          <Pressable testID="test-app" accessibilityRole="button" style={styles.white} onPress={onAppTest}>
+            {appTesting ? <ActivityIndicator color="#161616" /> : null}
+            <Text style={styles.whiteText}>{appTesting ? 'Testing...' : 'Test app'}</Text>
+          </Pressable>
         </View>
         <Text testID="check-help" style={styles.help}>{redactSecrets(checkNote)}</Text>
-        {checks.map((row) => (
-          <Text key={row.name} testID={`check-row-${row.name.replace(/\s+/g, '-')}`} style={styles.help}>
-            {row.pass ? 'PASS' : 'FAIL'} {row.name}
-            {row.status ? ` HTTP ${row.status}` : ''} — {redactSecrets(row.message)}
-            {row.url ? ` ${redactSecrets(row.url)}` : ''}
-          </Text>
-        ))}
+        <ResultList rows={cloudRows} openRow={openRow} setOpenRow={setOpenRow} onOpenImage={(uri, settings) => studio.openViewer({ images: [uri], index: 0, prompt: settings || 'yume check', title: 'CHECK test', filename: 'check-test.png' })} />
+        <Text testID="app-help" style={styles.help}>{appNote}</Text>
+        <ResultList rows={appRows} openRow={openRow} setOpenRow={setOpenRow} onOpenImage={() => undefined} />
         {studio.cloudNotice ? (
           <Text testID="cloud-notice" style={styles.notice}>{studio.cloudNotice}</Text>
         ) : null}
@@ -357,7 +410,7 @@ export function StatusPanel({ preview = '' }: { preview?: string }) {
             {openError === index ? <Text selectable style={styles.help}>{item.traceback || item.message}</Text> : null}
           </View>
         ))}
-        <Pressable testID="copy-report" onPress={() => void Clipboard.setStringAsync(reportDocument(serverErrors, clientReportBody()))}>
+        <Pressable testID="copy-report" onPress={() => void Clipboard.setStringAsync(reportDocument([...cloudRows, ...appRows].map((item) => ({ message: `${item.status.toUpperCase()} ${item.area} ${item.name}: ${item.message}`, endpoint: item.detail, status: item.http })), clientReportBody()))}>
           <Text style={styles.link}>Copy report</Text>
         </Pressable>
         {wrongServer ? (
@@ -370,13 +423,17 @@ export function StatusPanel({ preview = '' }: { preview?: string }) {
           <Text style={styles.kicker}>LIVE</Text>
           <Text style={styles.liveTitle}>{liveTitle}</Text>
           <Text style={styles.help}>Elapsed {clock(phase === 'stopped' ? 0 : cloudStart.current ? now - cloudStart.current : now - stepSince.current)}</Text>
+          <ProgressBar percent={overall} />
           {steps.map((step) => (
             <View key={step.label} style={styles.step}>
               <Text style={[styles.stepMark, step.state === 'done' && styles.done, step.state === 'current' && styles.current]}>
                 {step.state === 'done' ? '✓' : step.state === 'current' ? '●' : '○'}
               </Text>
-              <Text style={[styles.stepLabel, step.state === 'current' && styles.current]}>{step.label}</Text>
-              {step.state === 'current' ? <Text style={styles.stepTime}>{clock(now - stepSince.current)}</Text> : null}
+              <View style={{ flex: 1, gap: 4 }}>
+                <Text style={[styles.stepLabel, step.state === 'current' && styles.current]}>{step.label}</Text>
+                <ProgressBar percent={step.state === 'todo' ? null : step.percent} idle={step.state === 'todo'} />
+              </View>
+              <Text style={styles.stepTime}>{step.percent == null ? (step.state === 'current' ? '…' : '') : `${step.percent}%`}</Text>
             </View>
           ))}
         </View>
@@ -461,6 +518,65 @@ export function StatusPanel({ preview = '' }: { preview?: string }) {
   }
 }
 
+function ProgressBar({ percent, idle = false }: { percent: number | null; idle?: boolean }) {
+  if (idle) return <View style={styles.track} />;
+  if (percent == null) {
+    return (
+      <View style={styles.track}>
+        <View style={styles.indeterminate} />
+      </View>
+    );
+  }
+  return (
+    <View style={styles.track}>
+      <View style={[styles.bar, { width: `${percent}%` }]} />
+    </View>
+  );
+}
+
+function ResultList({
+  rows,
+  openRow,
+  setOpenRow,
+  onOpenImage,
+}: {
+  rows: CheckRow[];
+  openRow: string | null;
+  setOpenRow: (id: string | null) => void;
+  onOpenImage: (uri: string, settings?: string) => void;
+}) {
+  return (
+    <>
+      {areaCounts(rows).map((count) => (
+        <Text key={count.area} style={styles.help}>
+          {count.area}: {count.pass} pass, {count.fail} fail, {count.skip} skip
+        </Text>
+      ))}
+      {rows.map((item) => {
+        const id = `${item.area}-${item.name}`;
+        return (
+          <View key={id}>
+            <Text testID={`check-row-${item.name.replace(/\s+/g, '-')}`} style={styles.help}>
+              {item.status.toUpperCase()} {item.name}
+              {item.http ? ` HTTP ${item.http}` : ''} — {redactSecrets(item.message)} · {item.ms} ms
+            </Text>
+            {item.settings ? <Text style={styles.help}>{item.settings}</Text> : null}
+            {item.imageUri ? (
+              <Pressable onPress={() => onOpenImage(item.imageUri || '', item.settings)}>
+                <Image source={{ uri: item.imageUri }} style={styles.thumb} contentFit="cover" />
+              </Pressable>
+            ) : null}
+            <Pressable onPress={() => setOpenRow(openRow === id ? null : id)}>
+              <Text style={styles.link}>Show details</Text>
+            </Pressable>
+            {openRow === id ? <Text selectable style={styles.help}>{redactSecrets(item.detail || item.message)}</Text> : null}
+          </View>
+        );
+      })}
+    </>
+  );
+}
+
 const styles = StyleSheet.create({
   wrap: { gap: 8 },
   card: { backgroundColor: colors.card, borderRadius: 18, padding: 14, gap: 10 },
@@ -482,6 +598,10 @@ const styles = StyleSheet.create({
   kicker: { color: colors.sakura, fontFamily: font.black, fontSize: 11, letterSpacing: 1 },
   liveTitle: { color: colors.text, fontFamily: font.black, fontSize: 16, lineHeight: 22 },
   step: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+  track: { height: 6, borderRadius: 999, backgroundColor: colors.ink, overflow: 'hidden' },
+  bar: { height: 6, backgroundColor: colors.sakura },
+  indeterminate: { height: 6, width: '35%', backgroundColor: colors.gold },
+  thumb: { width: 96, height: 96, borderRadius: 8, backgroundColor: colors.ink },
   stepMark: { width: 18, color: colors.faint, fontFamily: font.black },
   stepLabel: { flex: 1, color: colors.muted, fontFamily: font.semibold, fontSize: 14 },
   stepTime: { color: colors.gold, fontFamily: font.black, fontSize: 12 },

@@ -151,6 +151,27 @@ export function groupStatusOf(group: unknown): {
   };
 }
 
+export function pullPercent(payload: unknown): number | null {
+  let found: number | null = null;
+  const visit = (value: unknown) => {
+    if (found != null) return;
+    if (typeof value === 'string') {
+      const match = value.match(/pull(?:ing)?[^\d%]{0,40}(\d{1,3})\s*%/i);
+      if (!match) return;
+      const percent = Number(match[1]);
+      if (percent >= 0 && percent <= 100) found = percent;
+      return;
+    }
+    if (Array.isArray(value)) {
+      value.forEach(visit);
+      return;
+    }
+    if (isRecord(value)) Object.values(value).forEach(visit);
+  };
+  visit(payload);
+  return found;
+}
+
 export function instanceCounts(payload: unknown): { allocating: number; creating: number; running: number } {
   const list = Array.isArray(payload)
     ? payload

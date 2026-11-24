@@ -83,9 +83,12 @@ export function releaseStatus(
   localCode: number,
   release: Pick<GithubRelease, 'version' | 'versionCode'>,
 ): { available: boolean; label: string } {
-  const codeNewer = release.versionCode != null && release.versionCode > localCode;
-  const nameNewer = compareVersions(localVersion, release.version) > 0;
-  if (codeNewer || nameNewer) return { available: true, label: `Update available v${release.version.replace(/^v/i, '')}` };
+  const version = release.version.replace(/^v/i, '');
+  if (release.versionCode != null) {
+    if (release.versionCode > localCode) return { available: true, label: `Update available v${version}` };
+    return { available: false, label: 'Up to date' };
+  }
+  if (compareVersions(localVersion, release.version) > 0) return { available: true, label: `Update available v${version}` };
   return { available: false, label: 'Up to date' };
 }
 

@@ -27,7 +27,7 @@ The publish workflow builds the GPU target and pushes:
 - `ghcr.io/metagodzilla/yume-server:latest`
 - `ghcr.io/metagodzilla/yume-server:1.4.4`
 
-`POST /models/install` returns a job id immediately. Poll `GET /models/install/{id}` for `bytesDone`, `bytesTotal`, `state`, and `error`. `GET /errors` (Salad API key required) lists the last 50 sanitized failures. `POST /client-report` stores a phone report in that same list. Set `CIVITAI_TOKEN` on the container when a download must succeed even if the phone does not send `X-Civitai-Token`.
+`POST /models/install` returns a job id immediately. Poll `GET /models/install/{id}` for `bytesDone`, `bytesTotal`, `state`, and `error`. `GET /startup` reports model download bytes before `/ready`. `GET /errors` (Salad API key required) lists the last 50 sanitized failures. `POST /client-report` stores a phone report in that same list. Set `CIVITAI_TOKEN` on the container when a download must succeed even if the phone does not send `X-Civitai-Token`.
 
 A package created from a private repository is private. Salad cannot pull a private GHCR image until you either make **only the package** public, or give Salad registry credentials.
 

@@ -18,6 +18,15 @@ def client() -> TestClient:
         yield test
 
 
+def test_startup_answers_before_ready(client: TestClient) -> None:
+    startup = client.get("/startup")
+    assert startup.status_code == 200, startup.text
+    body = startup.json()
+    assert body["stage"] in {"idle", "ready", "downloading", "loading"}
+    assert "bytesDone" in body and "bytesTotal" in body
+    assert client.get("/health").json()["startup"]["stage"] == body["stage"]
+
+
 def test_health_and_ready(client: TestClient) -> None:
     health = client.get("/health").json()
     assert health["status"] == "ok"

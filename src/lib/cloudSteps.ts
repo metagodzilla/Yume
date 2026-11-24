@@ -22,6 +22,7 @@ export type CloudPhase = 'starting' | 'running' | 'stopped';
 export type ChecklistStep = {
   label: string;
   state: 'done' | 'current' | 'todo';
+  percent: number | null;
 };
 
 export const RTX_4090_LOW_HOURLY = 0.253;
@@ -86,7 +87,10 @@ export function cloudChecklist(input: {
   healthReady?: boolean;
   readyDetail?: string;
   probeError?: string;
-}): { phase: CloudPhase; pill: string; liveTitle: string; steps: ChecklistStep[]; authBlocked: boolean } {
+  pullPercent?: number | null;
+  modelDone?: number | null;
+  modelTotal?: number | null;
+}): { phase: CloudPhase; pill: string; liveTitle: string; steps: ChecklistStep[]; authBlocked: boolean; overall: number | null } {
   const authBlocked = input.healthStatus === 403 || input.readyStatus === 403;
   const ready = input.readyStatus === 200;
   const healthUp = input.healthStatus === 200;
@@ -100,13 +104,16 @@ export function cloudChecklist(input: {
   let liveTitle = 'Creating the container group';
 
   if (ready) {
-    return { phase: 'running', pill: 'Running', liveTitle: 'Ready', steps: paint(5), authBlocked: false };
+    const steps = paint(5, input);
+    return { phase: 'running', pill: 'Running', liveTitle: 'Ready', steps, authBlocked: false, overall: 100 };
   }
   if (!input.hasEndpoint && !input.groupStatus) {
-    return { phase: 'stopped', pill: 'Stopped', liveTitle: 'Cloud is stopped', steps: paint(-1), authBlocked: false };
+    const steps = paint(-1, input);
+    return { phase: 'stopped', pill: 'Stopped', liveTitle: 'Cloud is stopped', steps, authBlocked: false, overall: null };
   }
   if (input.groupStatus === 'stopped' || input.groupStatus === 'succeeded') {
-    return { phase: 'stopped', pill: 'Stopped', liveTitle: 'Cloud is stopped', steps: paint(-1), authBlocked };
+    const steps = paint(-1, input);
+    return { phase: 'stopped', pill: 'Stopped', liveTitle: 'Cloud is stopped', steps, authBlocked, overall: null };
   }
   if (modelWait && (healthUp || input.readyStatus === 503)) {
     index = 4;
@@ -137,7 +144,8 @@ export function cloudChecklist(input: {
     pill = 'Failed';
     liveTitle = 'The container group failed';
   }
-  return { phase, pill, liveTitle, steps: paint(index), authBlocked };
+  const steps = paint(index, input);
+  return { phase, pill, liveTitle, steps, authBlocked, overall: overallPercent(steps) };
 }
 
 export function formatCostLine(input: { sessionUsd: number; hourly: number; upMin: number; cap: number }): string {
@@ -156,9 +164,34 @@ export function capReached(spent: number, cap: number): boolean {
   return cap > 0 && spent >= cap - 0.0001;
 }
 
-function paint(current: number): ChecklistStep[] {
-  return CHECKLIST.map((label, index) => ({
-    label,
-    state: current < 0 ? 'todo' : index < current ? 'done' : index === current ? 'current' : 'todo',
-  }));
+function paint(current: number, input: { pullPercent?: number | null; modelDone?: number | null; modelTotal?: number | null }): ChecklistStep[] {
+  return CHECKLIST.map((label, index) => {
+    const state = current < 0 ? 'todo' : index < current ? 'done' : index === current ? 'current' : 'todo';
+    return { label, state, percent: stepPercent(index, state, input) };
+  });
+}
+
+function stepPercent(index: number, state: ChecklistStep['state'], input: { pullPercent?: number | null; modelDone?: number | null; modelTotal?: number | null }): number | null {
+  if (state === 'done') return 100;
+  if (state !== 'current') return null;
+  if (index === 2 && input.pullPercent != null) return clampPercent(input.pullPercent);
+  if (index === 4 && input.modelTotal && input.modelTotal > 0 && input.modelDone != null) {
+    return clampPercent((input.modelDone / input.modelTotal) * 100);
+  }
+  if (index === 5) return 100;
+  return null;
+}
+
+function overallPercent(steps: ChecklistStep[]): number | null {
+  if (steps.length === 0) return null;
+  if (steps.every((step) => step.state === 'done')) return 100;
+  const current = steps.find((step) => step.state === 'current');
+  if (!current || current.percent == null) return null;
+  const done = steps.filter((step) => step.state === 'done').length;
+  return clampPercent(((done * 100 + current.percent) / steps.length));
+}
+
+function clampPercent(value: number): number {
+  if (!Number.isFinite(value)) return 0;
+  return Math.max(0, Math.min(100, Math.round(value)));
 }

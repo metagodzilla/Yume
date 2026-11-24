@@ -30,6 +30,8 @@ import { browsingParams, civitaiModelUrl, filterModels, loraPage, pickPreview, t
 import { buildYumeContainerGroup, choicesFromGpuClasses, costLine, describeDeploy, groupStatusOf, maskKey, normalizeSaladKey, pickDefaultGpu, saladFailureMessage, saladRequest, serverUrlFromLink, shouldIdleStop } from '@/src/lib/saladCloud';
 import { validateSaladKey } from '@/src/lib/cloudActions';
 import { capReached, checkLine, cloudChecklist, deploymentForEndpoint, formatCostLine, resolveHourly, RTX_4090_LOW_HOURLY, sessionUsd, uptimeSeconds } from '@/src/lib/cloudSteps';
+import { pullPercent } from '@/src/lib/saladCloud';
+import { areaCounts } from '@/src/lib/checkRows';
 import { classifyHeat, estimatePowerWatts, shouldKeepScreenAwake, throttleFor, throttleSteps } from '@/src/lib/phonePower';
 import { composeSheet, decodePng } from '@/src/lib/sheet';
 import { applyInstruction, consistencyNote, expressionPrompt, undoVersion, viewPrompt } from '@/src/lib/turnaround';
@@ -403,6 +405,15 @@ const release = parseGithubRelease({
 assert(release.version === '1.4.2' && release.versionCode === 7 && release.apkUrl.endsWith('.apk'), 'github release apk');
 assert(releaseStatus('1.4.1', 6, release).label === 'Update available v1.4.2', 'newer release');
 assert(releaseStatus('1.4.2', 7, release).label === 'Up to date', 'same release');
+assert(releaseStatus('1.4.3', 8, { version: '1.4.4', versionCode: 9 }).label === 'Update available v1.4.4', 'older versionCode is offered 1.4.4');
+assert(releaseStatus('1.4.4', 9, { version: '1.4.4', versionCode: 9 }).label === 'Up to date', 'same versionCode is current');
+assert(pullPercent({ instances: [{ state: 'creating', details: 'Pulling, 37% complete' }] }) === 37, 'salad pull percent');
+assert(pullPercent({ state: 'running' }) === null, 'no fake pull percent');
+const modelStep = cloudChecklist({ hasEndpoint: true, healthStatus: 200, readyStatus: 503, healthReady: false, modelDone: 50, modelTotal: 100 });
+assert(modelStep.steps[4]?.percent === 50 && modelStep.overall != null, 'model download uses real bytes');
+const unknownStep = cloudChecklist({ hasEndpoint: true, groupStatus: 'deploying', allocating: 1 });
+assert(unknownStep.steps.find((step) => step.state === 'current')?.percent == null && unknownStep.overall == null, 'missing progress stays indeterminate');
+assert(areaCounts([{ area: 'Cloud', name: 'Health', status: 'pass', message: '', ms: 1 }, { area: 'Cloud', name: 'Ready', status: 'skip', message: '', ms: 0 }])[0]?.pass === 1, 'area summary');
 assert(checksumMatches('abc', 'ABC'), 'checksum');
 assert(sessionCost(30 * 60 * 1000, 0.13) > 0.06 && sessionCost(30 * 60 * 1000, 0.13) < 0.07, 'half hour cost');
 assert(capWarning(1, 1)?.includes('over'), 'cap');
