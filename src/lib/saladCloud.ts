@@ -1,8 +1,22 @@
 export const SALAD_API = 'https://api.salad.com/api/public';
 export const SALAD_PORTAL_API_KEYS = 'https://portal.salad.com';
 export const YUME_IMAGE = 'ghcr.io/metagodzilla/yume-server:latest';
+export const YUME_ORGANIZATION = 'seeyeevang707';
 export const YUME_PROJECT = 'default';
 export const YUME_GROUP = 'yume-server';
+
+export function normalizeSaladKey(value: string | null | undefined): string {
+  let text = (value ?? '').replace(/^\uFEFF/, '').trim();
+  text = text.replace(/^(?:salad-api-key|bearer)\s*:\s*/i, '');
+  text = text.replace(/^bearer\s+/i, '');
+  return text.replace(/\s+/g, '');
+}
+
+export function saladFailureMessage(status: number, url: string, detail?: string): string {
+  const safe = detail?.replace(/salad_cloud_user_\S+/gi, 'salad_cloud_user_…') ?? '';
+  const extra = safe && !/^salad returned\b/i.test(safe) ? ` ${safe}` : '';
+  return `HTTP ${status} from ${url}.${extra}`.replace(/\s+/g, ' ').trim();
+}
 
 export type NamedResource = { name: string; displayName: string };
 
@@ -218,10 +232,11 @@ export async function saladRequest(input: {
   body?: unknown;
   fetchImpl?: typeof fetch;
 }): Promise<unknown> {
-  const response = await (input.fetchImpl ?? fetch)(`${SALAD_API}${input.path}`, {
+  const url = `${SALAD_API}${input.path}`;
+  const response = await (input.fetchImpl ?? fetch)(url, {
     method: input.method ?? 'GET',
     headers: {
-      'Salad-Api-Key': input.apiKey.trim(),
+      'Salad-Api-Key': normalizeSaladKey(input.apiKey),
       accept: 'application/json',
       ...(input.body === undefined ? {} : { 'content-type': 'application/json' }),
     },
@@ -237,8 +252,8 @@ export async function saladRequest(input: {
     }
   }
   if (!response.ok) {
-    const detail = isRecord(payload) && typeof payload.detail === 'string' ? payload.detail : `Salad returned ${response.status}.`;
-    throw new SaladApiError(response.status, detail);
+    const detail = isRecord(payload) && typeof payload.detail === 'string' ? payload.detail : '';
+    throw new SaladApiError(response.status, saladFailureMessage(response.status, url, detail));
   }
   return payload;
 }

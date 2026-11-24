@@ -1,4 +1,5 @@
 import { base64ToBytes, bytesToBase64 } from '@/src/lib/base64';
+import { normalizeSaladKey } from '@/src/lib/saladCloud';
 import type { LoraSpec, SamplerId } from '@/src/lib/types';
 
 export type SaladRequest = {
@@ -195,7 +196,8 @@ export async function generateSalad(
   if (classified.kind !== 'url') throw new Error('Add a gateway URL that starts with https://. Connect can fill in the live server.');
   const endpoint = classified.url;
   const target = generateUrl(endpoint);
-  if (!input.apiKey.trim()) {
+  const apiKey = normalizeSaladKey(input.apiKey);
+  if (!apiKey) {
     throw new Error('Add the Salad API key in Settings. It is stored in Secure Store and sent only to that endpoint.');
   }
   const controller = new AbortController();
@@ -206,9 +208,9 @@ export async function generateSalad(
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        Authorization: `Bearer ${input.apiKey.trim()}`,
-        'X-Api-Key': input.apiKey.trim(),
-        'Salad-Api-Key': input.apiKey.trim(),
+        Authorization: `Bearer ${apiKey}`,
+        'X-Api-Key': apiKey,
+        'Salad-Api-Key': apiKey,
       },
       body: JSON.stringify(input.body),
       signal: controller.signal,

@@ -5,6 +5,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { probe } from '@/src/lib/connection';
 import { classifyGatewayInput, redactSecrets } from '@/src/lib/salad';
+import { normalizeSaladKey } from '@/src/lib/saladCloud';
 import { pushLog } from '@/src/lib/log';
 import { readSaladKey } from '@/src/lib/storage';
 import { useStudio } from '@/src/studio';
@@ -43,7 +44,7 @@ export default function CloudCheckScreen() {
     next.push(health.ok ? { name: 'TLS', status: endpoint.startsWith('https') ? 'pass' : 'warn', detail: endpoint.startsWith('https') ? 'The connection used HTTPS.' : 'Plain HTTP has no TLS.' } : { name: 'TLS', status: 'fail', detail: 'Could not complete a secure request.' });
     const stored = await readSaladKey();
     const webKey = Platform.OS === 'web' && typeof localStorage !== 'undefined' ? localStorage.getItem('yume.webSaladKey') || '' : '';
-    const key = stored || webKey;
+    const key = normalizeSaladKey(stored || webKey);
     const auth = key ? await probe(`${endpoint}/models`, { headers: { Authorization: `Bearer ${key}`, 'Salad-Api-Key': key, 'X-Api-Key': key } }, 8000) : undefined;
     if (!key) next.push({ name: 'Auth', status: 'fail', detail: 'No API key is saved.' });
     else if (auth?.status === 401 || auth?.status === 403) next.push({ name: 'Auth', status: 'fail', detail: 'The key was rejected.' });

@@ -3,19 +3,20 @@ import { useEffect, useState } from 'react';
 import { Linking, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
-import { deployYumeGroup, ensureYumeProject, listGpuClasses, listOrganizations, readContainerGroup } from '@/src/lib/cloudActions';
+import { deployYumeGroup, ensureYumeProject, listGpuClasses, readContainerGroup, validateSaladKey } from '@/src/lib/cloudActions';
 import { probe } from '@/src/lib/connection';
 import { addJob, finishJob, reportJob } from '@/src/lib/queuestore';
 import {
   SALAD_PORTAL_API_KEYS,
+  YUME_ORGANIZATION,
   YUME_PROJECT,
+  normalizeSaladKey,
   choicesFromGpuClasses,
   costLine,
   describeDeploy,
   gatewayFromGroup,
   groupStatusOf,
   pickDefaultGpu,
-  readNamedItems,
   serverUrlFromLink,
   type GpuChoice,
   type NamedResource,
@@ -69,21 +70,19 @@ export default function SetupScreen() {
       setStep('org');
       return;
     }
-    const trimmed = apiKey.trim();
-    if (!trimmed) {
+    const key = normalizeSaladKey(apiKey);
+    setApiKey(key);
+    if (!key) {
       setError('Paste the Salad API key first.');
       return;
     }
     setBusy(true);
     setError(null);
     try {
-      await studio.saveSaladKey(trimmed);
-      const listed = readNamedItems(await listOrganizations(trimmed));
-      if (listed.length === 0) {
-        setError('This key has no Salad organization yet. Create one in the portal, then try again.');
-        return;
-      }
-      setOrgs(listed);
+      await studio.saveSaladKey(key);
+      await validateSaladKey(key);
+      setOrganization(YUME_ORGANIZATION);
+      setOrgs([{ name: YUME_ORGANIZATION, displayName: YUME_ORGANIZATION }]);
       setStep('org');
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : 'Salad did not accept that key.');
@@ -103,8 +102,9 @@ export default function SetupScreen() {
     setBusy(true);
     setError(null);
     try {
-      await ensureYumeProject(apiKey.trim(), next.name);
-      const choices = choicesFromGpuClasses(await listGpuClasses(apiKey.trim(), next.name));
+      const key = normalizeSaladKey(apiKey);
+      if (next.name !== YUME_ORGANIZATION) await ensureYumeProject(key, next.name);
+      const choices = choicesFromGpuClasses(await listGpuClasses(key, next.name));
       if (choices.length === 0) {
         setError('Salad did not return any GPU classes for that organization.');
         return;
@@ -127,7 +127,7 @@ export default function SetupScreen() {
       setPhase('Pulling the image');
       return;
     }
-    const key = apiKey.trim();
+    const key = normalizeSaladKey(apiKey);
     setBusy(true);
     setError(null);
     setStep('progress');

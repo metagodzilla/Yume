@@ -28,6 +28,7 @@ import {
 } from '@/src/lib/library';
 import { produceImages } from '@/src/lib/produce';
 import { classifyGatewayInput, migrateKeyStoredAsUrl } from '@/src/lib/salad';
+import { normalizeSaladKey } from '@/src/lib/saladCloud';
 import { exportBundle } from '@/src/lib/library';
 import { throttleSteps } from '@/src/lib/phonePower';
 import { getThrottle } from '@/src/lib/thermalState';
@@ -652,9 +653,9 @@ export function StudioProvider({ children }: { children: ReactNode }) {
         setHasKey(false);
       },
       saveSaladKey: async (value) => {
-        const trimmed = value.trim();
-        if (!trimmed) throw new Error('Paste the key before saving.');
-        await writeSaladKey(trimmed);
+        const key = normalizeSaladKey(value);
+        if (!key) throw new Error('Paste the key before saving.');
+        await writeSaladKey(key);
         setHasSaladKey(true);
       },
       clearSaladKey: async () => {

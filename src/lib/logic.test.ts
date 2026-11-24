@@ -23,7 +23,8 @@ import { renderDemoFrames } from '@/src/lib/render';
 import { describeUpdateError, downloadLabel } from '@/src/lib/apkInstall';
 import { buildSaladBody, classifyGatewayInput, generateUrl, LIVE_GATEWAY_URL, migrateKeyStoredAsUrl, normalizeEndpoint, redactSecrets, saladErrorMessage } from '@/src/lib/salad';
 import { browsingParams, civitaiModelUrl, filterModels, loraPage, pickPreview, thumbnailUrl, type CivitaiModel } from '@/src/lib/civitai';
-import { buildYumeContainerGroup, choicesFromGpuClasses, costLine, describeDeploy, groupStatusOf, maskKey, pickDefaultGpu, serverUrlFromLink, shouldIdleStop } from '@/src/lib/saladCloud';
+import { buildYumeContainerGroup, choicesFromGpuClasses, costLine, describeDeploy, groupStatusOf, maskKey, normalizeSaladKey, pickDefaultGpu, saladFailureMessage, saladRequest, serverUrlFromLink, shouldIdleStop } from '@/src/lib/saladCloud';
+import { validateSaladKey } from '@/src/lib/cloudActions';
 import { capReached, checkLine, cloudChecklist, deploymentForEndpoint, formatCostLine, resolveHourly, RTX_4090_LOW_HOURLY, sessionUsd, uptimeSeconds } from '@/src/lib/cloudSteps';
 import { classifyHeat, estimatePowerWatts, shouldKeepScreenAwake, throttleFor, throttleSteps } from '@/src/lib/phonePower';
 import { composeSheet, decodePng } from '@/src/lib/sheet';
@@ -540,6 +541,33 @@ assert(denial.includes('blocked Yume') && !denial.includes('Permission Denial') 
 assert(describeUpdateError(new Error('Android is asking Yume for permission to install apps. Turn on Allow from this source, then tap Update again.')).includes('Allow from this source'), 'unknown-apps prompt stays');
 assert(saladErrorMessage({ aborted: true }).toLowerCase().includes('waking'), 'cold start copy');
 assert(saladErrorMessage({ aborted: false, status: 503 }).toLowerCase().includes('not ready'), '503 copy');
+assert(normalizeSaladKey('  salad_cloud_user_abc\r\n') === 'salad_cloud_user_abc', 'pasted key drops whitespace');
+assert(normalizeSaladKey('Salad-Api-Key: salad_cloud_user_abc') === 'salad_cloud_user_abc', 'pasted key drops a header label');
+const orgMiss = saladFailureMessage(404, 'https://api.salad.com/api/public/organizations');
+assert(orgMiss.includes('HTTP 404') && orgMiss.includes('/organizations'), 'salad failure names the url');
+
+async function saladKeyCheck() {
+  let seen = '';
+  let header = '';
+  await validateSaladKey(' salad_cloud_user_abc \n', async (url, init) => {
+    seen = String(url);
+    header = String((init?.headers as Record<string, string>)['Salad-Api-Key']);
+    return new Response('{"name":"yume-server"}', { status: 200 });
+  });
+  assert(seen === 'https://api.salad.com/api/public/organizations/seeyeevang707/projects/default/containers/yume-server', 'wizard checks the live group');
+  assert(header === 'salad_cloud_user_abc', 'wizard sends the trimmed key');
+  let failed = '';
+  try {
+    await saladRequest({
+      apiKey: 'salad_cloud_user_secret',
+      path: '/organizations',
+      fetchImpl: async () => new Response('missing', { status: 404 }),
+    });
+  } catch (error) {
+    failed = error instanceof Error ? error.message : '';
+  }
+  assert(failed.includes('HTTP 404') && failed.includes('https://api.salad.com/api/public/organizations') && !failed.includes('salad_cloud_user_secret'), '404 names the organizations url and hides the key');
+}
 
 async function demoFlow() {
 const demo = await produceImages({
@@ -570,6 +598,7 @@ assert(demo.pngs.length === 2 && demo.seeds[0] === 10 && demo.source === 'demo',
 }
 
 demoFlow()
+  .then(() => saladKeyCheck())
   .then(() => {
     const moved = moveStyle(library.styles, 'watercolor', -1);
     assert(moved.findIndex((style) => style.id === 'watercolor') === 4, 'reorder failed');

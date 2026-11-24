@@ -3,6 +3,7 @@ import {
   SaladApiError,
   YUME_GROUP,
   YUME_IMAGE,
+  YUME_ORGANIZATION,
   YUME_PROJECT,
   buildYumeContainerGroup,
   readNamedItems,
@@ -10,6 +11,22 @@ import {
   type GpuChoice,
 } from '@/src/lib/saladCloud';
 import type { CloudDeployment } from '@/src/lib/storage';
+
+export function liveContainerGroup(): CloudDeployment {
+  return {
+    organization: YUME_ORGANIZATION,
+    project: YUME_PROJECT,
+    group: YUME_GROUP,
+    gpuName: 'RTX 4090',
+    gpuClassId: '',
+    hourlyUsd: 0.253,
+    image: YUME_IMAGE,
+  };
+}
+
+export async function validateSaladKey(apiKey: string, fetchImpl?: typeof fetch) {
+  return readContainerGroup(apiKey, liveContainerGroup(), fetchImpl);
+}
 
 export async function listOrganizations(apiKey: string, fetchImpl?: typeof fetch) {
   return saladRequest({ apiKey, path: '/organizations', fetchImpl });

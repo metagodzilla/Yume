@@ -6,6 +6,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { QrScanner } from '@/components/QrScanner';
 import { interpretConnection, probe, type ConnectionState } from '@/src/lib/connection';
 import { classifyGatewayInput, LIVE_GATEWAY_URL } from '@/src/lib/salad';
+import { normalizeSaladKey } from '@/src/lib/saladCloud';
 import { maskKey, serverUrlFromLink } from '@/src/lib/saladCloud';
 import { readSaladKey } from '@/src/lib/storage';
 import { useStudio } from '@/src/studio';
@@ -94,7 +95,7 @@ export default function ConnectScreen() {
   }
 
   async function moveKey() {
-    const next = pendingKey.trim();
+    const next = normalizeSaladKey(pendingKey);
     if (!next) return;
     await studio.saveSaladKey(next);
     if (classifyGatewayInput(studio.settings.saladEndpoint).kind === 'key') await studio.saveSaladEndpoint('');
@@ -166,15 +167,15 @@ export default function ConnectScreen() {
         <Pressable
           style={styles.secondary}
           onPress={() => {
-            const trimmed = replacement.trim();
-            if (!trimmed) return;
+            const next = normalizeSaladKey(replacement);
+            if (!next) return;
             void studio
-              .saveSaladKey(trimmed)
+              .saveSaladKey(next)
               .then(async () => {
-                setKey(trimmed);
+                setKey(next);
                 setReplacement('');
                 setMessage('Key saved in Secure Store.');
-                await test(url, trimmed);
+                await test(url, next);
               })
               .catch((caught: unknown) => setMessage(caught instanceof Error ? caught.message : 'Could not save that key.'));
           }}>

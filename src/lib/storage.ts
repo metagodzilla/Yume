@@ -3,6 +3,7 @@ import * as SecureStore from 'expo-secure-store';
 import { Platform } from 'react-native';
 
 import { base64ToBytes, bytesToBase64 } from '@/src/lib/base64';
+import { normalizeSaladKey } from '@/src/lib/saladCloud';
 import { defaultLibrary } from '@/src/lib/library';
 import type { SavedMesh } from '@/src/lib/mesh';
 import type { TurnaroundBook } from '@/src/lib/turnaround';
@@ -236,11 +237,16 @@ export async function saveGeneratorBlob(value: string): Promise<void> {
 }
 
 export async function readSaladKey(): Promise<string | null> {
-  return readSecure(SALAD_KEY);
+  const raw = await readSecure(SALAD_KEY);
+  const key = normalizeSaladKey(raw);
+  if (!key) return null;
+  if (raw && key !== raw) await writeSecure(SALAD_KEY, key);
+  return key;
 }
 
 export async function writeSaladKey(value: string | null): Promise<void> {
-  await writeSecure(SALAD_KEY, value);
+  const key = normalizeSaladKey(value);
+  await writeSecure(SALAD_KEY, key || null);
 }
 
 export async function readSaladEndpoint(): Promise<string | null> {

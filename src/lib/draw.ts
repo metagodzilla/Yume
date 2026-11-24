@@ -5,6 +5,7 @@ import type { GeneratorState } from '@/src/lib/genstore';
 import { embedParameters } from '@/src/lib/pngmeta';
 import { renderDemoFrames } from '@/src/lib/render';
 import { classifyGatewayInput, generateUrl, saladErrorMessage } from '@/src/lib/salad';
+import { normalizeSaladKey } from '@/src/lib/saladCloud';
 import type { Character, SamplerId } from '@/src/lib/types';
 
 export function composeGenerationPrompt(state: GeneratorState, characterText = ''): string {
@@ -97,7 +98,8 @@ export async function drawFrames(input: {
   if (classified.kind !== 'url') throw new Error('Add a gateway URL that starts with https://. Connect can fill in the live server.');
   const endpoint = classified.url;
   const target = generateUrl(endpoint);
-  if (!input.apiKey?.trim()) throw new Error('Add the Salad API key in Settings.');
+  const apiKey = normalizeSaladKey(input.apiKey);
+  if (!apiKey) throw new Error('Add the Salad API key in Settings.');
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), 180_000);
   let response: Response;
@@ -107,9 +109,9 @@ export async function drawFrames(input: {
       signal: controller.signal,
       headers: {
         'Content-Type': 'application/json',
-        Authorization: `Bearer ${input.apiKey.trim()}`,
-        'X-Api-Key': input.apiKey.trim(),
-        'Salad-Api-Key': input.apiKey.trim(),
+        Authorization: `Bearer ${apiKey}`,
+        'X-Api-Key': apiKey,
+        'Salad-Api-Key': apiKey,
       },
       body: JSON.stringify({
         prompt: input.prompt,

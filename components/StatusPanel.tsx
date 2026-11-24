@@ -11,7 +11,7 @@ import { thermalStatusName } from '@/src/lib/phonePower';
 import { counts } from '@/src/lib/queue';
 import { queueAction, useQueue } from '@/src/lib/queuestore';
 import { endpointDiffersFromLive, LIVE_GATEWAY_URL, normalizeEndpoint, redactSecrets } from '@/src/lib/salad';
-import { groupStatusOf, instanceCounts } from '@/src/lib/saladCloud';
+import { groupStatusOf, instanceCounts, normalizeSaladKey } from '@/src/lib/saladCloud';
 import { readCloudDeployment, readSaladKey, touchCloudActivity, writeCloudDeployment } from '@/src/lib/storage';
 import { getThrottle } from '@/src/lib/thermalState';
 import { emptyStats, money, type CloudStats } from '@/src/lib/usage';
@@ -78,7 +78,7 @@ export function StatusPanel({ preview = '' }: { preview?: string }) {
     try {
       const stored = (await readSaladKey()) ?? '';
       const webKey = Platform.OS === 'web' && typeof localStorage !== 'undefined' ? localStorage.getItem('yume.webSaladKey') || '' : '';
-      const key = stored || webKey;
+      const key = normalizeSaladKey(stored || webKey);
       const headers = key ? saladHeaders(key) : undefined;
       const deployment = deploymentForEndpoint(saved, await readCloudDeployment());
       let groupStatus = '';
