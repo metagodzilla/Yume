@@ -34,6 +34,7 @@ import { buildYumeContainerGroup, choicesFromGpuClasses, costLine, describeDeplo
 import { containerGroupUrl, liveContainerGroup, validateSaladKey } from '@/src/lib/cloudActions';
 import { capReached, checkLine, cloudChecklist, deploymentForEndpoint, formatCostLine, resolveHourly, RTX_4090_LOW_HOURLY, sessionUsd, uptimeSeconds } from '@/src/lib/cloudSteps';
 import { CLOUD_STOP_CHECK } from '@/src/lib/cloudRun';
+import { CLOUD_OFF_INSTALL, canUseAsDefault, cloudIsOff, installAction, installRequest, isServerInstalled } from '@/src/lib/installGate';
 import { dropTiles, filterTiles, galleryTiles, reusePatch } from '@/src/lib/gallery';
 import type { Generation } from '@/src/lib/types';
 import { pullPercent } from '@/src/lib/saladCloud';
@@ -532,6 +533,12 @@ assert(tiles.length === 2 && tiles[1]?.favorite === true, 'gallery lists each sa
 assert(filterTiles(tiles, { favoritesOnly: true }).length === 1 && filterTiles(tiles, { query: 'maiden' }).length === 2, 'gallery filters favorites and prompts');
 assert(dropTiles([galleryItem], [{ generationId: 'g1', index: 0 }]).next[0]?.imageUris[0] === 'b.png', 'gallery delete removes one picture');
 assert(reusePatch(galleryItem, 1).seed === '2' && reusePatch(galleryItem, 1).seedRandom === false, 'reuse settings locks that seed');
+const installBody = installRequest(1111838, 'civitai-token');
+assert(!isServerInstalled([1337429], [], 1111838) && isServerInstalled([1111838], [], 1111838), 'installed ignores a phone-only checkpoint');
+assert(installAction({ cloudReady: false, serverInstalled: false }) === 'start-and-install' && CLOUD_OFF_INSTALL.includes('Start cloud and install'), 'stopped cloud offers to start');
+assert(cloudIsOff({ groupStatus: 'stopped', readyStatus: 200 }) && !cloudIsOff({ groupStatus: 'running', readyStatus: 200 }), 'stopped group is off');
+assert(installBody.body.versionId === 1111838 && installBody.headers['X-Civitai-Token'] === 'civitai-token', 'install sends versionId and the Civitai token');
+assert(!canUseAsDefault(false) && canUseAsDefault(true), 'use as default needs the server copy');
 const live = deploymentForEndpoint('https://persimmon-potato-w36vqxy5bseqmtk4.salad.cloud', null);
 assert(live?.organization === 'seeyeevang707' && live.project === 'default' && live.group === 'yume-server', 'live server identity');
 const downloading = cloudChecklist({

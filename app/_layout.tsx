@@ -17,6 +17,7 @@ import { AppErrorBoundary } from '@/components/ErrorBoundary';
 import '@/src/lib/downloadTask';
 import { UpdateCheck } from '@/components/UpdateCheck';
 import { IdleStop } from '@/components/IdleStop';
+import { InstallRunner } from '@/components/InstallRunner';
 import { ThermalGuard } from '@/components/ThermalGuard';
 import { Viewer } from '@/components/Viewer';
 import { installErrorHooks } from '@/src/lib/log';
@@ -65,6 +66,7 @@ export default function RootLayout() {
     <StudioProvider>
       <FirstLaunch />
       <IdleStop />
+      <InstallRunner />
       <ThermalGuard />
       <StatusBar style="light" />
       <ThemeProvider value={navTheme}>

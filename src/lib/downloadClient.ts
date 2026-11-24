@@ -1,4 +1,5 @@
 import type { DownloadJob } from '@/src/lib/downloads';
+import { installRequest } from '@/src/lib/installGate';
 import { normalizeSaladKey } from '@/src/lib/saladCloud';
 
 export async function fetchInstalls(endpoint: string, apiKey: string): Promise<DownloadJob[]> {
@@ -21,11 +22,13 @@ export async function startDownload(
   apiKey: string,
   versionId: number,
   hint?: { type?: string; name?: string; filename?: string },
+  civitaiToken?: string | null,
 ): Promise<DownloadJob> {
+  const request = installRequest(versionId, civitaiToken);
   const response = await fetch(`${endpoint}/models/install`, {
     method: 'POST',
-    headers: { ...authHeaders(apiKey), 'Content-Type': 'application/json' },
-    body: JSON.stringify({ versionId, ...hint }),
+    headers: { ...authHeaders(apiKey), ...request.headers },
+    body: JSON.stringify({ ...request.body, ...hint }),
   });
   const raw = await response.text();
   if (!response.ok) throw new Error(readable(raw) || `HTTP ${response.status}.`);

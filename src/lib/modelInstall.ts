@@ -1,4 +1,5 @@
 import { downloadSummary, RECONNECTING, type DownloadJob } from '@/src/lib/downloads';
+import { installRequest } from '@/src/lib/installGate';
 import { normalizeSaladKey } from '@/src/lib/saladCloud';
 
 export type InstallJob = {
@@ -55,7 +56,8 @@ export async function runModelInstall(input: {
     'Salad-Api-Key': key,
     'X-Api-Key': key,
   };
-  if (input.civitaiToken?.trim()) headers['X-Civitai-Token'] = input.civitaiToken.trim();
+  const request = installRequest(input.versionId, input.civitaiToken);
+  Object.assign(headers, request.headers);
   void import('@/src/lib/downloadTask')
     .then((task) => Promise.all([task.rememberDownloadTarget(input.endpoint), task.ensureDownloadBackground()]))
     .catch(() => undefined);
@@ -69,7 +71,7 @@ export async function runModelInstall(input: {
         method: 'POST',
         headers,
         body: JSON.stringify({
-          versionId: input.versionId,
+          ...request.body,
           ...(input.type ? { type: input.type } : {}),
           ...(input.name ? { name: input.name } : {}),
           ...(input.filename ? { filename: input.filename } : {}),

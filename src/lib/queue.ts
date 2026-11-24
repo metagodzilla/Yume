@@ -16,6 +16,7 @@ export type Job = {
   retries: number;
   error?: string;
   thermalHold?: boolean;
+  versionId?: number;
 };
 
 export type QueueState = {

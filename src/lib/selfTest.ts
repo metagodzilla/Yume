@@ -14,6 +14,7 @@ import { checkGithubRelease } from '@/src/lib/updates';
 import { APP_VERSION, APP_VERSION_CODE } from '@/src/lib/version';
 import { type CheckRow, type CheckStatus } from '@/src/lib/checkRows';
 import { modelCardPress, routeLeavesCreate } from '@/src/lib/checkpoints';
+import { CLOUD_OFF_INSTALL, canUseAsDefault, installAction, installRequest, isServerInstalled } from '@/src/lib/installGate';
 
 export type { CheckRow } from '@/src/lib/checkRows';
 export { areaCounts } from '@/src/lib/checkRows';
@@ -279,6 +280,22 @@ export async function runAppCheck(input: { endpoint: string }): Promise<CheckRow
     live.organization === 'seeyeevang707' && live.project === 'default' && live.group === 'yume-server' && containerGroupUrl(live) === expected
       ? row('Setup', 'Wizard group', 'pass', 0, expected)
       : row('Setup', 'Wizard group', 'fail', 0, `Wizard points at ${containerGroupUrl(live)}.`),
+  );
+
+  const installBody = installRequest(1111838, 'civitai-token');
+  const installRules =
+    !isServerInstalled([1337429], [], 1111838) &&
+    isServerInstalled([], [1111838], 1111838) &&
+    installAction({ cloudReady: false, serverInstalled: false }) === 'start-and-install' &&
+    CLOUD_OFF_INSTALL === 'Cloud is off - Start cloud and install' &&
+    installBody.body.versionId === 1111838 &&
+    installBody.headers['X-Civitai-Token'] === 'civitai-token' &&
+    !canUseAsDefault(false) &&
+    canUseAsDefault(true);
+  rows.push(
+    installRules
+      ? row('Install', 'Server catalog', 'pass', 0, 'Installed comes from the server. The request sends versionId and X-Civitai-Token. Use as default waits for that.')
+      : row('Install', 'Server catalog', 'fail', 0, 'Install still treats a phone-only checkpoint as installed.'),
   );
 
   const card = modelCardPress();

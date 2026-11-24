@@ -53,6 +53,14 @@ export function addJob(kind: JobKind, title: string) {
   return state.jobs[state.jobs.length - 1];
 }
 
+export function queueInstall(versionId: number, title: string) {
+  const existing = state.jobs.find((job) => job.kind === 'install' && job.versionId === versionId && (job.status === 'waiting' || job.status === 'running'));
+  if (existing) return existing;
+  state = enqueue(state, { id: `install_${versionId}`, kind: 'install', title, createdAt: Date.now(), versionId });
+  emit();
+  return state.jobs.find((job) => job.id === `install_${versionId}`);
+}
+
 export function queueAction(action: 'pause' | 'resume' | 'cancel' | 'top', id: string) {
   if (action === 'pause') state = pauseJob(state, id);
   if (action === 'resume') state = resumeJob(state, id);

@@ -8,11 +8,13 @@ import { ensureDownloadBackground, rememberDownloadTarget } from '@/src/lib/down
 import { RECONNECTING, downloadButtons, downloadKind, downloadPercent, downloadSummary, downloadTitle, type DownloadJob } from '@/src/lib/downloads';
 import { normalizeEndpoint } from '@/src/lib/salad';
 import { readSaladKey } from '@/src/lib/storage';
+import { useQueue } from '@/src/lib/queuestore';
 import { useStudio } from '@/src/studio';
 import { colors, font } from '@/src/theme';
 
 export default function DownloadsScreen() {
   const studio = useStudio();
+  const queue = useQueue();
   const [jobs, setJobs] = useState<DownloadJob[]>([]);
   const [banner, setBanner] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -52,6 +54,10 @@ export default function DownloadsScreen() {
     };
   }, [studio.settings.saladEndpoint]);
 
+  const queued = queue.jobs.filter(
+    (job) => job.kind === 'install' && job.versionId && (job.status === 'waiting' || job.status === 'running') && !jobs.some((item) => item.versionId === job.versionId),
+  );
+
   async function act(job: DownloadJob, action: 'pause' | 'resume' | 'cancel' | 'retry') {
     const endpoint = normalizeEndpoint(studio.settings.saladEndpoint);
     const key = await readSaladKey();
@@ -87,7 +93,13 @@ export default function DownloadsScreen() {
         <Text style={styles.body}>Checkpoints, LoRAs, and embeddings keep downloading on the server. A dropped connection resumes from the last byte.</Text>
         {banner ? <Text style={styles.warn}>{banner}</Text> : null}
         {error ? <Text style={styles.error}>{error}</Text> : null}
-        {jobs.length === 0 && !banner ? <Text style={styles.body}>No downloads yet. Install a model from Explore.</Text> : null}
+        {jobs.length === 0 && queued.length === 0 && !banner ? <Text style={styles.body}>No downloads yet. Install a model from Explore.</Text> : null}
+        {queued.map((job) => (
+          <View key={job.id} style={styles.card}>
+            <Text style={styles.name}>{job.title}</Text>
+            <Text style={styles.body}>Waiting for the cloud · {job.reason || job.status}. Progress appears here once the server starts the download.</Text>
+          </View>
+        ))}
         {jobs.map((job) => {
           const buttons = downloadButtons(job.state);
           const percent = downloadPercent(job);

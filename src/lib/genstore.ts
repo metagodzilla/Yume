@@ -139,6 +139,16 @@ export function applyCheckpoint(resource: InstalledResource, defaults: { clipSki
   });
 }
 
+export function rememberServerModels(records: InstalledResource[]) {
+  const checkpoints = records.filter((item) => item.type === 'Checkpoint');
+  const rest = state.installed.filter((item) => item.type !== 'Checkpoint' && !checkpoints.some((record) => record.versionId === item.versionId));
+  const installed = [...checkpoints, ...rest];
+  const checkpointId = installed.some((item) => item.versionId === state.checkpointId)
+    ? state.checkpointId
+    : checkpoints.find((item) => item.isDefault)?.versionId ?? state.checkpointId;
+  patchGenerator({ installed, checkpointId });
+}
+
 export function replaceServerCheckpoints(records: InstalledResource[], activeId: number | null) {
   const extras = state.installed.filter((item) => item.type !== 'Checkpoint');
   const installed = [...records.map((item) => ({ ...item, isDefault: item.versionId === activeId })), ...extras];
