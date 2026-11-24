@@ -4,6 +4,7 @@ import android.app.ActivityManager
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
+import android.net.Uri
 import android.os.BatteryManager
 import android.os.Build
 import android.os.PowerManager
@@ -18,6 +19,14 @@ class YumeDeviceModule : Module() {
     Name("YumeDevice")
     Function("read") {
       readDevice(appContext.reactContext)
+    }
+    Function("installApk") { contentUri: String ->
+      val context = appContext.reactContext ?: throw IllegalStateException("Yume is not attached to Android yet.")
+      val intent = Intent(Intent.ACTION_VIEW).apply {
+        setDataAndType(Uri.parse(contentUri), "application/vnd.android.package-archive")
+        addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_ACTIVITY_NEW_TASK)
+      }
+      context.startActivity(intent)
     }
   }
 }

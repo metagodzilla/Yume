@@ -3,7 +3,6 @@ import { router } from 'expo-router';
 import { Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
-import { UpdateCheck } from '@/components/UpdateCheck';
 import { confirmAction } from '@/src/lib/confirm';
 import { readCivitaiToken, writeCivitaiToken } from '@/src/lib/storage';
 import { useStudio } from '@/src/studio';
@@ -42,9 +41,8 @@ export default function SettingsScreen() {
         <View style={styles.card}>
           <Text style={styles.cardTitle}>App update</Text>
           <Text style={styles.body}>
-            Check for updates looks at the latest GitHub release of metagodzilla/Yume, finds the APK, and compares its version name and versionCode with this install. Tap again when an update is available to download it. You allow installs from Yume once.
+            The Update button stays in the top right of every screen. It checks the latest GitHub release of metagodzilla/Yume, and a red dot means a newer APK is ready. Tap it to download the APK and open the Android installer. You allow installs from Yume once.
           </Text>
-          <UpdateCheck />
           <Text style={styles.label}>Cloud hourly rate (USD)</Text>
           <TextInput
             testID="hourly-rate"

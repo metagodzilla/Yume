@@ -14,6 +14,7 @@ import { Platform, View } from 'react-native';
 import 'react-native-reanimated';
 
 import { AppErrorBoundary } from '@/components/ErrorBoundary';
+import { UpdateCheck } from '@/components/UpdateCheck';
 import { IdleStop } from '@/components/IdleStop';
 import { ThermalGuard } from '@/components/ThermalGuard';
 import { Viewer } from '@/components/Viewer';
@@ -85,6 +86,7 @@ export default function RootLayout() {
               <Stack.Screen name="watch" options={{ animation: 'slide_from_bottom' }} />
               <Stack.Screen name="shorts" options={{ animation: 'fade' }} />
             </Stack>
+            <UpdateCheck />
           </View>
         </View>
       </ThemeProvider>

@@ -20,3 +20,8 @@ export function readNativeDevice(): NativeDevice | null {
     return null;
   }
 }
+
+export function installApk(contentUri: string) {
+  const native = requireNativeModule<{ installApk(contentUri: string): void }>('YumeDevice');
+  native.installApk(contentUri);
+}
