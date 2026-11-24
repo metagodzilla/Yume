@@ -156,6 +156,7 @@ export async function loadSettings(): Promise<Settings> {
     width: clampRange(settings.width, 512, 1536, 832),
     height: clampRange(settings.height, 512, 1536, 1216),
     seed: clampRange(settings.seed, 0, 2_147_483_647, 1),
+    hourlyRateTouched: settings.hourlyRateTouched === true,
   };
 }
 

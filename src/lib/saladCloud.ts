@@ -1,8 +1,8 @@
 export const SALAD_API = 'https://api.salad.com/api/public';
 export const SALAD_PORTAL_API_KEYS = 'https://portal.salad.com';
 export const YUME_IMAGE = 'ghcr.io/metagodzilla/yume-server:latest';
-export const YUME_PROJECT = 'yume';
-export const YUME_GROUP = 'yume';
+export const YUME_PROJECT = 'default';
+export const YUME_GROUP = 'yume-server';
 
 export type NamedResource = { name: string; displayName: string };
 
@@ -26,7 +26,8 @@ export function maskKey(key: string | null | undefined): string {
 
 export function serverUrlFromLink(value: string): string | null {
   const trimmed = value.trim();
-  if (!trimmed) return null;
+  if (!trimmed || /salad_cloud_user_/i.test(trimmed)) return null;
+  if (!trimmed.includes('://') && !trimmed.includes('.')) return null;
   let url: URL;
   try {
     url = trimmed.includes('://') ? new URL(trimmed) : new URL(`https://${trimmed}`);
@@ -39,6 +40,7 @@ export function serverUrlFromLink(value: string): string | null {
     return serverUrlFromLink(nested);
   }
   if (url.protocol !== 'https:' && url.protocol !== 'http:') return null;
+  if (!url.hostname || url.hostname.includes('_') || (url.hostname !== 'localhost' && !url.hostname.includes('.'))) return null;
   for (const name of ['key', 'apiKey', 'api_key', 'token', 'apikey']) url.searchParams.delete(name);
   url.hash = '';
   const path = url.pathname === '/' ? '' : url.pathname.replace(/\/+$/, '');
@@ -114,15 +116,46 @@ export function gatewayFromGroup(group: unknown): string {
   return serverUrlFromLink(group.networking.dns) ?? '';
 }
 
-export function groupStatusOf(group: unknown): { status: string; allocating: number; creating: number; running: number } {
+export function groupStatusOf(group: unknown): {
+  status: string;
+  allocating: number;
+  creating: number;
+  running: number;
+  startTime: string | null;
+  priority: string;
+} {
   const current = isRecord(group) && isRecord(group.current_state) ? group.current_state : {};
   const counts = isRecord(current.instance_status_counts) ? current.instance_status_counts : {};
+  const instances = instanceCounts(group);
   return {
     status: typeof current.status === 'string' ? current.status : '',
-    allocating: numberField(counts.allocating_count),
-    creating: numberField(counts.creating_count),
-    running: numberField(counts.running_count),
+    allocating: Math.max(numberField(counts.allocating_count), instances.allocating),
+    creating: Math.max(numberField(counts.creating_count), instances.creating),
+    running: Math.max(numberField(counts.running_count), instances.running),
+    startTime: typeof current.start_time === 'string' ? current.start_time : null,
+    priority: isRecord(group) && typeof group.priority === 'string' ? group.priority : '',
   };
+}
+
+export function instanceCounts(payload: unknown): { allocating: number; creating: number; running: number } {
+  const list = Array.isArray(payload)
+    ? payload
+    : isRecord(payload) && Array.isArray(payload.instances)
+      ? payload.instances
+      : isRecord(payload) && Array.isArray(payload.items)
+        ? payload.items
+        : [];
+  let allocating = 0;
+  let creating = 0;
+  let running = 0;
+  for (const item of list) {
+    if (!isRecord(item)) continue;
+    const state = String(item.state || item.status || '').toLowerCase();
+    if (state.includes('allocat')) allocating += 1;
+    else if (state.includes('creat') || state.includes('pull') || state.includes('download')) creating += 1;
+    else if (state.includes('run')) running += 1;
+  }
+  return { allocating, creating, running };
 }
 
 export function buildYumeContainerGroup(input: { apiKey: string; gpuClassId: string; image?: string; name?: string }): Record<string, unknown> {

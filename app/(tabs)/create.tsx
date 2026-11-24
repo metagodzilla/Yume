@@ -11,6 +11,7 @@ import { extractLoras } from '@/src/lib/a1111';
 import { loraPage } from '@/src/lib/civitai';
 import { openLink } from '@/src/lib/openLink';
 import { patchGenerator, useGenerator } from '@/src/lib/genstore';
+import { endpointDiffersFromLive, LIVE_GATEWAY_URL, normalizeEndpoint } from '@/src/lib/salad';
 import { persistPng, readApiKey, readSaladKey } from '@/src/lib/storage';
 import { uid } from '@/src/lib/id';
 import { useStudio } from '@/src/studio';
@@ -52,7 +53,7 @@ export default function GenerateScreen() {
         prompt,
         seed,
         provider: studio.settings.provider,
-        endpoint: studio.settings.saladEndpoint,
+        endpoint: normalizeEndpoint(studio.settings.saladEndpoint),
         apiKey: saladKey,
         character,
       });
@@ -273,6 +274,11 @@ export default function GenerateScreen() {
         </Pressable>
         {status ? <Text style={styles.ok}>{status}</Text> : null}
         {error ? <Text style={styles.error}>{error}</Text> : null}
+        {studio.settings.provider === 'salad' && endpointDiffersFromLive(studio.settings.saladEndpoint) ? (
+          <Pressable testID="use-live-server" onPress={() => void studio.saveSaladEndpoint(LIVE_GATEWAY_URL)}>
+            <Text style={styles.link}>Use live server</Text>
+          </Pressable>
+        ) : null}
         {latest ? (
           <>
             <Text style={styles.label}>Latest</Text>

@@ -24,24 +24,55 @@ export type ChecklistStep = {
   state: 'done' | 'current' | 'todo';
 };
 
-export function deploymentForEndpoint(endpoint: string, saved: CloudDeployment | null): CloudDeployment | null {
-  if (saved?.organization && saved.project && saved.group) return saved;
-  let host = '';
+export const RTX_4090_LOW_HOURLY = 0.253;
+
+export function hostOf(endpoint: string): string {
   try {
-    host = new URL(endpoint).host;
+    return new URL(endpoint).host;
   } catch {
-    host = endpoint.replace(/^https?:\/\//, '').split('/')[0] ?? '';
+    return endpoint.replace(/^https?:\/\//, '').split('/')[0] ?? '';
   }
-  if (host !== LIVE_GATEWAY.host) return saved;
-  return {
-    organization: LIVE_GATEWAY.organization,
-    project: LIVE_GATEWAY.project,
-    group: LIVE_GATEWAY.group,
-    gpuName: saved?.gpuName || 'RTX 4090',
-    gpuClassId: saved?.gpuClassId || '',
-    hourlyUsd: saved?.hourlyUsd || 0,
-    image: saved?.image || 'ghcr.io/metagodzilla/yume-server:latest',
-  };
+}
+
+export function deploymentForEndpoint(endpoint: string, saved: CloudDeployment | null): CloudDeployment | null {
+  if (hostOf(endpoint) === LIVE_GATEWAY.host) {
+    return {
+      organization: LIVE_GATEWAY.organization,
+      project: LIVE_GATEWAY.project,
+      group: LIVE_GATEWAY.group,
+      gpuName: saved?.gpuName || 'RTX 4090',
+      gpuClassId: saved?.gpuClassId || '',
+      hourlyUsd: saved?.hourlyUsd || RTX_4090_LOW_HOURLY,
+      image: saved?.image || 'ghcr.io/metagodzilla/yume-server:latest',
+    };
+  }
+  if (saved?.organization && saved.project && saved.group) return saved;
+  return null;
+}
+
+export function resolveHourly(input: { userRate: number; touched: boolean; gpuName?: string; priority?: string; liveGateway?: boolean }): number {
+  if (input.touched) return input.userRate;
+  const gpu = input.gpuName || '';
+  const low4090 = /4090/i.test(gpu) && (input.priority || 'low').toLowerCase() === 'low';
+  if (low4090 || (input.liveGateway && (input.priority || 'low').toLowerCase() === 'low')) return RTX_4090_LOW_HOURLY;
+  return input.userRate;
+}
+
+export function uptimeSeconds(startTime: string | null, now = Date.now()): number {
+  if (!startTime) return 0;
+  const parsed = Date.parse(startTime);
+  if (!Number.isFinite(parsed) || parsed < Date.parse('2020-01-01')) return 0;
+  return Math.max(0, Math.floor((now - parsed) / 1000));
+}
+
+export type CheckLine = { name: string; url: string; pass: boolean; status?: number; message: string };
+
+export function checkLine(name: string, url: string, probe?: { ok?: boolean; status?: number; error?: string; detail?: string }): CheckLine {
+  if (!url) return { name, url, pass: false, message: 'No URL.' };
+  if (probe?.error) return { name, url, pass: false, status: probe.status, message: probe.error };
+  if (!probe || probe.status == null) return { name, url, pass: false, message: 'No response.' };
+  const pass = Boolean(probe.ok);
+  return { name, url, pass, status: probe.status, message: probe.detail || (pass ? 'OK' : `HTTP ${probe.status}`) };
 }
 
 export function cloudChecklist(input: {
@@ -54,6 +85,7 @@ export function cloudChecklist(input: {
   readyStatus?: number;
   healthReady?: boolean;
   readyDetail?: string;
+  probeError?: string;
 }): { phase: CloudPhase; pill: string; liveTitle: string; steps: ChecklistStep[]; authBlocked: boolean } {
   const authBlocked = input.healthStatus === 403 || input.readyStatus === 403;
   const ready = input.readyStatus === 200;
@@ -67,18 +99,16 @@ export function cloudChecklist(input: {
   let pill = 'Starting...';
   let liveTitle = 'Creating the container group';
 
+  if (ready) {
+    return { phase: 'running', pill: 'Running', liveTitle: 'Ready', steps: paint(5), authBlocked: false };
+  }
   if (!input.hasEndpoint && !input.groupStatus) {
     return { phase: 'stopped', pill: 'Stopped', liveTitle: 'Cloud is stopped', steps: paint(-1), authBlocked: false };
   }
   if (input.groupStatus === 'stopped' || input.groupStatus === 'succeeded') {
     return { phase: 'stopped', pill: 'Stopped', liveTitle: 'Cloud is stopped', steps: paint(-1), authBlocked };
   }
-  if (ready) {
-    phase = 'running';
-    pill = 'Running';
-    index = 5;
-    liveTitle = 'Ready';
-  } else if (modelWait && (healthUp || input.readyStatus === 503)) {
+  if (modelWait && (healthUp || input.readyStatus === 503)) {
     index = 4;
     liveTitle = 'Downloading model on cloud (first start can take ~15-25 min)';
   } else if (healthUp || (input.running ?? 0) > 0 || input.groupStatus === 'running') {
@@ -93,9 +123,15 @@ export function cloudChecklist(input: {
   } else if (authBlocked) {
     index = 1;
     liveTitle = 'Gateway is up. The Salad API key is required to read /health and /ready while the model downloads.';
-  } else if (input.groupStatus === 'pending' || input.hasEndpoint) {
-    index = input.hasEndpoint ? 1 : 0;
-    liveTitle = input.hasEndpoint ? 'Finding an RTX 4090' : 'Creating the container group';
+  } else if (input.probeError) {
+    index = 0;
+    liveTitle = input.probeError;
+  } else if (input.groupStatus === 'pending') {
+    index = 0;
+    liveTitle = 'Creating the container group';
+  } else if (input.hasEndpoint) {
+    index = 0;
+    liveTitle = 'Waiting for the gateway';
   }
   if (input.groupStatus === 'failed') {
     pill = 'Failed';

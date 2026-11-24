@@ -4,7 +4,7 @@ import { DEFAULT_CHECKPOINT } from '@/src/lib/defaultModel';
 import type { GeneratorState } from '@/src/lib/genstore';
 import { embedParameters } from '@/src/lib/pngmeta';
 import { renderDemoFrames } from '@/src/lib/render';
-import { saladErrorMessage, normalizeEndpoint } from '@/src/lib/salad';
+import { classifyGatewayInput, generateUrl, saladErrorMessage } from '@/src/lib/salad';
 import type { Character, SamplerId } from '@/src/lib/types';
 
 export function composeGenerationPrompt(state: GeneratorState, characterText = ''): string {
@@ -92,14 +92,17 @@ export async function drawFrames(input: {
             : undefined,
     };
   }
-  const endpoint = normalizeEndpoint(input.endpoint);
-  if (!endpoint) throw new Error('Add the Salad endpoint in Settings. The container downloads and runs the checkpoint.');
+  const classified = classifyGatewayInput(input.endpoint);
+  if (classified.kind === 'key') throw new Error('That saved address is a Salad API key, not a gateway URL. Open Connect and move it to Key.');
+  if (classified.kind !== 'url') throw new Error('Add a gateway URL that starts with https://. Connect can fill in the live server.');
+  const endpoint = classified.url;
+  const target = generateUrl(endpoint);
   if (!input.apiKey?.trim()) throw new Error('Add the Salad API key in Settings.');
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), 170_000);
+  const timer = setTimeout(() => controller.abort(), 180_000);
   let response: Response;
   try {
-    response = await fetch(`${endpoint}/generate`, {
+    response = await fetch(target, {
       method: 'POST',
       signal: controller.signal,
       headers: {
@@ -137,12 +140,13 @@ export async function drawFrames(input: {
     });
   } catch (error) {
     const aborted = error instanceof Error && error.name === 'AbortError';
-    throw new Error(saladErrorMessage({ aborted }));
+    const message = error instanceof Error ? error.message : '';
+    throw new Error(saladErrorMessage({ aborted, body: aborted ? '' : message, url: target }));
   } finally {
     clearTimeout(timer);
   }
   const raw = await response.text();
-  if (!response.ok) throw new Error(saladErrorMessage({ aborted: false, status: response.status, body: raw }));
+  if (!response.ok) throw new Error(saladErrorMessage({ aborted: false, status: response.status, body: raw, url: target }));
   const body = JSON.parse(raw) as { images?: string[] };
   if (!body.images?.length) throw new Error('Salad returned no images.');
   return { pngs: body.images.map((item) => base64ToBytes(item)), parameters };

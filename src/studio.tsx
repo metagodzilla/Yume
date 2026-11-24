@@ -27,6 +27,7 @@ import {
   upsertStyle,
 } from '@/src/lib/library';
 import { produceImages } from '@/src/lib/produce';
+import { classifyGatewayInput, migrateKeyStoredAsUrl } from '@/src/lib/salad';
 import { exportBundle } from '@/src/lib/library';
 import { throttleSteps } from '@/src/lib/phonePower';
 import { getThrottle } from '@/src/lib/thermalState';
@@ -133,6 +134,8 @@ type StudioContextValue = {
   saveSaladKey: (value: string) => Promise<void>;
   clearSaladKey: () => Promise<void>;
   saveSaladEndpoint: (value: string) => Promise<void>;
+  cloudNotice: string | null;
+  dismissCloudNotice: () => void;
   loading: boolean;
   status: string;
   error: string | null;
@@ -170,6 +173,7 @@ export function StudioProvider({ children }: { children: ReactNode }) {
   const [loading, setLoading] = useState(false);
   const [status, setStatus] = useState('');
   const [error, setError] = useState<string | null>(null);
+  const [cloudNotice, setCloudNotice] = useState<string | null>(null);
   const [viewer, setViewer] = useState<ViewerState | null>(null);
   const sessionTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const settingsTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -202,10 +206,30 @@ export function StudioProvider({ children }: { children: ReactNode }) {
         ? session.selectedCharacterId
         : null;
       setSelectedCharacterId(selected);
-      setSettings({ ...storedSettings, saladEndpoint: saladEndpoint || storedSettings.saladEndpoint });
+      let endpoint = saladEndpoint || storedSettings.saladEndpoint || '';
+      let nextSaladKey = saladKey;
+      let nextSettings = storedSettings;
+      const migrated = migrateKeyStoredAsUrl(endpoint, saladKey);
+      if (migrated.moved) {
+        const hadKey = Boolean(saladKey?.trim());
+        let storedKey = hadKey;
+        if (!hadKey && migrated.key && keychain) {
+          await writeSaladKey(migrated.key);
+          nextSaladKey = migrated.key;
+          storedKey = true;
+        }
+        if (storedKey) {
+          endpoint = '';
+          nextSettings = { ...storedSettings, saladEndpoint: '' };
+          if (keychain) await writeSaladEndpoint(null);
+          await saveSettings(nextSettings);
+          setCloudNotice(migrated.notice);
+        }
+      }
+      setSettings({ ...nextSettings, saladEndpoint: endpoint });
       setLibrary(storedLibrary);
       setHasKey(Boolean(key));
-      setHasSaladKey(Boolean(saladKey));
+      setHasSaladKey(Boolean(nextSaladKey));
       setSecureStoreAvailable(keychain);
       setReady(true);
     })().catch(() => {
@@ -638,10 +662,15 @@ export function StudioProvider({ children }: { children: ReactNode }) {
         setHasSaladKey(false);
       },
       saveSaladEndpoint: async (value) => {
-        const endpoint = value.trim().replace(/\/+$/, '');
+        const classified = classifyGatewayInput(value);
+        if (classified.kind === 'key') throw new Error('This looks like your API key — move it to Key?');
+        if (classified.kind === 'invalid') throw new Error('The server URL has to start with http:// or https:// and include a host.');
+        const endpoint = classified.kind === 'url' ? classified.url : '';
         patchSettings({ saladEndpoint: endpoint });
-        if (await secureStoreReady()) await writeSaladEndpoint(endpoint);
+        if (await secureStoreReady()) await writeSaladEndpoint(endpoint || null);
       },
+      cloudNotice,
+      dismissCloudNotice: () => setCloudNotice(null),
       loading,
       status,
       error,
@@ -688,6 +717,7 @@ export function StudioProvider({ children }: { children: ReactNode }) {
       hasKey,
       hasSaladKey,
       secureStoreAvailable,
+      cloudNotice,
       loading,
       status,
       error,

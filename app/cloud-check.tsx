@@ -4,6 +4,7 @@ import { Platform, Pressable, ScrollView, StyleSheet, Text, View } from 'react-n
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { probe } from '@/src/lib/connection';
+import { classifyGatewayInput, redactSecrets } from '@/src/lib/salad';
 import { pushLog } from '@/src/lib/log';
 import { readSaladKey } from '@/src/lib/storage';
 import { useStudio } from '@/src/studio';
@@ -21,24 +22,24 @@ export default function CloudCheckScreen() {
   async function run() {
     setBusy(true);
     const next: Check[] = [];
-    const endpoint = studio.settings.saladEndpoint.trim().replace(/\/+$/, '');
+    const classified = classifyGatewayInput(studio.settings.saladEndpoint);
+    if (classified.kind === 'key') {
+      next.push({ name: 'URL', status: 'fail', detail: 'The saved address is a Salad API key, not a gateway URL. Open Connect and move it to Key.' });
+      setChecks(next);
+      setBusy(false);
+      return;
+    }
+    const endpoint = classified.kind === 'url' ? classified.url : '';
     if (studio.settings.provider === 'demo' || !endpoint) {
       next.push({ name: 'URL', status: 'warn', detail: 'Demo mode has no server URL. Add one in Settings to check the cloud.' });
       setChecks(next);
       setBusy(false);
       return;
     }
-    try {
-      const host = new URL(endpoint);
-      next.push({ name: 'URL', status: host.protocol === 'https:' ? 'pass' : 'warn', detail: host.protocol === 'https:' ? 'HTTPS address looks valid.' : 'The address is not HTTPS.' });
-    } catch {
-      next.push({ name: 'URL', status: 'fail', detail: 'That address is not a valid URL.' });
-      setChecks(next);
-      setBusy(false);
-      return;
-    }
+    const host = new URL(endpoint);
+    next.push({ name: 'URL', status: host.protocol === 'https:' ? 'pass' : 'warn', detail: host.protocol === 'https:' ? 'HTTPS address looks valid.' : 'The address is not HTTPS.' });
     const health = await probe(`${endpoint}/health`, {}, 8000);
-    next.push(health.ok ? { name: 'Reachable', status: 'pass', detail: `Answered in ${health.ms} ms.` } : { name: 'Reachable', status: 'fail', detail: health.error || 'No answer. Check DNS, the gateway, and that the group is running.' });
+    next.push(health.ok ? { name: 'Reachable', status: 'pass', detail: `Answered in ${health.ms} ms.` } : { name: 'Reachable', status: 'fail', detail: redactSecrets(health.error || 'No answer. Check DNS, the gateway, and that the group is running.') });
     next.push(health.ok ? { name: 'TLS', status: endpoint.startsWith('https') ? 'pass' : 'warn', detail: endpoint.startsWith('https') ? 'The connection used HTTPS.' : 'Plain HTTP has no TLS.' } : { name: 'TLS', status: 'fail', detail: 'Could not complete a secure request.' });
     const stored = await readSaladKey();
     const webKey = Platform.OS === 'web' && typeof localStorage !== 'undefined' ? localStorage.getItem('yume.webSaladKey') || '' : '';

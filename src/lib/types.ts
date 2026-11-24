@@ -139,6 +139,7 @@ export type Settings = {
   loras: LoraSpec[];
   updateManifestUrl: string;
   hourlyRate: number;
+  hourlyRateTouched: boolean;
   spendCap: number;
   autoResume: boolean;
   sourceMode: 'cloud' | 'phone' | 'auto';
@@ -186,6 +187,7 @@ export const DEFAULT_SETTINGS: Settings = {
   loras: [],
   updateManifestUrl: '',
   hourlyRate: 0.13,
+  hourlyRateTouched: false,
   spendCap: 0,
   autoResume: true,
   sourceMode: 'auto',

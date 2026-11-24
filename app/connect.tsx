@@ -5,6 +5,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { QrScanner } from '@/components/QrScanner';
 import { interpretConnection, probe, type ConnectionState } from '@/src/lib/connection';
+import { classifyGatewayInput, LIVE_GATEWAY_URL } from '@/src/lib/salad';
 import { maskKey, serverUrlFromLink } from '@/src/lib/saladCloud';
 import { readSaladKey } from '@/src/lib/storage';
 import { useStudio } from '@/src/studio';
@@ -19,10 +20,11 @@ const headers = (key: string) => ({
 export default function ConnectScreen() {
   const studio = useStudio();
   const params = useLocalSearchParams<{ url?: string }>();
-  const initial = typeof params.url === 'string' ? serverUrlFromLink(params.url) ?? '' : studio.settings.saladEndpoint;
-  const [url, setUrl] = useState(initial);
+  const linked = typeof params.url === 'string' ? serverUrlFromLink(params.url) : null;
+  const [url, setUrl] = useState(linked || LIVE_GATEWAY_URL);
   const [key, setKey] = useState<string | null>(null);
   const [replacement, setReplacement] = useState('');
+  const [pendingKey, setPendingKey] = useState('');
   const [mesh, setMesh] = useState(studio.settings.meshEndpoint);
   const [scanning, setScanning] = useState(false);
   const [status, setStatus] = useState<ConnectionState>({
@@ -31,6 +33,24 @@ export default function ConnectScreen() {
     detail: 'Save the URL, then tap Test.',
   });
   const [message, setMessage] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (linked) {
+      setUrl(linked);
+      return;
+    }
+    const classified = classifyGatewayInput(studio.settings.saladEndpoint);
+    if (classified.kind === 'url') {
+      setUrl(classified.url);
+      setPendingKey('');
+      return;
+    }
+    setUrl(LIVE_GATEWAY_URL);
+    if (classified.kind === 'key') {
+      setPendingKey(classified.key);
+      setMessage('This looks like your API key — move it to Key?');
+    }
+  }, [linked, studio.settings.saladEndpoint]);
 
   useEffect(() => {
     void readSaladKey().then(setKey);
@@ -54,16 +74,34 @@ export default function ConnectScreen() {
   }
 
   async function saveUrl(next: string) {
-    const parsed = serverUrlFromLink(next);
-    if (!parsed) {
-      setMessage('That is not a server URL.');
+    const classified = classifyGatewayInput(next);
+    if (classified.kind === 'key') {
+      setPendingKey(classified.key);
+      setUrl(LIVE_GATEWAY_URL);
+      setMessage('This looks like your API key — move it to Key?');
       return;
     }
-    setUrl(parsed);
-    await studio.saveSaladEndpoint(parsed);
-    await studio.updateSettings({ provider: 'salad', setupComplete: true, saladEndpoint: parsed });
+    if (classified.kind !== 'url') {
+      setMessage('The server URL has to start with http:// or https:// and include a host.');
+      return;
+    }
+    setPendingKey('');
+    setUrl(classified.url);
+    await studio.saveSaladEndpoint(classified.url);
+    await studio.updateSettings({ provider: 'salad', setupComplete: true, saladEndpoint: classified.url });
     setMessage('URL saved on this phone.');
-    await test(parsed, key);
+    await test(classified.url, key);
+  }
+
+  async function moveKey() {
+    const next = pendingKey.trim();
+    if (!next) return;
+    await studio.saveSaladKey(next);
+    if (classifyGatewayInput(studio.settings.saladEndpoint).kind === 'key') await studio.saveSaladEndpoint('');
+    setKey(next);
+    setPendingKey('');
+    setUrl(LIVE_GATEWAY_URL);
+    setMessage('Key saved in Secure Store. The live gateway is filled in. Tap Test to save that URL.');
   }
 
   return (
@@ -77,17 +115,40 @@ export default function ConnectScreen() {
           Status · {status.title}
         </Text>
         <Text style={styles.body}>{status.detail}</Text>
+        {studio.cloudNotice ? (
+          <View style={styles.notice}>
+            <Text testID="cloud-notice" style={styles.body}>{studio.cloudNotice}</Text>
+            <Pressable onPress={studio.dismissCloudNotice}>
+              <Text style={styles.link}>Dismiss</Text>
+            </Pressable>
+          </View>
+        ) : null}
         <Text style={styles.label}>URL</Text>
         <TextInput
           testID="connect-url"
           value={url}
-          onChangeText={setUrl}
+          onChangeText={(value) => {
+            setUrl(value);
+            const classified = classifyGatewayInput(value);
+            if (classified.kind === 'key') {
+              setPendingKey(classified.key);
+              setMessage('This looks like your API key — move it to Key?');
+            } else setPendingKey('');
+          }}
           placeholder="https://your-group.salad.cloud"
           placeholderTextColor={colors.faint}
           autoCapitalize="none"
           autoCorrect={false}
           style={styles.input}
         />
+        <Pressable testID="use-live-server" style={styles.secondary} onPress={() => void saveUrl(LIVE_GATEWAY_URL)}>
+          <Text style={styles.secondaryText}>Use live server</Text>
+        </Pressable>
+        {pendingKey ? (
+          <Pressable testID="move-key" style={styles.secondary} onPress={() => void moveKey()}>
+            <Text style={styles.secondaryText}>This looks like your API key — move it to Key?</Text>
+          </Pressable>
+        ) : null}
         <Text style={styles.label}>Key</Text>
         <Text testID="connect-key" style={styles.key}>
           {maskKey(replacement.trim() || key)}
@@ -168,6 +229,7 @@ const styles = StyleSheet.create({
   scroll: { padding: 20, gap: 12, paddingBottom: 40 },
   title: { color: colors.text, fontFamily: font.logo, fontSize: 32 },
   status: { color: colors.text, fontFamily: font.black, fontSize: 18 },
+  notice: { gap: 6 },
   body: { color: colors.muted, fontFamily: font.semibold, fontSize: 15, lineHeight: 22 },
   label: { color: colors.sakura, fontFamily: font.black, fontSize: 12, letterSpacing: 1, textTransform: 'uppercase' },
   key: { color: colors.text, fontFamily: font.black, fontSize: 20, letterSpacing: 1 },

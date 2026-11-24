@@ -1,4 +1,5 @@
 import {
+  SALAD_API,
   SaladApiError,
   YUME_GROUP,
   YUME_IMAGE,
@@ -72,6 +73,14 @@ export async function deployYumeGroup(input: {
 
 export async function readContainerGroup(apiKey: string, deployment: CloudDeployment, fetchImpl?: typeof fetch) {
   return saladRequest({ apiKey, path: groupPath(deployment), fetchImpl });
+}
+
+export async function readContainerInstances(apiKey: string, deployment: CloudDeployment, fetchImpl?: typeof fetch) {
+  return saladRequest({ apiKey, path: `${groupPath(deployment)}/instances`, fetchImpl });
+}
+
+export function containerGroupUrl(deployment: CloudDeployment): string {
+  return `${SALAD_API}${groupPath(deployment)}`;
 }
 
 export async function changeContainerGroup(input: {

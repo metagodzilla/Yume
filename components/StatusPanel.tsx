@@ -1,16 +1,17 @@
 import { router, useFocusEffect } from 'expo-router';
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { AppState, Platform, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
+import { ActivityIndicator, AppState, Platform, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
 
-import { changeContainerGroup, readContainerGroup } from '@/src/lib/cloudActions';
-import { capReached, cloudChecklist, deploymentForEndpoint, formatCostLine, sessionUsd, type ChecklistStep } from '@/src/lib/cloudSteps';
+import { changeContainerGroup, containerGroupUrl, readContainerGroup, readContainerInstances } from '@/src/lib/cloudActions';
+import { capReached, checkLine, cloudChecklist, deploymentForEndpoint, formatCostLine, hostOf, LIVE_GATEWAY, resolveHourly, sessionUsd, type CheckLine, type ChecklistStep } from '@/src/lib/cloudSteps';
 import { confirmAction } from '@/src/lib/confirm';
 import { probe, type Probe } from '@/src/lib/connection';
 import { readPhone, type PhoneReading } from '@/src/lib/device';
 import { thermalStatusName } from '@/src/lib/phonePower';
 import { counts } from '@/src/lib/queue';
 import { queueAction, useQueue } from '@/src/lib/queuestore';
-import { groupStatusOf } from '@/src/lib/saladCloud';
+import { endpointDiffersFromLive, LIVE_GATEWAY_URL, normalizeEndpoint, redactSecrets } from '@/src/lib/salad';
+import { groupStatusOf, instanceCounts } from '@/src/lib/saladCloud';
 import { readCloudDeployment, readSaladKey, touchCloudActivity, writeCloudDeployment } from '@/src/lib/storage';
 import { getThrottle } from '@/src/lib/thermalState';
 import { emptyStats, money, type CloudStats } from '@/src/lib/usage';
@@ -47,89 +48,148 @@ export function StatusPanel({ preview = '' }: { preview?: string }) {
   const [pill, setPill] = useState('Stopped');
   const [liveTitle, setLiveTitle] = useState('Cloud is stopped');
   const [checkNote, setCheckNote] = useState(CHECK_HELP);
+  const [checks, setChecks] = useState<CheckLine[]>([]);
+  const [checking, setChecking] = useState(false);
   const [note, setNote] = useState<string | null>(null);
   const [upSec, setUpSec] = useState(0);
+  const [quote, setQuote] = useState({ priority: '', gpu: '', live: false });
   const [now, setNow] = useState(Date.now());
   const stepSince = useRef(Date.now());
   const stepLabel = useRef('');
+  const cloudStart = useRef<number | null>(null);
   const capped = useRef(false);
   const tally = counts(queue);
   const job = queue.jobs.find((item) => item.status === 'running' || item.status === 'paused' || item.status === 'waiting');
   const throttle = getThrottle();
-  const rate = Number(studio.settings.hourlyRate) || 0;
+  const endpoint = normalizeEndpoint(studio.settings.saladEndpoint);
+  const rate = resolveHourly({
+    userRate: Number(studio.settings.hourlyRate) || 0,
+    touched: studio.settings.hourlyRateTouched,
+    gpuName: quote.gpu || (stats.gpu && stats.gpu !== 'Unknown' ? stats.gpu : ''),
+    priority: quote.priority,
+    liveGateway: quote.live || hostOf(endpoint) === LIVE_GATEWAY.host,
+  });
   const cap = Number(studio.settings.spendCap) || 0;
   const spent = sessionUsd(upSec, rate);
+  const wrongServer = endpointDiffersFromLive(studio.settings.saladEndpoint);
 
-  const refresh = useCallback(async () => {
-    const endpoint = studio.settings.saladEndpoint.trim().replace(/\/+$/, '');
-    const stored = (await readSaladKey()) ?? '';
-    const webKey = Platform.OS === 'web' && typeof localStorage !== 'undefined' ? localStorage.getItem('yume.webSaladKey') || '' : '';
-    const key = stored || webKey;
-    const headers = key ? saladHeaders(key) : undefined;
-    const deployment = deploymentForEndpoint(endpoint, await readCloudDeployment());
-    let groupStatus = '';
-    let allocating = 0;
-    let creating = 0;
-    let running = 0;
-    let saladUp = 0;
-    if (key && deployment) {
-      try {
-        const group = await readContainerGroup(key, deployment);
-        const status = groupStatusOf(group);
-        groupStatus = status.status;
-        allocating = status.allocating;
-        creating = status.creating;
-        running = status.running;
-        const start = (group as { current_state?: { start_time?: string } })?.current_state?.start_time;
-        if (start) {
-          const parsed = Date.parse(start);
-          if (Number.isFinite(parsed) && parsed > Date.parse('2020-01-01')) saladUp = Math.max(0, (Date.now() - parsed) / 1000);
+  const refresh = useCallback(async (report = false) => {
+    const saved = normalizeEndpoint(studio.settings.saladEndpoint);
+    try {
+      const stored = (await readSaladKey()) ?? '';
+      const webKey = Platform.OS === 'web' && typeof localStorage !== 'undefined' ? localStorage.getItem('yume.webSaladKey') || '' : '';
+      const key = stored || webKey;
+      const headers = key ? saladHeaders(key) : undefined;
+      const deployment = deploymentForEndpoint(saved, await readCloudDeployment());
+      let groupStatus = '';
+      let allocating = 0;
+      let creating = 0;
+      let running = 0;
+      let saladUp = 0;
+      let priority = '';
+      let groupGpu = deployment?.gpuName || '';
+      let groupError = '';
+      const groupUrl = deployment ? containerGroupUrl(deployment) : '';
+      if (key && deployment) {
+        try {
+          const group = await readContainerGroup(key, deployment);
+          const status = groupStatusOf(group);
+          groupStatus = status.status;
+          allocating = status.allocating;
+          creating = status.creating;
+          running = status.running;
+          priority = status.priority;
+          if (status.startTime) {
+            const parsed = Date.parse(status.startTime);
+            if (Number.isFinite(parsed) && parsed > Date.parse('2020-01-01')) {
+              cloudStart.current = parsed;
+              saladUp = Math.max(0, (Date.now() - parsed) / 1000);
+            }
+          }
+          if (running === 0 && groupStatus !== 'stopped' && groupStatus !== 'succeeded') {
+            try {
+              const extra = instanceCounts(await readContainerInstances(key, deployment));
+              allocating = Math.max(allocating, extra.allocating);
+              creating = Math.max(creating, extra.creating);
+              running = Math.max(running, extra.running);
+            } catch {
+              // The group GET already has the counts when Salad returns them.
+            }
+          }
+        } catch (error) {
+          groupError = error instanceof Error ? error.message : 'Salad container-group GET failed.';
         }
-      } catch {
-        // The gateway can still answer when the Salad account call cannot.
+      } else if (!key) {
+        groupError = 'No Salad API key is saved.';
+      } else {
+        groupError = 'No organization, project, or group is saved for this URL.';
       }
-    }
-    const health = endpoint ? await probe(`${endpoint}/health`, { headers }, 8000) : undefined;
-    const ready = endpoint ? await probe(`${endpoint}/ready`, { headers }, 8000) : undefined;
-    const view = cloudChecklist({
-      hasEndpoint: Boolean(endpoint),
-      groupStatus,
-      allocating,
-      creating,
-      running,
-      healthStatus: health?.status,
-      readyStatus: ready?.status,
-      healthReady: health?.body?.ready,
-      readyDetail: textOf(ready) || textOf(health),
-    });
-    setPhase(view.phase);
-    setPill(view.pill);
-    setLiveTitle(view.liveTitle);
-    setSteps(view.steps);
-    if (view.liveTitle !== stepLabel.current) {
-      stepLabel.current = view.liveTitle;
-      stepSince.current = Date.now();
-    }
-    let nextStats = emptyStats();
-    if (endpoint && key) {
-      const cloud = await probe(`${endpoint}/stats`, { headers }, 8000);
-      if (cloud.ok && cloud.body) nextStats = { ...emptyStats(), ...(cloud.body as CloudStats) };
-    }
-    setStats(nextStats);
-    const measured = typeof nextStats.uptimeSec === 'number' && nextStats.uptimeSec > 0 ? nextStats.uptimeSec : saladUp;
-    if (view.phase === 'stopped') setUpSec(0);
-    else setUpSec(measured);
-    setPhone(await readPhone());
-    if (view.authBlocked && !key) {
-      setCheckNote('The live gateway returned 403 without a key. Save the Salad API key, then CHECK again to see the model download.');
+      const healthUrl = saved ? `${saved}/health` : '';
+      const readyUrl = saved ? `${saved}/ready` : '';
+      const statsUrl = saved ? `${saved}/stats` : '';
+      const health = saved ? await probe(healthUrl, { headers }, 8000) : undefined;
+      const ready = saved ? await probe(readyUrl, { headers }, 8000) : undefined;
+      const probeError = [groupError, health?.error, ready?.error].filter(Boolean).join(' ');
+      const view = cloudChecklist({
+        hasEndpoint: Boolean(saved),
+        groupStatus,
+        allocating,
+        creating,
+        running,
+        healthStatus: health?.status,
+        readyStatus: ready?.status,
+        healthReady: health?.body?.ready,
+        readyDetail: textOf(ready) || textOf(health),
+        probeError: probeError || undefined,
+      });
+      setPhase(view.phase);
+      setPill(view.pill);
+      setLiveTitle(view.liveTitle);
+      setSteps(view.steps);
+      if (view.liveTitle !== stepLabel.current) {
+        stepLabel.current = view.liveTitle;
+        stepSince.current = Date.now();
+      }
+      let nextStats = emptyStats();
+      let statsProbe: Awaited<ReturnType<typeof probe>> | undefined;
+      if (saved) {
+        statsProbe = await probe(statsUrl, { headers }, 8000);
+        if (statsProbe.ok && statsProbe.body) nextStats = { ...emptyStats(), ...(statsProbe.body as CloudStats) };
+      }
+      setStats(nextStats);
+      setQuote({ priority, gpu: groupGpu, live: hostOf(saved) === LIVE_GATEWAY.host });
+      const measured = typeof nextStats.uptimeSec === 'number' && nextStats.uptimeSec > 0 ? nextStats.uptimeSec : saladUp;
+      if (view.phase === 'stopped') setUpSec(0);
+      else if (measured > 0) setUpSec(measured);
+      setPhone(await readPhone());
+      if (report) {
+        setChecks([
+          checkLine('health', healthUrl, health ? { ok: health.ok, status: health.status, error: health.error, detail: textOf(health) } : undefined),
+          checkLine('ready', readyUrl, ready ? { ok: ready.ok, status: ready.status, error: ready.error, detail: textOf(ready) } : undefined),
+          checkLine('stats', statsUrl, statsProbe ? { ok: statsProbe.ok, status: statsProbe.status, error: statsProbe.error, detail: textOf(statsProbe) } : undefined),
+          checkLine('container group', groupUrl, groupError ? { ok: false, error: groupError } : { ok: true, status: 200, detail: groupStatus || 'OK' }),
+        ]);
+        setCheckNote(view.authBlocked && !key ? 'The gateway returned 403 without a key. Save the Salad API key, then CHECK again.' : 'Check finished.');
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      setCheckNote(message);
+      setLiveTitle(message);
+      if (report) setChecks([{ name: 'check', url: saved, pass: false, message }]);
     }
   }, [studio.settings.saladEndpoint]);
+
+  function onCheck() {
+    setChecking(true);
+    setCheckNote('Checking...');
+    void refresh(true).finally(() => setChecking(false));
+  }
 
   useFocusEffect(
     useCallback(() => {
       if (preview === 'model') return undefined;
       void refresh();
-      const timer = setInterval(() => void refresh(), studio.loading ? 15_000 : throttle.refreshMs);
+      const timer = setInterval(() => void refresh(), 10_000);
       const sub = AppState.addEventListener('change', (state) => {
         if (state === 'active') void refresh();
       });
@@ -238,20 +298,45 @@ export function StatusPanel({ preview = '' }: { preview?: string }) {
             </View>
           </View>
         ) : null}
-        <View style={styles.row}>
+        <View style={[styles.row, styles.actions]}>
           <Pressable testID="start-server" style={styles.white} onPress={() => void startCloud()}>
             <Text style={styles.whiteText}>Start cloud</Text>
           </Pressable>
-          <Pressable testID="check-cloud" style={styles.white} onPress={() => void refresh()}>
-            <Text style={styles.whiteText}>CHECK</Text>
+          <Pressable
+            testID="check-cloud"
+            accessibilityRole="button"
+            style={styles.white}
+            onPressIn={() => {
+              setChecking(true);
+              setCheckNote('Checking...');
+            }}
+            onPress={onCheck}
+          >
+            {checking ? <ActivityIndicator testID="check-spinner" color="#161616" /> : null}
+            <Text style={styles.whiteText}>{checking ? 'Checking...' : 'CHECK'}</Text>
           </Pressable>
         </View>
-        <Text testID="check-help" style={styles.help}>{checkNote}</Text>
+        <Text testID="check-help" style={styles.help}>{redactSecrets(checkNote)}</Text>
+        {checks.map((row) => (
+          <Text key={row.name} testID={`check-row-${row.name.replace(/\s+/g, '-')}`} style={styles.help}>
+            {row.pass ? 'PASS' : 'FAIL'} {row.name}
+            {row.status ? ` HTTP ${row.status}` : ''} — {redactSecrets(row.message)}
+            {row.url ? ` ${redactSecrets(row.url)}` : ''}
+          </Text>
+        ))}
+        {studio.cloudNotice ? (
+          <Text testID="cloud-notice" style={styles.notice}>{studio.cloudNotice}</Text>
+        ) : null}
+        {wrongServer ? (
+          <Pressable testID="use-live-server" onPress={() => void studio.saveSaladEndpoint(LIVE_GATEWAY_URL)}>
+            <Text style={styles.link}>Use live server</Text>
+          </Pressable>
+        ) : null}
         <Text testID="cost-line" style={styles.cost}>{formatCostLine({ sessionUsd: spent, hourly: rate, upMin: upSec / 60, cap })}</Text>
         <View testID="live-card" style={styles.live}>
           <Text style={styles.kicker}>LIVE</Text>
           <Text style={styles.liveTitle}>{liveTitle}</Text>
-          <Text style={styles.help}>Elapsed {clock(phase === 'stopped' ? 0 : now - stepSince.current)}</Text>
+          <Text style={styles.help}>Elapsed {clock(phase === 'stopped' ? 0 : cloudStart.current ? now - cloudStart.current : now - stepSince.current)}</Text>
           {steps.map((step) => (
             <View key={step.label} style={styles.step}>
               <Text style={[styles.stepMark, step.state === 'done' && styles.done, step.state === 'current' && styles.current]}>
@@ -272,7 +357,7 @@ export function StatusPanel({ preview = '' }: { preview?: string }) {
           {phone?.appCpuPercent == null ? 'n/a' : `${phone.appCpuPercent.toFixed(0)}% estimate`} · RAM {phone?.appRssMb == null ? 'n/a' : `${phone.appRssMb} MB`}
         </Text>
         <Text style={styles.help}>
-          Cloud {stats.gpu || 'n/a'} · {phase} · Up {Math.round(upSec / 60)} min · {money(rate)}/h · {money(spent)} session · GPU power {gpuPower} · util{' '}
+          Cloud {stats.gpu && stats.gpu !== 'Unknown' ? stats.gpu : 'n/a'} · {phase} · Up {Math.round(upSec / 60)} min · {money(rate)}/h · {money(spent)} session · GPU power {gpuPower} · util{' '}
           {stats.utilPercent ?? 'n/a'}% · VRAM {stats.vramUsedMb ?? 'n/a'}/{stats.vramTotalMb ?? 'n/a'} MB
         </Text>
         <Text style={styles.help}>GPU power stays n/a until a rebuilt server image reports powerWatts from nvidia-smi. Phone watts are an estimate from current and voltage.</Text>
@@ -280,8 +365,8 @@ export function StatusPanel({ preview = '' }: { preview?: string }) {
           <Text style={styles.fieldLabel}>Hourly rate (USD)</Text>
           <TextInput
             testID="hourly-rate-panel"
-            value={String(studio.settings.hourlyRate)}
-            onChangeText={(value) => void studio.updateSettings({ hourlyRate: Number(value) || 0 })}
+            value={studio.settings.hourlyRateTouched ? String(studio.settings.hourlyRate) : String(rate)}
+            onChangeText={(value) => void studio.updateSettings({ hourlyRate: Number(value) || 0, hourlyRateTouched: true })}
             keyboardType="decimal-pad"
             style={styles.input}
           />
@@ -352,7 +437,8 @@ const styles = StyleSheet.create({
   bannerTitle: { color: colors.text, fontFamily: font.black, fontSize: 15 },
   bannerAction: { color: colors.gold, fontFamily: font.black, fontSize: 14 },
   row: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, alignItems: 'center' },
-  white: { flex: 1, backgroundColor: '#f4f4f4', borderRadius: 16, paddingVertical: 16, alignItems: 'center' },
+  actions: { zIndex: 50, elevation: 50 },
+  white: { flex: 1, backgroundColor: '#f4f4f4', borderRadius: 16, paddingVertical: 16, alignItems: 'center', flexDirection: 'row', justifyContent: 'center', gap: 8 },
   whiteText: { color: '#161616', fontFamily: font.black, fontSize: 16 },
   help: { color: colors.muted, fontFamily: font.semibold, fontSize: 13, lineHeight: 18 },
   cost: { color: colors.text, fontFamily: font.bold, fontSize: 14, lineHeight: 20 },

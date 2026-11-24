@@ -51,24 +51,26 @@ export function UpdateCheck() {
   }
 
   return (
-    <View pointerEvents="box-none" style={[styles.wrap, { top: insets.top + 6 }]}>
-      <Pressable testID="check-updates" onPress={() => void onPress()} style={styles.button} hitSlop={8}>
-        <Text style={styles.text}>{label}</Text>
-        {available ? <View testID="update-badge" style={styles.badge} /> : null}
-      </Pressable>
+    <>
+      <View pointerEvents="box-none" style={[styles.wrap, { top: insets.top + 6 }]}>
+        <Pressable testID="check-updates" onPress={() => void onPress()} style={styles.button} hitSlop={8}>
+          <Text style={styles.text}>{label}</Text>
+          {available ? <View testID="update-badge" style={styles.badge} /> : null}
+        </Pressable>
+      </View>
       {detail ? (
-        <Text testID="update-status" style={styles.detail}>
+        <Text pointerEvents="none" testID="update-status" style={[styles.detail, { top: insets.top + 48 }]}>
           {detail}
         </Text>
       ) : null}
-    </View>
+    </>
   );
 }
 
 const styles = StyleSheet.create({
-  wrap: { position: 'absolute', right: 10, zIndex: 40, alignItems: 'flex-end', maxWidth: 220 },
+  wrap: { position: 'absolute', right: 10, zIndex: 40, alignItems: 'flex-end' },
   button: { flexDirection: 'row', alignItems: 'center', gap: 6, backgroundColor: '#f4f4f4', borderRadius: 999, paddingHorizontal: 12, paddingVertical: 8 },
   text: { color: '#161616', fontFamily: font.black, fontSize: 13 },
   badge: { width: 8, height: 8, borderRadius: 4, backgroundColor: colors.sakura },
-  detail: { marginTop: 6, color: colors.text, fontFamily: font.semibold, fontSize: 12, lineHeight: 16, textAlign: 'right' },
+  detail: { position: 'absolute', right: 10, zIndex: 40, maxWidth: 180, color: colors.text, fontFamily: font.semibold, fontSize: 12, lineHeight: 16, textAlign: 'right' },
 });
