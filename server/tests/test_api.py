@@ -18,6 +18,15 @@ def client() -> TestClient:
         yield test
 
 
+def test_negative_seed_is_random_and_distinct(client: TestClient) -> None:
+    headers = {"Authorization": "Bearer test-key"}
+    payload = {"prompt": "a shrine", "width": 512, "height": 512, "count": 2, "steps": 1, "seed": -1, "scheduler": "euler_a"}
+    first = client.post("/generate", headers=headers, json=payload).json()["seeds"]
+    second = client.post("/generate", headers=headers, json=payload).json()["seeds"]
+    assert len(first) == 2 and first[0] != first[1] and min(first) >= 0
+    assert first != second
+
+
 def test_startup_answers_before_ready(client: TestClient) -> None:
     startup = client.get("/startup")
     assert startup.status_code == 200, startup.text

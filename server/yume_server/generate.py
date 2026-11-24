@@ -169,9 +169,20 @@ def _consistency(body: Any) -> str:
     return "img2img"
 
 
+def _seed_list(body: Any) -> list[int]:
+    count = max(1, int(getattr(body, "count", 1) or 1))
+    raw = getattr(body, "seed", None)
+    if raw is None or int(raw) < 0:
+        import random
+
+        base = random.randrange(0, 2_147_483_647)
+    else:
+        base = int(raw) % 2_147_483_647
+    return [(base + index) % 2_147_483_647 for index in range(count)]
+
+
 def generate_images(body: Any) -> tuple[list[str], list[int], str, str]:
-    base = body.seed if body.seed is not None else 1
-    seeds = [(int(base) + index) % 2_147_483_647 for index in range(body.count)]
+    seeds = _seed_list(body)
     consistency = _consistency(body)
     if mock_mode():
         from yume_server.metadata import embed_parameters, parameters_text
