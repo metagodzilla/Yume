@@ -50,6 +50,12 @@
       "expo-sharing",
       "expo-image",
       [
+        "expo-notifications",
+        {
+          "color": "#ff2d2d"
+        }
+      ],
+      [
         "expo-media-library",
         {
           "photosPermission": "Yume saves the anime images you create into your photo library.",

@@ -125,7 +125,7 @@ export function buildSaladGenerateBody(
     steps: state.steps,
     cfg: state.cfg,
     scheduler: state.sampler,
-    model: params.model,
+    model: String(state.installed.find((item) => item.versionId === state.checkpointId)?.versionId ?? DEFAULT_CHECKPOINT.versionId),
     model_name: params.model,
     model_hash: params.modelHash,
     clip_skip: state.clipSkip,

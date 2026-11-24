@@ -123,6 +123,34 @@ export function installLocal(resource: InstalledResource) {
   patchGenerator({ installed, checkpointId: resource.type === 'Checkpoint' ? resource.versionId : state.checkpointId });
 }
 
+export function applyCheckpoint(resource: InstalledResource, defaults: { clipSkip: number; width: number; height: number }) {
+  const installed = [
+    ...state.installed
+      .filter((item) => item.versionId !== resource.versionId)
+      .map((item) => (item.type === 'Checkpoint' ? { ...item, isDefault: false } : item)),
+    { ...resource, isDefault: resource.type === 'Checkpoint' },
+  ];
+  patchGenerator({
+    installed,
+    checkpointId: resource.type === 'Checkpoint' ? resource.versionId : state.checkpointId,
+    clipSkip: defaults.clipSkip,
+    width: defaults.width,
+    height: defaults.height,
+  });
+}
+
+export function replaceServerCheckpoints(records: InstalledResource[], activeId: number | null) {
+  const extras = state.installed.filter((item) => item.type !== 'Checkpoint');
+  const installed = [...records.map((item) => ({ ...item, isDefault: item.versionId === activeId })), ...extras];
+  const stillSelected = records.some((item) => item.versionId === state.checkpointId);
+  const checkpointId = stillSelected
+    ? state.checkpointId
+    : activeId && records.some((item) => item.versionId === activeId)
+      ? activeId
+      : records[0]?.versionId ?? state.checkpointId;
+  patchGenerator({ installed, checkpointId });
+}
+
 export function setDefaultCheckpoint(versionId: number) {
   const installed = state.installed.map((item) => ({
     ...item,

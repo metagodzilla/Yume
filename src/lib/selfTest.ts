@@ -12,6 +12,7 @@ import { deleteImageUri, persistPng, readCivitaiToken, readPng, readSaladKey } f
 import { checkGithubRelease } from '@/src/lib/updates';
 import { APP_VERSION, APP_VERSION_CODE } from '@/src/lib/version';
 import { type CheckRow, type CheckStatus } from '@/src/lib/checkRows';
+import { modelCardPress, routeLeavesCreate } from '@/src/lib/checkpoints';
 
 export type { CheckRow } from '@/src/lib/checkRows';
 export { areaCounts } from '@/src/lib/checkRows';
@@ -275,6 +276,14 @@ export async function runAppCheck(input: { endpoint: string }): Promise<CheckRow
     live.organization === 'seeyeevang707' && live.project === 'default' && live.group === 'yume-server' && containerGroupUrl(live) === expected
       ? row('Setup', 'Wizard group', 'pass', 0, expected)
       : row('Setup', 'Wizard group', 'fail', 0, `Wizard points at ${containerGroupUrl(live)}.`),
+  );
+
+  const card = modelCardPress();
+  const cardOpensSheet = card.action === 'open-sheet' && card.browse === '/(tabs)/explore' && routeLeavesCreate('/models') && !routeLeavesCreate(card.browse);
+  rows.push(
+    cardOpensSheet
+      ? row('Navigation', 'Model card', 'pass', 0, 'The model card opens the checkpoint sheet. Browse Civitai opens Explore.')
+      : row('Navigation', 'Model card', 'fail', 0, `The model card action is ${card.action}. Browse goes to ${card.browse}.`),
   );
 
   rows.push(await notificationRow());

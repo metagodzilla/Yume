@@ -6,11 +6,14 @@ import json
 import logging
 import os
 import threading
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
 import uuid
 from typing import Any, Callable
+
+from yume_server.downloads import DownloadCancelled, DownloadPaused, download_resumable, resource_root
 
 DEFAULT_VERSION = 1337429
 HF_ANIMAGINE_URL = "https://huggingface.co/cagliostrolab/animagine-xl-4.0/resolve/main/animagine-xl-4.0.safetensors"
@@ -22,6 +25,8 @@ class CivitaiAuthError(RuntimeError):
 
 _INSTALLS: dict[str, dict[str, Any]] = {}
 _INSTALL_LOCK = threading.Lock()
+_LOADED_DIR: str | None = None
+_LAST_SAVE = 0.0
 _LOG = logging.getLogger("yume.install")
 DEFAULT_RECORD: dict[str, Any] = {
     "versionId": DEFAULT_VERSION,
@@ -117,66 +122,13 @@ def download_plan(record: dict[str, Any], token: str | None) -> tuple[str, dict[
     return f"https://civitai.com/api/download/models/{record['versionId']}?token={urllib.parse.quote(resolved, safe='')}", headers
 
 
-def _public_url(url: str) -> str:
-    parts = urllib.parse.urlsplit(url)
-    return urllib.parse.urlunsplit((parts.scheme, parts.netloc, parts.path, "", ""))
-
-
-def _download(
-    url: str,
-    dest: str,
-    headers: dict[str, str],
-    on_progress: Callable[[int, int], None] | None = None,
-    total_hint: int = 0,
-) -> None:
-    class _Redirect(urllib.request.HTTPRedirectHandler):
-        def redirect_request(self, req, fp, code, msg, hdrs, newurl):  # noqa: ANN001
-            host = urllib.parse.urlparse(newurl).hostname or ""
-            forwarded = {
-                key: value
-                for key, value in headers.items()
-                if not (key.lower() == "authorization" and "civitai.com" not in host)
-            }
-            return urllib.request.Request(newurl, headers=forwarded, method="GET")
-
-    opener = urllib.request.build_opener(_Redirect)
-    request = urllib.request.Request(url, headers=headers)
-    partial = dest + ".part"
-    try:
-        response = opener.open(request, timeout=120)
-    except urllib.error.HTTPError as exc:
-        _LOG.error("download HTTP %s from %s", exc.code, _public_url(url))
-        if exc.code in {401, 403}:
-            raise CivitaiAuthError(
-                "Civitai needs your API key for this model. Set CIVITAI_TOKEN on the server, or save a Civitai API token in the app."
-            ) from exc
-        raise RuntimeError(f"Download failed with HTTP {exc.code}.") from exc
-    total = int(response.headers.get("Content-Length") or total_hint or 0)
-    done = 0
-    try:
-        with response, open(partial, "wb") as handle:
-            while True:
-                chunk = response.read(1024 * 1024)
-                if not chunk:
-                    break
-                handle.write(chunk)
-                done += len(chunk)
-                if on_progress:
-                    on_progress(done, total)
-    except Exception:
-        _LOG.exception("download stream failed for %s", _public_url(url))
-        if os.path.exists(partial):
-            os.remove(partial)
-        raise
-    os.replace(partial, dest)
-
-
 def _materialize(
     record: dict[str, Any],
     token: str | None,
     on_progress: Callable[[int, int], None] | None = None,
+    control: dict[str, Any] | None = None,
 ) -> None:
-    dest = os.path.join(model_dir(), record["filename"])
+    dest = os.path.join(resource_root(record), record["filename"])
     record["path"] = dest
     expected = int(record.get("bytes") or 0)
     mock = os.environ.get("YUME_MOCK", "").strip() in {"1", "true", "yes"}
@@ -194,7 +146,20 @@ def _materialize(
             on_progress(size, expected or size)
         return
     url, headers = download_plan(record, token)
-    _download(url, dest, headers, on_progress, expected)
+    try:
+        download_resumable(
+            url,
+            dest,
+            headers,
+            on_progress,
+            expected,
+            str(record.get("sha256") or ""),
+            control,
+        )
+    except RuntimeError as exc:
+        if "Civitai needs your API key" in str(exc):
+            raise CivitaiAuthError(str(exc)) from exc
+        raise
 
 
 def install_version(version_id: int, token: str | None) -> dict[str, Any]:
@@ -253,24 +218,111 @@ def _store_record(record: dict[str, Any]) -> None:
 
 
 def _install_view(job: dict[str, Any]) -> dict[str, Any]:
+    record = job.get("record") or {}
     return {
         "id": job["id"],
         "versionId": job["versionId"],
         "state": job["state"],
-        "bytesDone": job["bytesDone"],
-        "bytesTotal": job["bytesTotal"],
-        "error": job["error"],
-        "record": job["record"],
+        "bytesDone": job.get("bytesDone") or 0,
+        "bytesTotal": job.get("bytesTotal") or 0,
+        "bytesPerSecond": job.get("bytesPerSecond") or 0,
+        "etaSeconds": job.get("etaSeconds"),
+        "error": job.get("error") or "",
+        "record": job.get("record"),
+        "type": record.get("type") or job.get("type") or "Checkpoint",
+        "name": record.get("name") or job.get("name") or "",
     }
+
+
+def _jobs_path() -> str:
+    return os.path.join(model_dir(), "installs.json")
+
+
+def _persistable(job: dict[str, Any]) -> dict[str, Any]:
+    return {key: value for key, value in job.items() if not key.startswith("_")}
+
+
+def _save_jobs(force: bool = False) -> None:
+    global _LAST_SAVE
+    now = time.monotonic()
+    if not force and now - _LAST_SAVE < 1:
+        return
+    _LAST_SAVE = now
+    with _INSTALL_LOCK:
+        blob = {"jobs": [_persistable(job) for job in _INSTALLS.values()]}
+    path = _jobs_path()
+    temporary = path + ".tmp"
+    with open(temporary, "w", encoding="utf-8") as handle:
+        json.dump(blob, handle)
+    os.replace(temporary, path)
+
+
+def _attach_control(job: dict[str, Any]) -> None:
+    job.setdefault("_pause", threading.Event())
+    job.setdefault("_cancel", threading.Event())
+    if job.get("state") == "paused":
+        job["_pause"].set()
+
+
+def _partial_bytes(job: dict[str, Any]) -> int:
+    record = job.get("record") or {}
+    path = record.get("path")
+    partial = f"{path}.part" if path else ""
+    if partial and os.path.exists(partial):
+        return os.path.getsize(partial)
+    return int(job.get("bytesDone") or 0)
+
+
+def ensure_jobs_loaded() -> None:
+    global _LOADED_DIR
+    root = model_dir()
+    if _LOADED_DIR == root:
+        return
+    _LOADED_DIR = root
+    with _INSTALL_LOCK:
+        _INSTALLS.clear()
+    try:
+        with open(_jobs_path(), encoding="utf-8") as handle:
+            data = json.load(handle)
+    except (OSError, json.JSONDecodeError):
+        return
+    for job in data.get("jobs") or []:
+        if not isinstance(job, dict) or not job.get("id"):
+            continue
+        if job.get("state") in {"queued", "downloading"}:
+            job["state"] = "paused"
+            job["bytesDone"] = _partial_bytes(job)
+            job["error"] = ""
+        _attach_control(job)
+        _INSTALLS[job["id"]] = job
 
 
 def _set_install(job_id: str, **fields: Any) -> None:
     with _INSTALL_LOCK:
         job = _INSTALLS[job_id]
+        if job.get("_cancel") is not None and job["_cancel"].is_set() and fields.get("state") in {"downloading", "done"}:
+            return
+        if job.get("_pause") is not None and job["_pause"].is_set() and fields.get("state") == "downloading":
+            fields = {key: value for key, value in fields.items() if key != "state"}
         job.update(fields)
+        job["updatedAt"] = time.time()
+        done = int(job.get("bytesDone") or 0)
+        total = int(job.get("bytesTotal") or 0)
+        now = time.monotonic()
+        stamp = float(job.get("_speed_at") or now)
+        base = int(job.get("_speed_bytes") or done)
+        elapsed = now - stamp
+        if elapsed >= 0.4:
+            job["bytesPerSecond"] = max(0, (done - base) / elapsed) if done >= base else 0
+            job["_speed_at"] = now
+            job["_speed_bytes"] = done
+        speed = float(job.get("bytesPerSecond") or 0)
+        job["etaSeconds"] = int((total - done) / speed) if speed > 0 and total > done else None
+    _save_jobs(force=fields.get("state") in {"done", "error", "paused", "cancelled", "queued"})
 
 
 def install_progress(job_id: str) -> dict[str, Any]:
+    ensure_jobs_loaded()
     with _INSTALL_LOCK:
         job = _INSTALLS.get(job_id)
         if job is None:
@@ -278,22 +330,44 @@ def install_progress(job_id: str) -> dict[str, Any]:
         return _install_view(job)
 
 
-def _run_install(job_id: str, version_id: int, token: str | None) -> None:
+def list_installs() -> list[dict[str, Any]]:
+    ensure_jobs_loaded()
+    with _INSTALL_LOCK:
+        jobs = sorted(_INSTALLS.values(), key=lambda item: item.get("updatedAt") or 0, reverse=True)
+        return [_install_view(job) for job in jobs]
+
+
+def _run_install(job_id: str, version_id: int, token: str | None, hint: dict[str, Any] | None = None) -> None:
     try:
         if version_id == DEFAULT_VERSION:
             record = ensure_default()
-            _set_install(job_id, state="done", record=record, error="")
+            _set_install(job_id, state="done", record=record, error="", type="Checkpoint", name=record.get("name") or "")
             return
-        record = _describe_version(version_id, token)
+        with _INSTALL_LOCK:
+            existing = (_INSTALLS.get(job_id) or {}).get("record")
+            control = {
+                "pause": _INSTALLS[job_id]["_pause"],
+                "cancel": _INSTALLS[job_id]["_cancel"],
+            }
+        record = existing or _describe_version(version_id, token, hint)
+        _set_install(job_id, record=record, type=record.get("type") or "Checkpoint", name=record.get("name") or "")
 
         def on_progress(done: int, total: int) -> None:
-            _set_install(job_id, state="downloading", bytesDone=done, bytesTotal=total or record.get("bytes") or 0)
+            _set_install(job_id, state="downloading", bytesDone=done, bytesTotal=total or int(record.get("bytes") or 0))
 
-        _set_install(job_id, state="downloading", bytesTotal=int(record.get("bytes") or 0))
-        _materialize(record, token, on_progress)
+        if control["cancel"].is_set():
+            raise DownloadCancelled()
+        if control["pause"].is_set():
+            raise DownloadPaused()
+        _set_install(job_id, state="downloading", bytesTotal=int(record.get("bytes") or 0), error="")
+        _materialize(record, token, on_progress, control)
         _store_record(record)
         size = os.path.getsize(record["path"]) if record.get("path") and os.path.exists(record["path"]) else 0
         _set_install(job_id, state="done", bytesDone=size, bytesTotal=size or int(record.get("bytes") or 0), record=record, error="")
+    except DownloadPaused:
+        _set_install(job_id, state="paused", error="")
+    except DownloadCancelled:
+        _set_install(job_id, state="cancelled", error="", bytesPerSecond=0, etaSeconds=None)
     except CivitaiAuthError as exc:
         _LOG.warning("install refused for %s: %s", version_id, exc)
         _set_install(job_id, state="error", error=str(exc))
@@ -302,17 +376,19 @@ def _run_install(job_id: str, version_id: int, token: str | None) -> None:
         _set_install(job_id, state="error", error=str(exc) or "The download failed.")
 
 
-def _describe_version(version_id: int, token: str | None) -> dict[str, Any]:
+def _describe_version(version_id: int, token: str | None, hint: dict[str, Any] | None = None) -> dict[str, Any]:
+    hint = hint or {}
     mock = os.environ.get("YUME_MOCK", "").strip() in {"1", "true", "yes"}
     if mock:
+        kind = str(hint.get("type") or "Checkpoint")
         return {
             "versionId": version_id,
             "modelId": 0,
-            "name": f"Civitai {version_id}",
+            "name": str(hint.get("name") or f"Civitai {version_id}"),
             "version": "mock",
-            "type": "Checkpoint",
-            "baseModel": "SDXL 1.0",
-            "filename": f"civitai-{version_id}.safetensors",
+            "type": kind,
+            "baseModel": str(hint.get("baseModel") or "SDXL 1.0"),
+            "filename": str(hint.get("filename") or f"civitai-{version_id}.safetensors"),
             "hash": "",
             "sha256": "",
             "triggers": [],
@@ -353,25 +429,116 @@ def _describe_version(version_id: int, token: str | None) -> dict[str, Any]:
     }
 
 
-def start_install(version_id: int, token: str | None) -> dict[str, Any]:
-    """Start a download and return immediately. The gateway times out around 100 seconds."""
+def _begin(job_id: str, version_id: int, token: str | None, hint: dict[str, Any] | None) -> None:
+    threading.Thread(target=_run_install, args=(job_id, version_id, civitai_token(token), hint), daemon=True).start()
+
+
+def start_install(version_id: int, token: str | None, hint: dict[str, Any] | None = None) -> dict[str, Any]:
+    """Start a download and return immediately. The same version reattaches to a live or paused job."""
+    ensure_jobs_loaded()
+    hint = hint or {}
     with _INSTALL_LOCK:
         for job in _INSTALLS.values():
-            if job["versionId"] == version_id and job["state"] in {"queued", "downloading"}:
+            if job["versionId"] != version_id or job["state"] in {"done", "cancelled"}:
+                continue
+            if job["state"] in {"queued", "downloading"}:
                 return _install_view(job)
-        job_id = uuid.uuid4().hex[:12]
-        job = {
-            "id": job_id,
-            "versionId": version_id,
-            "state": "queued",
-            "bytesDone": 0,
-            "bytesTotal": 0,
-            "error": "",
-            "record": None,
-        }
-        _INSTALLS[job_id] = job
+            job_id = job["id"]
+            job["_pause"].clear()
+            job["_cancel"].clear()
+            job["state"] = "queued"
+            job["error"] = ""
+            view = _install_view(job)
+            break
+        else:
+            job_id = uuid.uuid4().hex[:12]
+            job = {
+                "id": job_id,
+                "versionId": version_id,
+                "state": "queued",
+                "bytesDone": 0,
+                "bytesTotal": 0,
+                "bytesPerSecond": 0,
+                "etaSeconds": None,
+                "error": "",
+                "record": None,
+                "type": hint.get("type") or "Checkpoint",
+                "name": hint.get("name") or "",
+                "updatedAt": time.time(),
+            }
+            _attach_control(job)
+            _INSTALLS[job_id] = job
+            view = _install_view(job)
+    _save_jobs(force=True)
+    _begin(job_id, version_id, token, hint)
+    return view
+
+
+def pause_install(job_id: str) -> dict[str, Any]:
+    ensure_jobs_loaded()
+    with _INSTALL_LOCK:
+        job = _INSTALLS.get(job_id)
+        if job is None:
+            raise KeyError(job_id)
+        if job["state"] in {"done", "cancelled"}:
+            raise ValueError("That download is not running.")
+        job["_pause"].set()
+        job["_cancel"].clear()
+        job["state"] = "paused"
+        job["bytesPerSecond"] = 0
+        job["etaSeconds"] = None
+        job["updatedAt"] = time.time()
         view = _install_view(job)
-    threading.Thread(target=_run_install, args=(job_id, version_id, civitai_token(token)), daemon=True).start()
+    _save_jobs(force=True)
+    return view
+
+
+def resume_install(job_id: str, token: str | None) -> dict[str, Any]:
+    ensure_jobs_loaded()
+    with _INSTALL_LOCK:
+        job = _INSTALLS.get(job_id)
+        if job is None:
+            raise KeyError(job_id)
+        if job["state"] == "cancelled":
+            raise ValueError("That download was cancelled. Start it again.")
+        if job["state"] in {"queued", "downloading", "done"}:
+            return _install_view(job)
+        job["_pause"].clear()
+        job["_cancel"].clear()
+        job["state"] = "queued"
+        job["error"] = ""
+        job["updatedAt"] = time.time()
+        version_id = int(job["versionId"])
+        view = _install_view(job)
+    _save_jobs(force=True)
+    _begin(job_id, version_id, token, None)
+    return view
+
+
+def cancel_install(job_id: str) -> dict[str, Any]:
+    ensure_jobs_loaded()
+    partial = ""
+    with _INSTALL_LOCK:
+        job = _INSTALLS.get(job_id)
+        if job is None:
+            raise KeyError(job_id)
+        if job["state"] == "done":
+            raise ValueError("That download already finished.")
+        job["_cancel"].set()
+        job["_pause"].clear()
+        record = job.get("record") or {}
+        if record.get("path"):
+            partial = str(record["path"]) + ".part"
+        if job["state"] != "downloading":
+            job["state"] = "cancelled"
+            job["error"] = ""
+            job["bytesPerSecond"] = 0
+            job["etaSeconds"] = None
+            job["updatedAt"] = time.time()
+        view = _install_view(job)
+    if partial and os.path.exists(partial):
+        os.remove(partial)
+    _save_jobs(force=True)
     return view
 
 

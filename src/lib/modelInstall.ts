@@ -1,3 +1,4 @@
+import { downloadSummary, RECONNECTING, type DownloadJob } from '@/src/lib/downloads';
 import { normalizeSaladKey } from '@/src/lib/saladCloud';
 
 export type InstallJob = {
@@ -6,8 +7,12 @@ export type InstallJob = {
   state: 'queued' | 'downloading' | 'done' | 'error' | string;
   bytesDone: number;
   bytesTotal: number;
+  bytesPerSecond?: number;
+  etaSeconds?: number | null;
   error: string;
-  record?: { name?: string; filename?: string; versionId?: number } | null;
+  name?: string;
+  type?: string;
+  record?: { name?: string; filename?: string; versionId?: number; type?: string } | null;
 };
 
 export function installProgressLabel(job: Pick<InstallJob, 'bytesDone' | 'bytesTotal' | 'state'>): string {
@@ -37,6 +42,9 @@ export async function runModelInstall(input: {
   apiKey: string;
   civitaiToken?: string | null;
   versionId: number;
+  type?: string;
+  name?: string;
+  filename?: string;
   onProgress: (label: string, fraction: number) => void;
   signal?: { cancelled?: boolean };
 }): Promise<InstallJob> {
@@ -48,14 +56,30 @@ export async function runModelInstall(input: {
     'X-Api-Key': key,
   };
   if (input.civitaiToken?.trim()) headers['X-Civitai-Token'] = input.civitaiToken.trim();
+  void import('@/src/lib/downloadTask')
+    .then((task) => Promise.all([task.rememberDownloadTarget(input.endpoint), task.ensureDownloadBackground()]))
+    .catch(() => undefined);
   let jobId = '';
+  let lastFraction = 0;
   for (let attempt = 0; attempt < 8 && !jobId; attempt += 1) {
     if (input.signal?.cancelled) throw new Error('Install cancelled.');
-    const response = await fetch(`${input.endpoint}/models/install`, {
-      method: 'POST',
-      headers,
-      body: JSON.stringify({ versionId: input.versionId }),
-    });
+    let response: Response;
+    try {
+      response = await fetch(`${input.endpoint}/models/install`, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({
+          versionId: input.versionId,
+          ...(input.type ? { type: input.type } : {}),
+          ...(input.name ? { name: input.name } : {}),
+          ...(input.filename ? { filename: input.filename } : {}),
+        }),
+      });
+    } catch {
+      input.onProgress(RECONNECTING, lastFraction);
+      await wait(2000);
+      continue;
+    }
     const raw = await response.text();
     const failure = installFailureMessage(response.status, raw);
     if (failure.retry) {
@@ -70,7 +94,14 @@ export async function runModelInstall(input: {
   if (!jobId) throw new Error('The gateway timed out before the download could start. Still working, rechecking.');
   for (let attempt = 0; attempt < 400; attempt += 1) {
     if (input.signal?.cancelled) throw new Error('Install cancelled.');
-    const response = await fetch(`${input.endpoint}/models/install/${jobId}`, { headers });
+    let response: Response;
+    try {
+      response = await fetch(`${input.endpoint}/models/install/${jobId}`, { headers });
+    } catch {
+      input.onProgress(RECONNECTING, lastFraction);
+      await wait(2000);
+      continue;
+    }
     const raw = await response.text();
     const failure = installFailureMessage(response.status, raw);
     if (failure.retry) {
@@ -81,8 +112,10 @@ export async function runModelInstall(input: {
     if (!response.ok) throw new Error(failure.message);
     const job = JSON.parse(raw) as InstallJob;
     const fraction = job.bytesTotal > 0 ? Math.min(1, job.bytesDone / job.bytesTotal) : job.state === 'done' ? 1 : 0;
-    input.onProgress(installProgressLabel(job), fraction);
+    lastFraction = fraction;
+    input.onProgress(downloadSummary(job as DownloadJob), fraction);
     if (job.state === 'done') return job;
+    if (job.state === 'cancelled') throw new Error('Download cancelled.');
     if (job.state === 'error') throw new Error(installFailureMessage(0, job.error).message || job.error || 'The download failed.');
     await wait(2000);
   }

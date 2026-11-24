@@ -14,6 +14,7 @@ import { Platform, View } from 'react-native';
 import 'react-native-reanimated';
 
 import { AppErrorBoundary } from '@/components/ErrorBoundary';
+import '@/src/lib/downloadTask';
 import { UpdateCheck } from '@/components/UpdateCheck';
 import { IdleStop } from '@/components/IdleStop';
 import { ThermalGuard } from '@/components/ThermalGuard';
@@ -82,6 +83,7 @@ export default function RootLayout() {
               <Stack.Screen name="setup" options={{ animation: 'fade' }} />
               <Stack.Screen name="connect" options={{ animation: 'slide_from_right' }} />
               <Stack.Screen name="report" options={{ animation: 'slide_from_bottom' }} />
+              <Stack.Screen name="downloads" options={{ animation: 'slide_from_right' }} />
               <Stack.Screen name="offline" options={{ animation: 'slide_from_right' }} />
               <Stack.Screen name="watch" options={{ animation: 'slide_from_bottom' }} />
               <Stack.Screen name="shorts" options={{ animation: 'fade' }} />

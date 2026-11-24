@@ -23,9 +23,9 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
 from yume_mesh.generate import generate_mesh
-from yume_server.catalog import delete_version, ensure_default, install_progress, list_models, set_default, start_install
+from yume_server.catalog import cancel_install, delete_version, ensure_default, ensure_jobs_loaded, install_progress, list_installs, list_models, pause_install, resume_install, set_default, start_install
 from yume_server.errors import add_client_report, list_errors, record_error, sanitize
-from yume_server.generate import A1111_SAMPLERS, SCHEDULERS, generate_images, mock_mode, start_model
+from yume_server.generate import A1111_SAMPLERS, SCHEDULERS, generate_images, loaded_version, mark_default_loaded, mock_mode, release_loaded, start_model, start_use, use_progress
 from yume_server.jobs import cancel as cancel_job
 from yume_server.jobs import get as get_job
 from yume_server.jobs import pause as pause_job
@@ -123,7 +123,10 @@ async def lifespan(app: FastAPI):
     async def prepare() -> None:
         try:
             await asyncio.to_thread(ensure_default)
-            if not mock_mode():
+            await asyncio.to_thread(ensure_jobs_loaded)
+            if mock_mode():
+                mark_default_loaded()
+            else:
                 await asyncio.to_thread(start_model)
             state["ready"] = True
         except Exception as exc:  # noqa: BLE001 - surface the load error on /ready
@@ -324,9 +327,17 @@ def read_result(job_id: str, request: Request) -> dict[str, Any]:
 
 class InstallIn(BaseModel):
     versionId: int
+    type: str | None = None
+    name: str | None = None
+    filename: str | None = None
+    baseModel: str | None = None
 
 
 class DefaultIn(BaseModel):
+    versionId: int
+
+
+class UseIn(BaseModel):
     versionId: int
 
 
@@ -354,35 +365,117 @@ def client_report(body: ClientReportIn, request: Request) -> dict[str, str]:
 @app.get("/models")
 def models(request: Request) -> dict[str, Any]:
     _check_key(request)
-    return {"models": list_models()}
+    return {"models": list_models(), "activeVersionId": loaded_version()}
+
+
+@app.get("/models/installs")
+def installs(request: Request) -> dict[str, Any]:
+    _check_key(request)
+    return {"jobs": list_installs()}
 
 
 @app.post("/models/install")
 def install(body: InstallIn, request: Request) -> dict[str, Any]:
     _check_key(request)
     token = request.headers.get("x-civitai-token", "").strip() or None
-    return start_install(body.versionId, token)
+    hint = {key: value for key, value in {"type": body.type, "name": body.name, "filename": body.filename, "baseModel": body.baseModel}.items() if value}
+    return start_install(body.versionId, token, hint)
 
 
 @app.get("/models/install/{job_id}")
 def install_status(job_id: str, request: Request) -> dict[str, Any]:
     _check_key(request)
+    if job_id == "installs":
+        raise HTTPException(status_code=404, detail="No install job with that id.")
     try:
         return install_progress(job_id)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="No install job with that id.") from exc
 
 
-@app.delete("/models/{version_id}")
-def remove_model(version_id: int, request: Request) -> dict[str, str]:
+@app.post("/models/install/{job_id}/pause")
+def install_pause(job_id: str, request: Request) -> dict[str, Any]:
     _check_key(request)
+    return _install_action(pause_install, job_id)
+
+
+@app.post("/models/install/{job_id}/resume")
+def install_resume(job_id: str, request: Request) -> dict[str, Any]:
+    _check_key(request)
+    token = request.headers.get("x-civitai-token", "").strip() or None
+    try:
+        return resume_install(job_id, token)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="No install job with that id.") from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.post("/models/install/{job_id}/cancel")
+def install_cancel(job_id: str, request: Request) -> dict[str, Any]:
+    _check_key(request)
+    return _install_action(cancel_install, job_id)
+
+
+def _install_action(fn: Any, job_id: str) -> dict[str, Any]:
+    try:
+        return fn(job_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="No install job with that id.") from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.delete("/models/{version_id}")
+def remove_model(version_id: int, request: Request) -> dict[str, Any]:
+    _check_key(request)
+    was_active = loaded_version() == version_id
+    catalog = list_models()
+    target = next((item for item in catalog if item.get("versionId") == version_id), None)
+    if target is None:
+        raise HTTPException(status_code=404, detail="That model is not installed.")
+    others = [
+        item
+        for item in catalog
+        if item.get("versionId") != version_id and (item.get("type") or "Checkpoint") == "Checkpoint"
+    ]
+    if (target.get("type") or "Checkpoint") == "Checkpoint" and not others:
+        raise HTTPException(status_code=400, detail="Keep at least one checkpoint installed.")
+    if was_active:
+        release_loaded()
     try:
         delete_version(version_id)
     except FileNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-    return {"status": "deleted"}
+    fallback = next((item for item in list_models() if (item.get("type") or "Checkpoint") == "Checkpoint"), None)
+    job = None
+    if was_active and fallback is not None:
+        job = start_use(int(fallback["versionId"]))
+    return {"status": "deleted", "activeVersionId": loaded_version(), "job": job}
+
+
+@app.post("/models/use")
+def use_model(body: UseIn, request: Request) -> dict[str, Any]:
+    _check_key(request)
+    try:
+        return start_use(body.versionId)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.get("/models/use/{job_id}")
+def use_status(job_id: str, request: Request) -> dict[str, Any]:
+    _check_key(request)
+    if job_id == "current":
+        raise HTTPException(status_code=404, detail="That checkpoint is already loaded.")
+    try:
+        return use_progress(job_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="No checkpoint load with that id.") from exc
 
 
 @app.post("/models/default")

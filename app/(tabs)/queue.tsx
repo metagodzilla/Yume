@@ -1,3 +1,4 @@
+import { router } from 'expo-router';
 import { useEffect } from 'react';
 import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
@@ -16,7 +17,12 @@ export default function QueueScreen() {
     <SafeAreaView style={styles.safe} edges={['top']}>
       <AppBar />
       <ScrollView contentContainerStyle={styles.scroll}>
-        <Text style={styles.title}>Queue</Text>
+        <View style={styles.row}>
+          <Text style={styles.title}>Queue</Text>
+          <Pressable testID="open-downloads" onPress={() => router.push('/downloads')}>
+            <Text style={styles.link}>Downloads</Text>
+          </Pressable>
+        </View>
         <Text style={styles.body}>
           Jobs stay on this phone if you leave. A running GPU picture cannot pause halfway; Resume starts that picture again. Downloads continue from the last byte when the server allows it. User pauses stay paused until you press Resume.
         </Text>

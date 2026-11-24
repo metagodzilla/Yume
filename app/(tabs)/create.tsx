@@ -4,11 +4,13 @@ import { useEffect, useState } from 'react';
 import { Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
+import { CheckpointSheet } from '@/components/CheckpointSheet';
 import { FrameGrid } from '@/components/FrameGrid';
 import { characterClause } from '@/src/lib/prompt';
 import { composeGenerationPrompt, drawFrames, generationParams, samplerId, sentPositiveText } from '@/src/lib/draw';
 import { sendClientReport } from '@/src/lib/clientReport';
 import { rememberFault } from '@/src/lib/reportText';
+import { baseLabel, modelCardPress } from '@/src/lib/checkpoints';
 import { SAMPLERS, sizesFor } from '@/src/lib/defaultModel';
 import { extractLoras } from '@/src/lib/a1111';
 import { loraPage } from '@/src/lib/civitai';
@@ -32,6 +34,7 @@ export default function GenerateScreen() {
   const [busy, setBusy] = useState(false);
   const [negativeOpen, setNegativeOpen] = useState(false);
   const [lastSeeds, setLastSeeds] = useState<number[]>([]);
+  const [picker, setPicker] = useState(false);
   const checkpoint = gen.installed.find((item) => item.versionId === gen.checkpointId) ?? gen.installed[0];
   const latest = studio.history[0];
   const parsed = extractLoras(gen.prompt).loras;
@@ -135,14 +138,20 @@ export default function GenerateScreen() {
             <Text style={styles.link}>Import</Text>
           </Pressable>
         </View>
-        <Pressable testID="gen-checkpoint" style={styles.checkpoint} onPress={() => router.push('/models')}>
+        <Pressable
+          testID="gen-checkpoint"
+          style={styles.checkpoint}
+          onPress={() => {
+            if (modelCardPress().action === 'open-sheet') setPicker(true);
+          }}>
           <View style={{ flex: 1 }}>
             <Text style={styles.checkpointName}>{checkpoint?.name ?? 'No checkpoint'}</Text>
             <Text style={styles.meta}>
-              {checkpoint?.baseModel} · {checkpoint?.isDefault ? 'Default' : checkpoint?.version} · browse Civitai
+              {baseLabel(checkpoint?.baseModel ?? '')} · {checkpoint?.isDefault ? 'Active' : checkpoint?.version}
             </Text>
           </View>
         </Pressable>
+        <CheckpointSheet visible={picker} onClose={() => setPicker(false)} />
         <Text style={styles.label}>Prompt</Text>
         <TextInput
           testID="gen-prompt"

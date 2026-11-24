@@ -6,7 +6,9 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { civitaiModelUrl, getCivitaiModel, loraFileName, thumbnailUrl, versionFile, type CivitaiModel, type CivitaiVersion } from '@/src/lib/civitai';
 import { openLink } from '@/src/lib/openLink';
-import { getGenerator, installLocal, patchGenerator, setDefaultCheckpoint, toggleLora, useGenerator } from '@/src/lib/genstore';
+import { applyCheckpoint, getGenerator, installLocal, patchGenerator, setDefaultCheckpoint, toggleLora, useGenerator } from '@/src/lib/genstore';
+import { defaultsForBase, toInstalled } from '@/src/lib/checkpoints';
+import { runCheckpointUse } from '@/src/lib/checkpointUse';
 import { sendClientReport } from '@/src/lib/clientReport';
 import { rememberFault } from '@/src/lib/reportText';
 import { runModelInstall } from '@/src/lib/modelInstall';
@@ -26,6 +28,7 @@ export default function ModelScreen() {
   const [status, setStatus] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [progress, setProgress] = useState(0);
+  const [offerUse, setOfferUse] = useState(false);
 
   useEffect(() => {
     if (!id) return;
@@ -72,6 +75,9 @@ export default function ModelScreen() {
           apiKey: key,
           civitaiToken: token,
           versionId: item.id,
+          type: model.type,
+          name: model.name,
+          filename: primary?.name,
           onProgress: (label, fraction) => {
             setStatus(label);
             setProgress(fraction);
@@ -82,6 +88,7 @@ export default function ModelScreen() {
         setStatus('Saved on this phone as installed. Demo mode does not download the weights.');
       }
       installLocal(record);
+      if (model.type === 'Checkpoint') setOfferUse(true);
       if (model.type === 'Checkpoint') {
         const meta = item.images?.[0]?.meta as { sampler?: string; steps?: number; cfgScale?: number } | null;
         if (meta?.sampler || meta?.steps || meta?.cfgScale) {
@@ -167,6 +174,57 @@ export default function ModelScreen() {
             <Pressable testID="model-install" style={styles.go} disabled={busy || installed} onPress={() => void install(version)}>
               <Text style={styles.goText}>{installed ? 'Installed' : busy ? 'Installing…' : 'Install'}</Text>
             </Pressable>
+            {model.type === 'Checkpoint' && offerUse ? (
+              <Pressable
+                testID="use-now"
+                onPress={() => {
+                  void (async () => {
+                    if (!version || busy) return;
+                    const defaults = defaultsForBase(version.baseModel);
+                    const resource = {
+                      versionId: version.id,
+                      modelId: model.id,
+                      name: model.name,
+                      version: version.name,
+                      type: model.type,
+                      baseModel: version.baseModel,
+                      filename: file?.name ?? `civitai-${version.id}.safetensors`,
+                      hash: (file?.hashes?.AutoV2 ?? '').toLowerCase(),
+                      sha256: file?.hashes?.SHA256 ?? '',
+                      triggers: version.trainedWords ?? [],
+                      isDefault: true,
+                    };
+                    setBusy(true);
+                    setError(null);
+                    try {
+                      if (studio.settings.provider === 'salad') {
+                        const endpoint = normalizeEndpoint(studio.settings.saladEndpoint);
+                        const key = await readSaladKey();
+                        if (!endpoint || !key) throw new Error('Connect a Salad gateway before loading this checkpoint.');
+                        setStatus('Loading checkpoint');
+                        await runCheckpointUse({
+                          endpoint,
+                          apiKey: key,
+                          versionId: version.id,
+                          onProgress: (label, fraction) => {
+                            setStatus(label);
+                            setProgress(fraction == null ? 0 : fraction / 100);
+                          },
+                        });
+                      }
+                      applyCheckpoint(toInstalled(resource), defaults);
+                      setOfferUse(false);
+                      setStatus('This checkpoint is loaded.');
+                    } catch (caught) {
+                      setError(caught instanceof Error ? caught.message : 'The checkpoint could not be loaded.');
+                    } finally {
+                      setBusy(false);
+                    }
+                  })();
+                }}>
+                <Text style={styles.link}>Use now</Text>
+              </Pressable>
+            ) : null}
             {model.type === 'Checkpoint' && installed ? (
               <Pressable
                 onPress={() => {
