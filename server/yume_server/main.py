@@ -32,6 +32,7 @@ from yume_server.jobs import pause as pause_job
 from yume_server.jobs import result as job_result
 from yume_server.jobs import resume as resume_job
 from yume_server.jobs import submit as submit_job
+from yume_server.startup import snapshot as startup_snapshot
 from yume_server.stats import collect as collect_stats
 
 state: dict[str, Any] = {"ready": False, "error": None}
@@ -212,6 +213,7 @@ app.add_middleware(
 @app.get("/health")
 def health() -> dict[str, Any]:
     stats = collect_stats()
+    progress = startup_snapshot()
     return {
         "status": "ok",
         "gpu": stats["gpu"],
@@ -219,7 +221,14 @@ def health() -> dict[str, Any]:
         "vramTotalMb": stats["vramTotalMb"],
         "model": "Animagine XL 4.0",
         "ready": state["ready"] and not state["error"],
+        "startup": progress,
     }
+
+
+@app.get("/startup")
+def startup() -> dict[str, Any]:
+    """Model download progress. This answers before /ready."""
+    return startup_snapshot()
 
 
 @app.get("/ready")

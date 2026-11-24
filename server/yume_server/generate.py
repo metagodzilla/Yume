@@ -75,26 +75,44 @@ def diffusers_ignore_patterns() -> tuple[str, ...]:
 
 def start_model() -> None:
     global _PIPE
+    from yume_server.startup import mark, note_download
+
     if mock_mode():
+        mark("ready", "Ready", done=1, total=1)
         return
     import torch
     from diffusers import StableDiffusionXLPipeline
     from huggingface_hub import snapshot_download
+    from tqdm.auto import tqdm
 
+    class _DownloadBar(tqdm):
+        def update(self, n=1):
+            shown = super().update(n)
+            note_download(int(self.n or 0), int(self.total or 0))
+            return shown
+
+    mark("downloading", "Downloading model")
     cache = os.environ.get("HF_HOME") or os.environ.get("YUME_MODEL_DIR") or "/models"
-    local = snapshot_download(
-        repo_id=model_id(),
-        cache_dir=os.path.join(cache, "hub"),
-        ignore_patterns=list(DIFFUSERS_IGNORE),
-    )
-    _PIPE = StableDiffusionXLPipeline.from_pretrained(
-        local,
-        torch_dtype=torch.float16,
-        use_safetensors=True,
-        local_files_only=True,
-    )
-    _PIPE.to("cuda")
-    _PIPE.enable_vae_slicing()
+    try:
+        local = snapshot_download(
+            repo_id=model_id(),
+            cache_dir=os.path.join(cache, "hub"),
+            ignore_patterns=list(DIFFUSERS_IGNORE),
+            tqdm_class=_DownloadBar,
+        )
+        mark("loading", "Loading the model")
+        _PIPE = StableDiffusionXLPipeline.from_pretrained(
+            local,
+            torch_dtype=torch.float16,
+            use_safetensors=True,
+            local_files_only=True,
+        )
+        _PIPE.to("cuda")
+        _PIPE.enable_vae_slicing()
+        mark("ready", "Ready", done=1, total=1)
+    except Exception as exc:
+        mark("error", str(exc))
+        raise
 
 
 def _apply_scheduler(pipe: Any, name: str) -> None:
