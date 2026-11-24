@@ -21,6 +21,10 @@ import { encodePng } from '@/src/lib/png';
 import { produceImages, resolveSeeds } from '@/src/lib/produce';
 import { renderDemoFrames } from '@/src/lib/render';
 import { describeUpdateError, downloadLabel } from '@/src/lib/apkInstall';
+import { redactValue } from '@/src/lib/reportText';
+import { buildSaladGenerateBody, composeGenerationPrompt, sentPositiveText } from '@/src/lib/draw';
+import type { GeneratorState } from '@/src/lib/genstore';
+import { installFailureMessage } from '@/src/lib/modelInstall';
 import { buildSaladBody, classifyGatewayInput, generateUrl, LIVE_GATEWAY_URL, migrateKeyStoredAsUrl, normalizeEndpoint, redactSecrets, saladErrorMessage } from '@/src/lib/salad';
 import { browsingParams, civitaiModelUrl, filterModels, loraPage, pickPreview, thumbnailUrl, type CivitaiModel } from '@/src/lib/civitai';
 import { buildYumeContainerGroup, choicesFromGpuClasses, costLine, describeDeploy, groupStatusOf, maskKey, normalizeSaladKey, pickDefaultGpu, saladFailureMessage, saladRequest, serverUrlFromLink, shouldIdleStop } from '@/src/lib/saladCloud';
@@ -541,6 +545,42 @@ assert(denial.includes('blocked Yume') && !denial.includes('Permission Denial') 
 assert(describeUpdateError(new Error('Android is asking Yume for permission to install apps. Turn on Allow from this source, then tap Update again.')).includes('Allow from this source'), 'unknown-apps prompt stays');
 assert(saladErrorMessage({ aborted: true }).toLowerCase().includes('waking'), 'cold start copy');
 assert(saladErrorMessage({ aborted: false, status: 503 }).toLowerCase().includes('not ready'), '503 copy');
+const previewState = {
+  prompt: '1girl',
+  negative: 'lowres',
+  sampler: 'Euler a',
+  steps: 25,
+  cfg: 6,
+  seed: '1',
+  seedRandom: false,
+  width: 832,
+  height: 1216,
+  clipSkip: 2,
+  count: 1,
+  qualityTags: true,
+  triggers: true,
+  checkpointId: 1337429,
+  loras: [{ name: '', weight: 0.8 }, { name: 'ribbon', weight: 0.8, triggers: [] }],
+  embeddings: ' , easynegative , ',
+  vae: '',
+  hires: false,
+  hiresScale: 1.5,
+  hiresDenoise: 0.45,
+  hiresUpscaler: 'Latent',
+  hiresSteps: 15,
+  mode: 'txt2img',
+  denoise: 0.55,
+  nsfw: false,
+  contentFilter: 'sfw',
+  installed: [{ versionId: 1337429, modelId: 1, name: 'Animagine XL 4.0', version: 'v4', type: 'Checkpoint', baseModel: 'SDXL 1.0', filename: 'animagine-xl-4.0.safetensors', hash: '1d5b43ff75', sha256: '', triggers: [], isDefault: true }],
+} as GeneratorState;
+const previewBody = buildSaladGenerateBody(previewState, composeGenerationPrompt(previewState), 1);
+assert(previewBody.loras.length === 1 && previewBody.loras[0]?.name === 'ribbon', 'empty lora is not sent');
+assert(previewBody.embeddings.length === 1 && previewBody.embeddings[0] === 'easynegative', 'empty embeddings are not sent');
+assert(previewBody.model === 'Animagine XL 4.0' && previewBody.scheduler === 'Euler a' && previewBody.hires_scale === null, 'create payload names the checkpoint');
+assert(sentPositiveText(previewState).includes('masterpiece') && sentPositiveText(previewState).includes('1girl') && sentPositiveText(previewState).includes('<lora:ribbon:0.8>'), 'final prompt matches the request');
+assert(installFailureMessage(502, 'error code: 502').retry && installFailureMessage(401, 'Civitai needs your API key').message.includes('Civitai needs your API key'), 'install 502 retries and 401 explains the token');
+assert(!JSON.stringify(redactValue({ apiKey: 'salad_cloud_user_secret', note: 'token=abc' })).includes('secret'), 'client report redacts secrets');
 assert(normalizeSaladKey('  salad_cloud_user_abc\r\n') === 'salad_cloud_user_abc', 'pasted key drops whitespace');
 assert(normalizeSaladKey('Salad-Api-Key: salad_cloud_user_abc') === 'salad_cloud_user_abc', 'pasted key drops a header label');
 const orgMiss = saladFailureMessage(404, 'https://api.salad.com/api/public/organizations');

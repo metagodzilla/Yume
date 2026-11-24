@@ -8,13 +8,37 @@ import { classifyGatewayInput, generateUrl, saladErrorMessage } from '@/src/lib/
 import { normalizeSaladKey } from '@/src/lib/saladCloud';
 import type { Character, SamplerId } from '@/src/lib/types';
 
+export function embeddingTokens(state: GeneratorState): string[] {
+  return state.embeddings.split(',').map((item) => item.trim()).filter(Boolean);
+}
+
+export function namedLoras(state: GeneratorState, prompt: string): { name: string; weight: number }[] {
+  const extracted = extractLoras(prompt);
+  const combined = [...state.loras, ...extracted.loras.filter((tag) => !state.loras.some((item) => item.name === tag.name))];
+  return combined
+    .map((lora) => ({ name: lora.name.trim(), weight: Number(lora.weight) || 0 }))
+    .filter((lora) => lora.name);
+}
+
 export function composeGenerationPrompt(state: GeneratorState, characterText = ''): string {
   const checkpoint = state.installed.find((item) => item.versionId === state.checkpointId);
+  const loraTriggers = state.triggers
+    ? state.loras
+        .flatMap((lora) => {
+          const match = state.installed.find(
+            (item) => (lora.versionId && item.versionId === lora.versionId) || item.filename === lora.name || item.name === lora.name,
+          );
+          return match?.triggers ?? [];
+        })
+        .filter(Boolean)
+        .join(', ')
+    : '';
   const bits = [
     state.qualityTags ? DEFAULT_CHECKPOINT.quality : '',
     state.triggers ? (checkpoint?.triggers ?? []).join(', ') : '',
+    loraTriggers,
     characterText.trim(),
-    state.embeddings.trim(),
+    embeddingTokens(state).join(', '),
     state.prompt.trim(),
   ];
   return bits.filter(Boolean).join(', ');
@@ -22,8 +46,7 @@ export function composeGenerationPrompt(state: GeneratorState, characterText = '
 
 export function generationParams(state: GeneratorState, prompt: string, seed: number): GenerationParams {
   const checkpoint = state.installed.find((item) => item.versionId === state.checkpointId);
-  const extracted = extractLoras(prompt);
-  const loras = [...state.loras, ...extracted.loras.filter((tag) => !state.loras.some((item) => item.name === tag.name))];
+  const loras = namedLoras(state, prompt);
   return {
     prompt,
     negative: state.negative,
@@ -55,6 +78,76 @@ const SAMPLER_ID: Record<string, SamplerId> = {
   Heun: 'euler',
   UniPC: 'dpm_2m',
 };
+
+export type SaladGenerateBody = {
+  prompt: string;
+  negative_prompt: string;
+  width: number;
+  height: number;
+  count: number;
+  seed: number;
+  steps: number;
+  cfg: number;
+  scheduler: string;
+  model: string;
+  model_name: string;
+  model_hash: string;
+  clip_skip: number;
+  loras: { name: string; weight: number }[];
+  embeddings: string[];
+  vae: string | null;
+  hires_scale: number | null;
+  hires_denoise: number;
+  hires_upscaler: string;
+  hires_steps: number;
+  mode: GeneratorState['mode'];
+  strength: number;
+  reference_image: string | null;
+  mask: string | null;
+};
+
+export function buildSaladGenerateBody(
+  state: GeneratorState,
+  prompt: string,
+  seed: number,
+  initPng?: Uint8Array | null,
+  maskPng?: Uint8Array | null,
+): SaladGenerateBody {
+  const params = generationParams(state, prompt, seed);
+  return {
+    prompt,
+    negative_prompt: state.negative,
+    width: state.width,
+    height: state.height,
+    count: state.count,
+    seed,
+    steps: state.steps,
+    cfg: state.cfg,
+    scheduler: state.sampler,
+    model: params.model,
+    model_name: params.model,
+    model_hash: params.modelHash,
+    clip_skip: state.clipSkip,
+    loras: namedLoras(state, prompt).map((lora) => ({ name: lora.name, weight: lora.weight })),
+    embeddings: embeddingTokens(state),
+    vae: state.vae || null,
+    hires_scale: state.hires ? state.hiresScale : null,
+    hires_denoise: state.hiresDenoise,
+    hires_upscaler: state.hiresUpscaler,
+    hires_steps: state.hiresSteps,
+    mode: state.mode,
+    strength: state.denoise,
+    reference_image: initPng ? bytesToBase64(initPng) : null,
+    mask: maskPng ? bytesToBase64(maskPng) : null,
+  };
+}
+
+export function sentPositiveText(state: GeneratorState, characterText = ''): string {
+  const prompt = composeGenerationPrompt(state, characterText);
+  const body = buildSaladGenerateBody(state, prompt, 0);
+  const tags = body.loras.map((lora) => `<lora:${lora.name}:${lora.weight}>`).filter((tag) => !body.prompt.includes(tag));
+  return [body.prompt, ...tags].filter(Boolean).join(', ');
+}
 
 export function samplerId(name: string): SamplerId {
   return SAMPLER_ID[name] ?? 'euler_a';
@@ -113,32 +206,7 @@ export async function drawFrames(input: {
         'X-Api-Key': apiKey,
         'Salad-Api-Key': apiKey,
       },
-      body: JSON.stringify({
-        prompt: input.prompt,
-        negative_prompt: input.state.negative,
-        width: input.state.width,
-        height: input.state.height,
-        count: input.state.count,
-        seed: input.seed,
-        steps: input.state.steps,
-        cfg: input.state.cfg,
-        scheduler: input.state.sampler,
-        model: params.model,
-        model_name: params.model,
-        model_hash: params.modelHash,
-        clip_skip: input.state.clipSkip,
-        loras: params.loras,
-        embeddings: input.state.embeddings.split(',').map((item) => item.trim()).filter(Boolean),
-        vae: input.state.vae || null,
-        hires_scale: input.state.hires ? input.state.hiresScale : null,
-        hires_denoise: input.state.hiresDenoise,
-        hires_upscaler: input.state.hiresUpscaler,
-        hires_steps: input.state.hiresSteps,
-        mode: input.state.mode,
-        strength: input.state.denoise,
-        reference_image: input.initPng ? bytesToBase64(input.initPng) : null,
-        mask: input.maskPng ? bytesToBase64(input.maskPng) : null,
-      }),
+      body: JSON.stringify(buildSaladGenerateBody(input.state, input.prompt, input.seed, input.initPng, input.maskPng)),
     });
   } catch (error) {
     const aborted = error instanceof Error && error.name === 'AbortError';

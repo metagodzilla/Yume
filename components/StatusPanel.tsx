@@ -1,7 +1,10 @@
+import * as Clipboard from 'expo-clipboard';
 import { router, useFocusEffect } from 'expo-router';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { ActivityIndicator, AppState, Platform, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
 
+import { clientReportBody, fetchServerErrors, sendClientReport } from '@/src/lib/clientReport';
+import { rememberFault, reportDocument, type ServerFault } from '@/src/lib/reportText';
 import { changeContainerGroup, containerGroupUrl, readContainerGroup, readContainerInstances } from '@/src/lib/cloudActions';
 import { capReached, checkLine, cloudChecklist, deploymentForEndpoint, formatCostLine, hostOf, LIVE_GATEWAY, resolveHourly, sessionUsd, type CheckLine, type ChecklistStep } from '@/src/lib/cloudSteps';
 import { confirmAction } from '@/src/lib/confirm';
@@ -49,6 +52,8 @@ export function StatusPanel({ preview = '' }: { preview?: string }) {
   const [liveTitle, setLiveTitle] = useState('Cloud is stopped');
   const [checkNote, setCheckNote] = useState(CHECK_HELP);
   const [checks, setChecks] = useState<CheckLine[]>([]);
+  const [serverErrors, setServerErrors] = useState<ServerFault[]>([]);
+  const [openError, setOpenError] = useState<number | null>(null);
   const [checking, setChecking] = useState(false);
   const [note, setNote] = useState<string | null>(null);
   const [upSec, setUpSec] = useState(0);
@@ -182,7 +187,21 @@ export function StatusPanel({ preview = '' }: { preview?: string }) {
   function onCheck() {
     setChecking(true);
     setCheckNote('Checking...');
-    void refresh(true).finally(() => setChecking(false));
+    void refresh(true)
+      .finally(() => setChecking(false))
+      .then(async () => {
+        const endpoint = normalizeEndpoint(studio.settings.saladEndpoint);
+        const key = normalizeSaladKey((await readSaladKey()) || '');
+        if (!endpoint || !key) return;
+        try {
+          await sendClientReport(endpoint, key);
+          setServerErrors(await fetchServerErrors(endpoint, key));
+        } catch (caught) {
+          const message = caught instanceof Error ? caught.message : 'Could not read server errors.';
+          rememberFault({ time: Date.now(), source: 'check', message, endpoint });
+          setServerErrors([{ message }]);
+        }
+      });
   }
 
   useFocusEffect(
@@ -327,6 +346,20 @@ export function StatusPanel({ preview = '' }: { preview?: string }) {
         {studio.cloudNotice ? (
           <Text testID="cloud-notice" style={styles.notice}>{studio.cloudNotice}</Text>
         ) : null}
+        {serverErrors.slice(0, 3).map((item, index) => (
+          <View key={`${item.time ?? index}-${item.endpoint ?? ''}`}>
+            <Text style={styles.help}>
+              {item.endpoint || 'server'} {item.status ? `HTTP ${item.status}` : ''} — {item.message || 'Error'}
+            </Text>
+            <Pressable onPress={() => setOpenError(openError === index ? null : index)}>
+              <Text style={styles.link}>Show details</Text>
+            </Pressable>
+            {openError === index ? <Text selectable style={styles.help}>{item.traceback || item.message}</Text> : null}
+          </View>
+        ))}
+        <Pressable testID="copy-report" onPress={() => void Clipboard.setStringAsync(reportDocument(serverErrors, clientReportBody()))}>
+          <Text style={styles.link}>Copy report</Text>
+        </Pressable>
         {wrongServer ? (
           <Pressable testID="use-live-server" onPress={() => void studio.saveSaladEndpoint(LIVE_GATEWAY_URL)}>
             <Text style={styles.link}>Use live server</Text>
@@ -360,7 +393,10 @@ export function StatusPanel({ preview = '' }: { preview?: string }) {
           Cloud {stats.gpu && stats.gpu !== 'Unknown' ? stats.gpu : 'n/a'} · {phase} · Up {Math.round(upSec / 60)} min · {money(rate)}/h · {money(spent)} session · GPU power {gpuPower} · util{' '}
           {stats.utilPercent ?? 'n/a'}% · VRAM {stats.vramUsedMb ?? 'n/a'}/{stats.vramTotalMb ?? 'n/a'} MB
         </Text>
-        <Text style={styles.help}>GPU power stays n/a until a rebuilt server image reports powerWatts from nvidia-smi. Phone watts are an estimate from current and voltage.</Text>
+        <Text style={styles.help}>
+          {stats.powerWatts == null ? 'GPU power stays n/a until a rebuilt server image reports powerWatts from nvidia-smi. ' : ''}
+          Phone watts are an estimate from current and voltage.
+        </Text>
         <View style={styles.fields}>
           <Text style={styles.fieldLabel}>Hourly rate (USD)</Text>
           <TextInput

@@ -8,16 +8,23 @@ which is what the startup and readiness probes should call.
 from __future__ import annotations
 
 import asyncio
+import contextvars
+import json
+import logging
 import os
+import traceback
 from contextlib import asynccontextmanager
 from typing import Any
 
 from fastapi import FastAPI, HTTPException, Request
+from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
 from yume_mesh.generate import generate_mesh
-from yume_server.catalog import CivitaiAuthError, delete_version, ensure_default, install_version, list_models, set_default
+from yume_server.catalog import delete_version, ensure_default, install_progress, list_models, set_default, start_install
+from yume_server.errors import add_client_report, list_errors, record_error, sanitize
 from yume_server.generate import A1111_SAMPLERS, SCHEDULERS, generate_images, mock_mode, start_model
 from yume_server.jobs import cancel as cancel_job
 from yume_server.jobs import get as get_job
@@ -28,6 +35,7 @@ from yume_server.jobs import submit as submit_job
 from yume_server.stats import collect as collect_stats
 
 state: dict[str, Any] = {"ready": False, "error": None}
+_PAYLOAD: contextvars.ContextVar[Any] = contextvars.ContextVar("yume_payload", default=None)
 
 
 class LoraIn(BaseModel):
@@ -131,6 +139,68 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="Yume Salad", lifespan=lifespan)
+_LOG = logging.getLogger("yume")
+
+
+def _note(request: Request, status: int, detail: str, trace: str = "") -> None:
+    if request.url.path in {"/health", "/ready"}:
+        return
+    record_error(endpoint=request.url.path, status=status, message=detail, payload=_PAYLOAD.get(), trace=trace)
+
+
+@app.exception_handler(RequestValidationError)
+async def readable_validation(request: Request, exc: RequestValidationError) -> JSONResponse:
+    parts = []
+    for err in exc.errors():
+        loc = ".".join(str(item) for item in err.get("loc", []) if item != "body")
+        message = str(err.get("msg") or "invalid")
+        parts.append(f"{loc}: {message}" if loc else message)
+    detail = "; ".join(parts) or "The request could not be read."
+    _note(request, 400, detail)
+    return JSONResponse(status_code=400, content={"detail": detail})
+
+
+@app.exception_handler(HTTPException)
+async def readable_http(request: Request, exc: HTTPException) -> JSONResponse:
+    detail = exc.detail if isinstance(exc.detail, str) else str(exc.detail)
+    _note(request, exc.status_code, detail)
+    return JSONResponse(status_code=exc.status_code, content={"detail": detail})
+
+
+@app.exception_handler(Exception)
+async def readable_crash(request: Request, exc: Exception) -> JSONResponse:
+    _LOG.exception("unhandled error on %s", request.url.path)
+    detail = str(exc).strip() or "Internal Server Error"
+    _note(request, 500, detail, traceback.format_exc())
+    return JSONResponse(status_code=500, content={"detail": detail})
+
+
+@app.middleware("http")
+async def capture_payload(request: Request, call_next):
+    raw = await request.body()
+    payload: Any = None
+    if raw:
+        try:
+            payload = json.loads(raw)
+        except (json.JSONDecodeError, UnicodeError):
+            payload = raw[:300].decode("utf-8", "replace")
+    token = _PAYLOAD.set(sanitize(payload))
+
+    sent = False
+
+    async def receive():
+        nonlocal sent
+        if sent:
+            return {"type": "http.request", "body": b"", "more_body": False}
+        sent = True
+        return {"type": "http.request", "body": raw, "more_body": False}
+
+    try:
+        return await call_next(Request(request.scope, receive))
+    finally:
+        _PAYLOAD.reset(token)
+
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -251,6 +321,27 @@ class DefaultIn(BaseModel):
     versionId: int
 
 
+class ClientReportIn(BaseModel):
+    appVersion: str = ""
+    versionCode: int | None = None
+    device: str = ""
+    errors: list[dict[str, Any]] = []
+    request: dict[str, Any] | None = None
+
+
+@app.get("/errors")
+def errors(request: Request) -> dict[str, Any]:
+    _check_key(request)
+    return {"errors": list_errors()}
+
+
+@app.post("/client-report")
+def client_report(body: ClientReportIn, request: Request) -> dict[str, str]:
+    _check_key(request)
+    add_client_report(body.model_dump())
+    return {"status": "stored"}
+
+
 @app.get("/models")
 def models(request: Request) -> dict[str, Any]:
     _check_key(request)
@@ -261,13 +352,16 @@ def models(request: Request) -> dict[str, Any]:
 def install(body: InstallIn, request: Request) -> dict[str, Any]:
     _check_key(request)
     token = request.headers.get("x-civitai-token", "").strip() or None
+    return start_install(body.versionId, token)
+
+
+@app.get("/models/install/{job_id}")
+def install_status(job_id: str, request: Request) -> dict[str, Any]:
+    _check_key(request)
     try:
-        record = install_version(body.versionId, token)
-    except CivitaiAuthError as exc:
-        raise HTTPException(status_code=401, detail=str(exc)) from exc
-    except Exception as exc:  # noqa: BLE001 - the download can fail for network or HTTP reasons
-        raise HTTPException(status_code=502, detail=str(exc)) from exc
-    return record
+        return install_progress(job_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="No install job with that id.") from exc
 
 
 @app.delete("/models/{version_id}")
@@ -305,6 +399,12 @@ def generate(body: GenerateIn, request: Request) -> dict[str, Any]:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        _LOG.exception("generate could not run")
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    except Exception as exc:
+        _LOG.exception("generate failed")
+        raise HTTPException(status_code=400, detail=str(exc) or "The picture could not be drawn.") from exc
     return {
         "images": images,
         "seeds": seeds,

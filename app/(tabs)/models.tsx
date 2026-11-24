@@ -4,6 +4,7 @@ import { Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { ModelThumb } from '@/components/ModelThumb';
+import { rememberFault } from '@/src/lib/reportText';
 import { civitaiModelUrl, errorText, loraFileName, loraPage, searchCivitai, type CivitaiModel, type ContentFilter } from '@/src/lib/civitai';
 import { BASE_MODELS, MODEL_TYPES, SORTS } from '@/src/lib/defaultModel';
 import { patchGenerator, toggleLora, useGenerator } from '@/src/lib/genstore';
@@ -60,7 +61,9 @@ export default function ModelsScreen() {
       setCursor(pageCursor);
     } catch (caught) {
       if (ticket !== request.current) return;
-      setError(errorText(caught));
+      const message = errorText(caught);
+      setError(message);
+      rememberFault({ time: Date.now(), source: 'search', message, endpoint: 'https://civitai.com/api/v1/models' });
     } finally {
       if (ticket === request.current) setBusy(false);
     }

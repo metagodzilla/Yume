@@ -7,8 +7,11 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { civitaiModelUrl, getCivitaiModel, loraFileName, thumbnailUrl, versionFile, type CivitaiModel, type CivitaiVersion } from '@/src/lib/civitai';
 import { openLink } from '@/src/lib/openLink';
 import { getGenerator, installLocal, patchGenerator, setDefaultCheckpoint, toggleLora, useGenerator } from '@/src/lib/genstore';
+import { sendClientReport } from '@/src/lib/clientReport';
+import { rememberFault } from '@/src/lib/reportText';
+import { runModelInstall } from '@/src/lib/modelInstall';
 import { readCivitaiToken, readSaladKey } from '@/src/lib/storage';
-import { normalizeEndpoint, saladErrorMessage } from '@/src/lib/salad';
+import { normalizeEndpoint } from '@/src/lib/salad';
 import { useStudio } from '@/src/studio';
 import { colors, font } from '@/src/theme';
 
@@ -22,6 +25,7 @@ export default function ModelScreen() {
   const [error, setError] = useState<string | null>(null);
   const [status, setStatus] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [progress, setProgress] = useState(0);
 
   useEffect(() => {
     if (!id) return;
@@ -61,29 +65,19 @@ export default function ModelScreen() {
         const endpoint = normalizeEndpoint(studio.settings.saladEndpoint);
         const [key, token] = await Promise.all([readSaladKey(), readCivitaiToken()]);
         if (!endpoint || !key) throw new Error('Salad needs an endpoint and API key before it can download a file.');
-        setStatus('Asking the Salad container to download this version…');
-        const response = await fetch(`${endpoint}/models/install`, {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            Authorization: `Bearer ${key}`,
-            'Salad-Api-Key': key,
-            ...(token ? { 'X-Civitai-Token': token } : {}),
+        setStatus('Download queued');
+        setProgress(0);
+        await runModelInstall({
+          endpoint,
+          apiKey: key,
+          civitaiToken: token,
+          versionId: item.id,
+          onProgress: (label, fraction) => {
+            setStatus(label);
+            setProgress(fraction);
           },
-          body: JSON.stringify({ versionId: item.id }),
         });
-        if (!response.ok) {
-          const raw = await response.text();
-          let detail = '';
-          try {
-            const parsed = JSON.parse(raw) as { detail?: unknown };
-            if (typeof parsed.detail === 'string') detail = parsed.detail;
-          } catch {
-            detail = '';
-          }
-          if (/civitai/i.test(detail)) throw new Error(detail);
-          throw new Error(saladErrorMessage({ aborted: false, status: response.status, body: raw }));
-        }
+        setStatus('Installed on the Salad container.');
       } else {
         setStatus('Saved on this phone as installed. Demo mode does not download the weights.');
       }
@@ -99,7 +93,12 @@ export default function ModelScreen() {
         }
       }
     } catch (caught) {
-      setError(caught instanceof Error ? caught.message : 'Install failed.');
+      const message = caught instanceof Error ? caught.message : 'Install failed.';
+      setError(message);
+      const endpoint = normalizeEndpoint(studio.settings.saladEndpoint);
+      rememberFault({ time: Date.now(), source: 'install', message, endpoint, payload: { versionId: item.id } });
+      const key = await readSaladKey();
+      if (endpoint && key) void sendClientReport(endpoint, key).catch(() => undefined);
     } finally {
       setBusy(false);
     }
@@ -160,6 +159,11 @@ export default function ModelScreen() {
                 <Text style={styles.link}>Use this LoRA</Text>
               </Pressable>
             ) : null}
+            {busy ? (
+              <View testID="install-progress" style={styles.track}>
+                <View style={[styles.bar, { width: `${Math.round(progress * 100)}%` }]} />
+              </View>
+            ) : null}
             <Pressable testID="model-install" style={styles.go} disabled={busy || installed} onPress={() => void install(version)}>
               <Text style={styles.goText}>{installed ? 'Installed' : busy ? 'Installing…' : 'Install'}</Text>
             </Pressable>
@@ -204,6 +208,8 @@ const styles = StyleSheet.create({
   chip: { borderRadius: 999, borderWidth: 1, borderColor: colors.line, paddingHorizontal: 10, paddingVertical: 6 },
   chipOn: { borderColor: colors.sakura },
   chipText: { color: colors.text, fontFamily: font.bold, fontSize: 13 },
+  track: { height: 8, borderRadius: 999, backgroundColor: colors.ink, overflow: 'hidden' },
+  bar: { height: 8, backgroundColor: colors.sakura },
   go: { backgroundColor: colors.sakura, borderRadius: 999, paddingVertical: 12, alignItems: 'center' },
   goText: { color: colors.ink, fontFamily: font.black, fontSize: 16 },
   ok: { color: colors.ok, fontFamily: font.semibold, fontSize: 14 },

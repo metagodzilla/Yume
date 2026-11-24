@@ -1,3 +1,4 @@
+import * as Clipboard from 'expo-clipboard';
 import { router } from 'expo-router';
 import { useEffect, useState } from 'react';
 import { Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
@@ -5,7 +6,9 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { FrameGrid } from '@/components/FrameGrid';
 import { characterClause } from '@/src/lib/prompt';
-import { composeGenerationPrompt, drawFrames, generationParams, samplerId } from '@/src/lib/draw';
+import { composeGenerationPrompt, drawFrames, generationParams, samplerId, sentPositiveText } from '@/src/lib/draw';
+import { sendClientReport } from '@/src/lib/clientReport';
+import { rememberFault } from '@/src/lib/reportText';
 import { SAMPLERS, sizesFor } from '@/src/lib/defaultModel';
 import { extractLoras } from '@/src/lib/a1111';
 import { loraPage } from '@/src/lib/civitai';
@@ -26,10 +29,13 @@ export default function GenerateScreen() {
   const [status, setStatus] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [negativeOpen, setNegativeOpen] = useState(false);
   const checkpoint = gen.installed.find((item) => item.versionId === gen.checkpointId) ?? gen.installed[0];
   const latest = studio.history[0];
   const parsed = extractLoras(gen.prompt).loras;
   const character = studio.selectedCharacter;
+  const characterText = character ? characterClause(character) : '';
+  const finalPrompt = sentPositiveText(gen, characterText);
 
   useEffect(() => {
     void import('@/src/lib/genstore').then(({ hydrateFromDisk }) => hydrateFromDisk());
@@ -103,7 +109,12 @@ export default function GenerateScreen() {
       else patchGenerator({ seed: String(seed), seedRandom: false });
       setStatus(result.warning ?? 'Saved. The PNG carries Automatic1111 parameters, so Civitai can read the resources.');
     } catch (caught) {
-      setError(caught instanceof Error ? caught.message : 'The image could not be drawn.');
+      const message = caught instanceof Error ? caught.message : 'The image could not be drawn.';
+      setError(message);
+      const endpoint = normalizeEndpoint(studio.settings.saladEndpoint);
+      rememberFault({ time: Date.now(), source: 'generate', message, endpoint });
+      const key = await readSaladKey();
+      if (endpoint && key) void sendClientReport(endpoint, key).catch(() => undefined);
     } finally {
       setBusy(false);
     }
@@ -139,6 +150,25 @@ export default function GenerateScreen() {
           multiline
           style={styles.prompt}
         />
+        <View style={styles.finalBox}>
+          <View style={styles.row}>
+            <Text style={styles.label}>Final prompt</Text>
+            <Pressable testID="copy-final-prompt" onPress={() => void Clipboard.setStringAsync(finalPrompt)}>
+              <Text style={styles.link}>Copy</Text>
+            </Pressable>
+          </View>
+          <Text testID="final-prompt" selectable style={styles.final}>
+            {finalPrompt || 'The prompt is empty.'}
+          </Text>
+          <Pressable onPress={() => setNegativeOpen((open) => !open)}>
+            <Text style={styles.hint}>{negativeOpen ? 'Hide final negative' : 'Final negative'}</Text>
+          </Pressable>
+          {negativeOpen ? (
+            <Text testID="final-negative" selectable style={styles.final}>
+              {gen.negative || 'No negative prompt.'}
+            </Text>
+          ) : null}
+        </View>
         <Text style={styles.hint}>
           (word:1.2) weights, [de-emphasis], {'<lora:name:0.8>'}, BREAK, and embedding names are kept. Quality tags and trigger words can be added in front.
         </Text>
@@ -347,6 +377,8 @@ const styles = StyleSheet.create({
   checkpointName: { color: colors.text, fontFamily: font.black, fontSize: 16 },
   meta: { color: colors.muted, fontFamily: font.semibold, fontSize: 13 },
   label: { color: colors.sakura, fontFamily: font.black, fontSize: 12, letterSpacing: 0.8, textTransform: 'uppercase' },
+  finalBox: { gap: 6, borderRadius: 12, borderWidth: 1, borderColor: colors.line, padding: 10 },
+  final: { color: colors.text, fontFamily: font.semibold, fontSize: 13, lineHeight: 18 },
   prompt: {
     minHeight: 110,
     borderRadius: 16,
