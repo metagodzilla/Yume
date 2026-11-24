@@ -1,0 +1,18 @@
+plugins {
+  id 'com.android.library'
+  id 'expo-module-gradle-plugin'
+}
+
+group = 'app.yume.studio'
+version = '1.0.0'
+
+android {
+  namespace "expo.modules.yumequeue"
+  defaultConfig {
+    minSdk 24
+  }
+}
+
+dependencies {
+  implementation "androidx.core:core:1.15.0"
+}

@@ -1,0 +1,51 @@
+name: Publish server image
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - "server/**"
+      - ".github/workflows/server-image.yml"
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  docker:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - uses: docker/build-push-action@v6
+        id: build
+        with:
+          context: server
+          file: server/Dockerfile
+          target: gpu
+          push: true
+          tags: |
+            ghcr.io/metagodzilla/yume-server:latest
+            ghcr.io/metagodzilla/yume-server:1.2.0
+      - name: Record the image digest
+        run: echo "digest=${{ steps.build.outputs.digest }}"
+      - name: Make the GHCR package public
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set +e
+          gh api --method PUT "/user/packages/container/yume-server/visibility?visibility=public"
+          user_status=$?
+          gh api --method PUT "/repos/${{ github.repository }}/packages/container/yume-server/visibility?visibility=public"
+          repo_status=$?
+          if [ "$user_status" -ne 0 ] && [ "$repo_status" -ne 0 ]; then
+            echo "Package visibility was not changed. GITHUB_TOKEN often cannot change it."
+            echo "Settings: https://github.com/users/metagodzilla/packages/container/yume-server/settings"
+            exit 0
+          fi

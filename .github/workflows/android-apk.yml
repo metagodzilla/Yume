@@ -1,0 +1,41 @@
+name: Android APK
+
+on:
+  workflow_dispatch:
+
+jobs:
+  apk:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+      - name: Install the Android SDK
+        run: |
+          set -euo pipefail
+          SDK="$HOME/android-sdk"
+          mkdir -p "$SDK/cmdline-tools"
+          curl -fsSL -o /tmp/cmdtools.zip https://dl.google.com/android/repository/commandlinetools-linux-13114758_latest.zip
+          rm -rf /tmp/cmdline-extract
+          unzip -q /tmp/cmdtools.zip -d /tmp/cmdline-extract
+          mv /tmp/cmdline-extract/cmdline-tools "$SDK/cmdline-tools/latest"
+          export ANDROID_HOME="$SDK"
+          export PATH="$SDK/cmdline-tools/latest/bin:$PATH"
+          yes | sdkmanager --licenses >/dev/null || true
+          sdkmanager --install "platform-tools" "platforms;android-37.0" "build-tools;37.0.0" "ndk;27.1.12297006" "cmake;3.22.1"
+          ln -sfn android-37.0 "$SDK/platforms/android-37"
+          echo "ANDROID_HOME=$SDK" >> "$GITHUB_ENV"
+      - run: npm ci
+      - run: npm run build:apk
+        env:
+          ANDROID_HOME: ${{ env.ANDROID_HOME }}
+      - uses: actions/upload-artifact@v4
+        with:
+          name: yume-1.2.0
+          path: dist/yume-1.2.0.apk
