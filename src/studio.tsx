@@ -385,6 +385,7 @@ export function StudioProvider({ children }: { children: ReactNode }) {
 
   const generate = useCallback(async () => {
     if (loading) return;
+    void import('@/src/lib/storage').then(({ touchCloudActivity }) => touchCloudActivity());
     setError(null);
     const sent = (previewDirty ? preview : composePreview({
       userPrompt: prompt,

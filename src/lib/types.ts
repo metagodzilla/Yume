@@ -140,6 +140,8 @@ export type Settings = {
   spendCap: number;
   autoResume: boolean;
   sourceMode: 'cloud' | 'phone' | 'auto';
+  setupComplete: boolean;
+  idleStopMinutes: number;
 };
 
 export type Session = {
@@ -184,6 +186,8 @@ export const DEFAULT_SETTINGS: Settings = {
   spendCap: 0,
   autoResume: true,
   sourceMode: 'auto',
+  setupComplete: false,
+  idleStopMinutes: 0,
 };
 
 export const DEFAULT_SESSION: Session = {

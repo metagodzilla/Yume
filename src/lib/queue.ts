@@ -1,4 +1,4 @@
-export type JobKind = 'generate' | 'mesh' | 'install' | 'update' | 'offline-download' | 'offline-generate';
+export type JobKind = 'generate' | 'mesh' | 'install' | 'update' | 'offline-download' | 'offline-generate' | 'deploy';
 
 export type JobStatus = 'waiting' | 'running' | 'paused' | 'done' | 'failed' | 'cancelled';
 
@@ -121,6 +121,15 @@ export function markProgress(state: QueueState, id: string, progress: number): Q
 
 export function markDone(state: QueueState, id: string): QueueState {
   return mapJob(state, id, (job) => ({ ...job, status: 'done', progress: 1 }));
+}
+
+export function noteJob(state: QueueState, id: string, progress: number, reason: string, status: JobStatus = 'running'): QueueState {
+  return mapJob(state, id, (job) => ({
+    ...job,
+    status,
+    progress: Math.max(0, Math.min(1, progress)),
+    reason,
+  }));
 }
 
 export function markFailed(state: QueueState, id: string, error: string, online: boolean): { state: QueueState; effects: QueueEffect[] } {

@@ -2,7 +2,7 @@ import { useSyncExternalStore } from 'react';
 
 import { publishQueue } from 'yume-queue';
 
-import { counts, emptyQueue, enqueue, moveToTop, pauseAll, pauseJob, recover, resumeAll, resumeJob, cancelAll, cancelJob, type JobKind, type QueueState } from '@/src/lib/queue';
+import { counts, emptyQueue, enqueue, moveToTop, pauseAll, pauseJob, recover, resumeAll, resumeJob, cancelAll, cancelJob, markDone, noteJob, type JobKind, type JobStatus, type QueueState } from '@/src/lib/queue';
 
 let state: QueueState = emptyQueue(true);
 const listeners = new Set<() => void>();
@@ -81,4 +81,14 @@ export function setQueueOnline(online: boolean) {
 
 export function queueCounts() {
   return counts(state);
+}
+
+export function reportJob(id: string, progress: number, reason: string, status: JobStatus = 'running') {
+  state = noteJob(state, id, progress, reason, status);
+  emit();
+}
+
+export function finishJob(id: string) {
+  state = markDone(state, id);
+  emit();
 }

@@ -1,5 +1,5 @@
-import { router } from 'expo-router';
-import { useState } from 'react';
+import { router, useLocalSearchParams } from 'expo-router';
+import { useEffect, useRef, useState } from 'react';
 import { Platform, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
@@ -13,8 +13,10 @@ type Check = { name: string; status: 'pass' | 'fail' | 'warn'; detail: string };
 
 export default function CloudCheckScreen() {
   const studio = useStudio();
+  const params = useLocalSearchParams<{ auto?: string }>();
   const [checks, setChecks] = useState<Check[]>([]);
   const [busy, setBusy] = useState(false);
+  const started = useRef(false);
 
   async function run() {
     setBusy(true);
@@ -71,6 +73,13 @@ export default function CloudCheckScreen() {
     pushLog('info', `Cloud check finished with ${next.filter((item) => item.status === 'fail').length} failures.`);
     setBusy(false);
   }
+
+  useEffect(() => {
+    if (params.auto === '1' && !started.current && studio.ready) {
+      started.current = true;
+      void run();
+    }
+  }, [params.auto, studio.ready]);
 
   return (
     <SafeAreaView style={styles.safe} edges={['top']}>

@@ -21,6 +21,7 @@ import { encodePng } from '@/src/lib/png';
 import { produceImages, resolveSeeds } from '@/src/lib/produce';
 import { renderDemoFrames } from '@/src/lib/render';
 import { buildSaladBody, saladErrorMessage } from '@/src/lib/salad';
+import { buildYumeContainerGroup, choicesFromGpuClasses, costLine, describeDeploy, maskKey, pickDefaultGpu, serverUrlFromLink, shouldIdleStop } from '@/src/lib/saladCloud';
 import { composeSheet, decodePng } from '@/src/lib/sheet';
 import { applyInstruction, consistencyNote, expressionPrompt, undoVersion, viewPrompt } from '@/src/lib/turnaround';
 import type { Character } from '@/src/lib/types';
@@ -417,6 +418,37 @@ const undone = undoVersion({
 assert(undone?.versions.length === 1 && undone.versions[0]?.id === 'a', 'undo did not restore the earlier sheet');
 assert(undoVersion({ characterId: 'aoi', seed: 1, versions: [] }) === null, 'undo of an empty book should refuse');
 
+const container = buildYumeContainerGroup({ apiKey: 'salad-key', gpuClassId: 'gpu-4090' }) as {
+  container: { image: string; priority: string; environment_variables: Record<string, string>; resources: { gpu_classes: string[]; cpu: number; memory: number; storage_amount: number } };
+  networking: { port: number; auth: boolean };
+  startup_probe: { http: { path: string } };
+  readiness_probe: { http: { path: string } };
+  liveness_probe: { http: { path: string } };
+};
+assert(container.container.image === 'ghcr.io/metagodzilla/yume-server:latest', 'deploy image');
+assert(container.container.priority === 'low' && container.networking.port === 8080 && container.networking.auth === true, 'deploy gateway');
+assert(container.startup_probe.http.path === '/ready' && container.readiness_probe.http.path === '/ready' && container.liveness_probe.http.path === '/health', 'deploy probes');
+assert(container.container.environment_variables.HF_HOME === '/models' && container.container.environment_variables.YUME_MODEL_ID === 'cagliostrolab/animagine-xl-4.0', 'deploy model env');
+assert(container.container.environment_variables.YUME_MODEL_DIR === '/models' && !('CIVITAI_TOKEN' in container.container.environment_variables), 'model dir without civitai token');
+assert(container.container.resources.cpu === 4 && container.container.resources.memory === 16384 && container.container.resources.storage_amount === 26843545600, 'deploy size');
+const gpus = choicesFromGpuClasses({
+  items: [
+    { id: 'a', name: 'RTX 3090 (24 GB)', prices: [{ priority: 'low', price: '0.127' }] },
+    { id: 'b', name: 'RTX 4090 (24 GB)', prices: [{ priority: 'high', price: '0.440' }, { priority: 'low', price: '0.160' }] },
+  ],
+});
+assert(pickDefaultGpu(gpus)?.id === 'b' && pickDefaultGpu(gpus)?.hourly === 0.16, 'default 4090 low');
+assert(costLine(0.16, 'RTX 4090 (24 GB)').includes('$0.160 per hour') && costLine(0.16, 'RTX 4090 (24 GB)').includes('$3.84 per day'), 'cost line');
+assert(describeDeploy({ creating: 1 }).title === 'Pulling the image', 'pulling phase');
+assert(describeDeploy({ running: 1, groupStatus: 'running' }).title === 'Downloading the model', 'model phase');
+assert(describeDeploy({ running: 1, ready: true }).phase === 'ready', 'ready phase');
+assert(serverUrlFromLink('yume://setup?url=https://example.salad.cloud&key=secret') === 'https://example.salad.cloud', 'deep link drops the key');
+assert(serverUrlFromLink('https://example.salad.cloud/path?apiKey=secret') === 'https://example.salad.cloud/path', 'https link drops the key');
+assert(serverUrlFromLink('yume://setup?key=secret') === null, 'key-only link is ignored');
+assert(maskKey('supersecretvalue') === '••••alue' && !maskKey('supersecretvalue').includes('supersecret'), 'key stays masked');
+assert(shouldIdleStop({ idleMinutes: 15, lastActivityMs: 0, now: 20 * 60_000, activeJobs: 0, running: true }) === false, 'missing activity does not stop');
+assert(shouldIdleStop({ idleMinutes: 15, lastActivityMs: 1_000, now: 16 * 60_000, activeJobs: 0, running: true }) === true, 'idle stop');
+assert(shouldIdleStop({ idleMinutes: 15, lastActivityMs: 1_000, now: 16 * 60_000, activeJobs: 1, running: true }) === false, 'queue holds the server');
 assert(saladErrorMessage({ aborted: true }).toLowerCase().includes('waking'), 'cold start copy');
 assert(saladErrorMessage({ aborted: false, status: 503 }).toLowerCase().includes('not ready'), '503 copy');
 

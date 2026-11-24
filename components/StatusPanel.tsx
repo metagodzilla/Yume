@@ -2,12 +2,15 @@ import { router, useFocusEffect } from 'expo-router';
 import { useCallback, useEffect, useState } from 'react';
 import { AppState, Platform, Pressable, StyleSheet, Text, View } from 'react-native';
 
+import { changeContainerGroup } from '@/src/lib/cloudActions';
+import { confirmAction } from '@/src/lib/confirm';
 import { interpretConnection, probe, type ConnectionState } from '@/src/lib/connection';
-import { readSaladKey } from '@/src/lib/storage';
+import { readCloudDeployment, readSaladKey, touchCloudActivity, writeCloudDeployment } from '@/src/lib/storage';
 import { counts } from '@/src/lib/queue';
 import { useQueue } from '@/src/lib/queuestore';
 import { capWarning, emptyStats, money, sessionCost, type CloudStats } from '@/src/lib/usage';
 import { parseManifest, updateAvailable } from '@/src/lib/updates';
+import { APP_VERSION_CODE } from '@/src/lib/version';
 import { useStudio } from '@/src/studio';
 import { colors, font } from '@/src/theme';
 
@@ -40,6 +43,7 @@ export function StatusPanel() {
   const [updateLabel, setUpdateLabel] = useState<string | null>(null);
   const [apkUrl, setApkUrl] = useState<string | null>(null);
   const [progress, setProgress] = useState<number | null>(null);
+  const [note, setNote] = useState<string | null>(null);
   const tally = counts(queue);
 
   const refresh = useCallback(async () => {
@@ -87,7 +91,7 @@ export function StatusPanel() {
       if (file.ok && file.body) {
         try {
           const manifest = parseManifest(JSON.stringify(file.body));
-          if (updateAvailable(3, manifest)) {
+          if (updateAvailable(APP_VERSION_CODE, manifest)) {
             setUpdateLabel(`Update ${manifest.version} is ready`);
             setApkUrl(manifest.apkUrl);
           } else {
@@ -129,6 +133,36 @@ export function StatusPanel() {
   const spent = sessionCost(connectedMs, rate);
   const warn = capWarning(spent, studio.settings.spendCap || 0);
 
+  async function control(action: 'start' | 'stop' | 'delete') {
+    const deployment = await readCloudDeployment();
+    const key = await readSaladKey();
+    if (!deployment || !key) {
+      setNote('Open Cloud setup before starting or stopping a Salad server.');
+      return;
+    }
+    const hourly = deployment.hourlyUsd || rate;
+    const warning =
+      action === 'start'
+        ? `Starting bills about ${money(hourly)} per hour once the instance is running.`
+        : action === 'stop'
+          ? `A running server costs about ${money(hourly)} per hour until it stops. Stopped time is not billed.`
+          : `Delete removes the Salad server. A running GPU is billed until it stops, about ${money(hourly)} per hour. Pictures on this phone stay.`;
+    const ok = await confirmAction(action === 'delete' ? 'Delete the server?' : action === 'stop' ? 'Stop the server?' : 'Start the server?', warning, action === 'delete' ? 'Delete' : action === 'stop' ? 'Stop' : 'Start');
+    if (!ok) return;
+    try {
+      await changeContainerGroup({ apiKey: key, deployment, action });
+      if (action === 'delete') {
+        await writeCloudDeployment(null);
+        await studio.saveSaladEndpoint('');
+      }
+      await touchCloudActivity();
+      setNote(action === 'delete' ? 'Server deleted.' : action === 'stop' ? 'Stop requested.' : 'Start requested.');
+      void refresh();
+    } catch (caught) {
+      setNote(caught instanceof Error ? caught.message : 'Salad did not accept that.');
+    }
+  }
+
   return (
     <View style={styles.wrap}>
       <Pressable testID="connection-card" style={styles.card} onPress={() => router.push('/(tabs)/settings')}>
@@ -169,6 +203,28 @@ export function StatusPanel() {
           <Text style={styles.bannerText}>{progress == null ? `${updateLabel}. Tap to download.` : `Downloading update… ${progress}%`}</Text>
         </Pressable>
       ) : null}
+      <Text style={styles.detail}>Running costs {money(rate)} per hour. Stopped time is not billed.</Text>
+      <View style={styles.tools}>
+        <Pressable testID="stop-server" style={styles.server} onPress={() => void control('stop')}>
+          <Text style={styles.serverText}>Stop server</Text>
+        </Pressable>
+        <Pressable testID="start-server" style={styles.server} onPress={() => void control('start')}>
+          <Text style={styles.serverText}>Start server</Text>
+        </Pressable>
+        <Pressable testID="delete-server" style={styles.server} onPress={() => void control('delete')}>
+          <Text style={styles.serverText}>Delete server</Text>
+        </Pressable>
+      </View>
+      <View style={styles.tools}>
+        {[0, 15, 30, 60].map((minutes) => (
+          <Pressable key={minutes} testID={`idle-${minutes}`} onPress={() => void studio.updateSettings({ idleStopMinutes: minutes })}>
+            <Text style={[styles.link, studio.settings.idleStopMinutes === minutes && styles.idleOn]}>
+              {minutes === 0 ? 'Auto-stop off' : `Auto-stop ${minutes}m`}
+            </Text>
+          </Pressable>
+        ))}
+      </View>
+      {note ? <Text style={styles.detail}>{note}</Text> : null}
       {open ? (
         <View testID="status-panel" style={styles.panel}>
           <Text style={styles.heading}>Running</Text>
@@ -203,6 +259,9 @@ const styles = StyleSheet.create({
   tools: { flexDirection: 'row', flexWrap: 'wrap', gap: 12 },
   banner: { backgroundColor: colors.accent, borderRadius: 10, padding: 10 },
   bannerText: { color: '#fff', fontFamily: font.black, fontSize: 14 },
+  server: { backgroundColor: colors.cardAlt, borderRadius: 999, paddingHorizontal: 12, paddingVertical: 8 },
+  serverText: { color: colors.text, fontFamily: font.black, fontSize: 13 },
+  idleOn: { color: colors.gold },
   panel: { backgroundColor: colors.card, borderRadius: 12, padding: 12, gap: 6 },
   heading: { color: colors.text, fontFamily: font.black, fontSize: 13, textTransform: 'uppercase' },
 });

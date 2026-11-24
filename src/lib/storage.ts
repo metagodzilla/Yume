@@ -121,16 +121,27 @@ export async function saveSession(session: Session): Promise<void> {
 const SAMPLERS: SamplerId[] = ['euler_a', 'euler', 'dpm_2m', 'dpm_2m_karras', 'ddim', 'lcm'];
 
 export async function loadSettings(): Promise<Settings> {
-  const settings = await loadJson<Partial<Settings> & { demoMode?: boolean; model?: string }>(KEYS.settings, {});
+  const raw = await getItem(KEYS.settings);
+  let settings: Partial<Settings> & { demoMode?: boolean; model?: string } = {};
+  if (raw) {
+    try {
+      settings = JSON.parse(raw) as Partial<Settings> & { demoMode?: boolean; model?: string };
+    } catch {
+      settings = {};
+    }
+  }
   const legacyModel = settings.model === 'dall-e-3' || settings.openaiModel === 'dall-e-3' ? 'dall-e-3' : 'gpt-image-1';
   let provider = settings.provider;
   if (provider !== 'demo' && provider !== 'openai' && provider !== 'salad') {
     provider = settings.demoMode === false ? 'openai' : 'demo';
   }
+  const savedBefore = Boolean(raw) && settings.setupComplete == null && (settings.provider === 'demo' || settings.provider === 'openai' || settings.provider === 'salad');
   return {
     ...DEFAULT_SETTINGS,
     ...settings,
     provider,
+    setupComplete: settings.setupComplete === true || savedBefore,
+    idleStopMinutes: clampRange(settings.idleStopMinutes, 0, 240, 0),
     openaiModel: legacyModel,
     enhance: settings.enhance !== false,
     expandSnippets: settings.expandSnippets !== false,
@@ -232,6 +243,43 @@ export async function writeSaladKey(value: string | null): Promise<void> {
 
 export async function readSaladEndpoint(): Promise<string | null> {
   return readSecure(SALAD_ENDPOINT);
+}
+
+const CLOUD_DEPLOY = 'yume.cloudDeploy.v1';
+const CLOUD_ACTIVITY = 'yume.cloudActivity.v1';
+
+export type CloudDeployment = {
+  organization: string;
+  project: string;
+  group: string;
+  gpuName: string;
+  gpuClassId: string;
+  hourlyUsd: number;
+  image: string;
+};
+
+export async function readCloudDeployment(): Promise<CloudDeployment | null> {
+  const parsed = await loadJson<CloudDeployment | null>(CLOUD_DEPLOY, null);
+  if (!parsed || typeof parsed.organization !== 'string' || typeof parsed.project !== 'string' || typeof parsed.group !== 'string') return null;
+  return parsed;
+}
+
+export async function writeCloudDeployment(value: CloudDeployment | null): Promise<void> {
+  if (!value) {
+    await setItem(CLOUD_DEPLOY, '');
+    return;
+  }
+  await setItem(CLOUD_DEPLOY, JSON.stringify(value));
+}
+
+export async function readCloudActivity(): Promise<number> {
+  const raw = await getItem(CLOUD_ACTIVITY);
+  const value = Number(raw);
+  return Number.isFinite(value) ? value : 0;
+}
+
+export async function touchCloudActivity(now = Date.now()): Promise<void> {
+  await setItem(CLOUD_ACTIVITY, String(now));
 }
 
 export async function writeSaladEndpoint(value: string | null): Promise<void> {
