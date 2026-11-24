@@ -1,6 +1,7 @@
 import { base64ToBytes, bytesToBase64 } from '@/src/lib/base64';
 import { buildMockGlb } from '@/src/lib/glb';
 import { normalizeEndpoint, saladErrorMessage } from '@/src/lib/salad';
+import { normalizeSaladKey } from '@/src/lib/saladCloud';
 import type { Character } from '@/src/lib/types';
 
 export const MESH_STEPS = [
@@ -56,7 +57,8 @@ export async function requestSaladMesh(input: {
   if (!endpoint) {
     throw new Error('Add a 3D endpoint in Settings, or the Salad image endpoint. The mesh container is separate from the picture one.');
   }
-  if (!input.apiKey.trim()) throw new Error('Add the Salad API key in Settings. The mesh container uses the same key.');
+  const apiKey = normalizeSaladKey(input.apiKey);
+  if (!apiKey) throw new Error('Add the Salad API key in Settings. The mesh container uses the same key.');
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), 110_000);
   let response: Response;
@@ -65,9 +67,9 @@ export async function requestSaladMesh(input: {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        Authorization: `Bearer ${input.apiKey.trim()}`,
-        'X-Api-Key': input.apiKey.trim(),
-        'Salad-Api-Key': input.apiKey.trim(),
+        Authorization: `Bearer ${apiKey}`,
+        'X-Api-Key': apiKey,
+        'Salad-Api-Key': apiKey,
       },
       body: JSON.stringify({
         image: bytesToBase64(input.frontPng),

@@ -1,19 +1,47 @@
 import { extractLoras, formatParameters, plainPrompt, type GenerationParams } from '@/src/lib/a1111';
 import { bytesToBase64, base64ToBytes } from '@/src/lib/base64';
+import { familyPreset } from '@/src/lib/checkpoints';
 import { DEFAULT_CHECKPOINT } from '@/src/lib/defaultModel';
 import type { GeneratorState } from '@/src/lib/genstore';
 import { embedParameters } from '@/src/lib/pngmeta';
 import { renderDemoFrames } from '@/src/lib/render';
-import { saladErrorMessage, normalizeEndpoint } from '@/src/lib/salad';
+import { classifyGatewayInput, generateUrl, saladErrorMessage } from '@/src/lib/salad';
+import { expandSeeds } from '@/src/lib/seeds';
+import { normalizeSaladKey } from '@/src/lib/saladCloud';
 import type { Character, SamplerId } from '@/src/lib/types';
+
+export function embeddingTokens(state: GeneratorState): string[] {
+  return state.embeddings.split(',').map((item) => item.trim()).filter(Boolean);
+}
+
+export function namedLoras(state: GeneratorState, prompt: string): { name: string; weight: number }[] {
+  const extracted = extractLoras(prompt);
+  const combined = [...state.loras, ...extracted.loras.filter((tag) => !state.loras.some((item) => item.name === tag.name))];
+  return combined
+    .map((lora) => ({ name: lora.name.trim(), weight: Number(lora.weight) || 0 }))
+    .filter((lora) => lora.name);
+}
 
 export function composeGenerationPrompt(state: GeneratorState, characterText = ''): string {
   const checkpoint = state.installed.find((item) => item.versionId === state.checkpointId);
+  const loraTriggers = state.triggers
+    ? state.loras
+        .flatMap((lora) => {
+          const match = state.installed.find(
+            (item) => (lora.versionId && item.versionId === lora.versionId) || item.filename === lora.name || item.name === lora.name,
+          );
+          return match?.triggers ?? [];
+        })
+        .filter(Boolean)
+        .join(', ')
+    : '';
+  const preset = familyPreset(checkpoint?.baseModel ?? '', checkpoint?.name ?? '');
   const bits = [
-    state.qualityTags ? DEFAULT_CHECKPOINT.quality : '',
+    state.qualityTags ? preset.quality : '',
     state.triggers ? (checkpoint?.triggers ?? []).join(', ') : '',
+    loraTriggers,
     characterText.trim(),
-    state.embeddings.trim(),
+    embeddingTokens(state).join(', '),
     state.prompt.trim(),
   ];
   return bits.filter(Boolean).join(', ');
@@ -21,8 +49,7 @@ export function composeGenerationPrompt(state: GeneratorState, characterText = '
 
 export function generationParams(state: GeneratorState, prompt: string, seed: number): GenerationParams {
   const checkpoint = state.installed.find((item) => item.versionId === state.checkpointId);
-  const extracted = extractLoras(prompt);
-  const loras = [...state.loras, ...extracted.loras.filter((tag) => !state.loras.some((item) => item.name === tag.name))];
+  const loras = namedLoras(state, prompt);
   return {
     prompt,
     negative: state.negative,
@@ -55,6 +82,78 @@ const SAMPLER_ID: Record<string, SamplerId> = {
   UniPC: 'dpm_2m',
 };
 
+export type SaladGenerateBody = {
+  prompt: string;
+  negative_prompt: string;
+  width: number;
+  height: number;
+  count: number;
+  seed: number;
+  steps: number;
+  cfg: number;
+  scheduler: string;
+  model: string;
+  model_name: string;
+  model_hash: string;
+  clip_skip: number;
+  loras: { name: string; weight: number }[];
+  embeddings: string[];
+  vae: string | null;
+  hires_scale: number | null;
+  hires_denoise: number;
+  hires_upscaler: string;
+  hires_steps: number;
+  mode: GeneratorState['mode'];
+  strength: number;
+  reference_image: string | null;
+  mask: string | null;
+  prediction_type: 'epsilon' | 'v_prediction';
+};
+
+export function buildSaladGenerateBody(
+  state: GeneratorState,
+  prompt: string,
+  seed: number,
+  initPng?: Uint8Array | null,
+  maskPng?: Uint8Array | null,
+): SaladGenerateBody {
+  const params = generationParams(state, prompt, seed);
+  return {
+    prompt,
+    negative_prompt: state.negative,
+    width: state.width,
+    height: state.height,
+    count: state.count,
+    seed,
+    steps: state.steps,
+    cfg: state.cfg,
+    scheduler: state.sampler,
+    model: String(state.installed.find((item) => item.versionId === state.checkpointId)?.versionId ?? DEFAULT_CHECKPOINT.versionId),
+    model_name: params.model,
+    model_hash: params.modelHash,
+    clip_skip: state.clipSkip,
+    loras: namedLoras(state, prompt).map((lora) => ({ name: lora.name, weight: lora.weight })),
+    embeddings: embeddingTokens(state),
+    vae: state.vae || null,
+    hires_scale: state.hires ? state.hiresScale : null,
+    hires_denoise: state.hiresDenoise,
+    hires_upscaler: state.hiresUpscaler,
+    hires_steps: state.hiresSteps,
+    mode: state.mode,
+    strength: state.denoise,
+    reference_image: initPng ? bytesToBase64(initPng) : null,
+    mask: maskPng ? bytesToBase64(maskPng) : null,
+    prediction_type: state.vPrediction ? 'v_prediction' : 'epsilon',
+  };
+}
+
+export function sentPositiveText(state: GeneratorState, characterText = ''): string {
+  const prompt = composeGenerationPrompt(state, characterText);
+  const body = buildSaladGenerateBody(state, prompt, 0);
+  const tags = body.loras.map((lora) => `<lora:${lora.name}:${lora.weight}>`).filter((tag) => !body.prompt.includes(tag));
+  return [body.prompt, ...tags].filter(Boolean).join(', ');
+}
+
 export function samplerId(name: string): SamplerId {
   return SAMPLER_ID[name] ?? 'euler_a';
 }
@@ -69,8 +168,9 @@ export async function drawFrames(input: {
   character: Character | null;
   initPng?: Uint8Array | null;
   maskPng?: Uint8Array | null;
-}): Promise<{ pngs: Uint8Array[]; parameters: string; warning?: string }> {
-  const params = generationParams(input.state, input.prompt, input.seed);
+}): Promise<{ pngs: Uint8Array[]; parameters: string; seeds: number[]; warning?: string }> {
+  const seeds = input.seed < 0 ? expandSeeds(Math.floor(Math.random() * 2_147_483_647), input.state.count) : expandSeeds(input.seed, input.state.count);
+  const params = generationParams(input.state, input.prompt, seeds[0] ?? 0);
   const parameters = formatParameters(params);
   if (input.provider !== 'salad') {
     const pngs = renderDemoFrames({
@@ -79,11 +179,12 @@ export async function drawFrames(input: {
       aspectId: input.state.height >= input.state.width ? 'wallpaper' : 'landscape',
       character: input.character,
       count: input.state.count,
-      seed: input.seed,
-    }).map((png, index) => embedParameters(png, formatParameters({ ...params, seed: input.seed + index })));
+      seed: seeds[0] ?? 0,
+    }).map((png, index) => embedParameters(png, formatParameters({ ...params, seed: seeds[index] ?? seeds[0] ?? 0 })));
     return {
       pngs,
       parameters,
+      seeds,
       warning:
         input.provider === 'openai'
           ? 'OpenAI ignores checkpoints, LoRAs, and sampler names. Demo painted this frame and still wrote the Civitai metadata.'
@@ -92,58 +193,39 @@ export async function drawFrames(input: {
             : undefined,
     };
   }
-  const endpoint = normalizeEndpoint(input.endpoint);
-  if (!endpoint) throw new Error('Add the Salad endpoint in Settings. The container downloads and runs the checkpoint.');
-  if (!input.apiKey?.trim()) throw new Error('Add the Salad API key in Settings.');
+  const classified = classifyGatewayInput(input.endpoint);
+  if (classified.kind === 'key') throw new Error('That saved address is a Salad API key, not a gateway URL. Open Connect and move it to Key.');
+  if (classified.kind !== 'url') throw new Error('Add a gateway URL that starts with https://. Connect can fill in the live server.');
+  const endpoint = classified.url;
+  const target = generateUrl(endpoint);
+  const apiKey = normalizeSaladKey(input.apiKey);
+  if (!apiKey) throw new Error('Add the Salad API key in Settings.');
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), 170_000);
+  const timer = setTimeout(() => controller.abort(), 180_000);
   let response: Response;
   try {
-    response = await fetch(`${endpoint}/generate`, {
+    response = await fetch(target, {
       method: 'POST',
       signal: controller.signal,
       headers: {
         'Content-Type': 'application/json',
-        Authorization: `Bearer ${input.apiKey.trim()}`,
-        'X-Api-Key': input.apiKey.trim(),
-        'Salad-Api-Key': input.apiKey.trim(),
+        Authorization: `Bearer ${apiKey}`,
+        'X-Api-Key': apiKey,
+        'Salad-Api-Key': apiKey,
       },
-      body: JSON.stringify({
-        prompt: input.prompt,
-        negative_prompt: input.state.negative,
-        width: input.state.width,
-        height: input.state.height,
-        count: input.state.count,
-        seed: input.seed,
-        steps: input.state.steps,
-        cfg: input.state.cfg,
-        scheduler: input.state.sampler,
-        model: params.model,
-        model_name: params.model,
-        model_hash: params.modelHash,
-        clip_skip: input.state.clipSkip,
-        loras: params.loras,
-        embeddings: input.state.embeddings.split(',').map((item) => item.trim()).filter(Boolean),
-        vae: input.state.vae || null,
-        hires_scale: input.state.hires ? input.state.hiresScale : null,
-        hires_denoise: input.state.hiresDenoise,
-        hires_upscaler: input.state.hiresUpscaler,
-        hires_steps: input.state.hiresSteps,
-        mode: input.state.mode,
-        strength: input.state.denoise,
-        reference_image: input.initPng ? bytesToBase64(input.initPng) : null,
-        mask: input.maskPng ? bytesToBase64(input.maskPng) : null,
-      }),
+      body: JSON.stringify(buildSaladGenerateBody(input.state, input.prompt, input.seed, input.initPng, input.maskPng)),
     });
   } catch (error) {
     const aborted = error instanceof Error && error.name === 'AbortError';
-    throw new Error(saladErrorMessage({ aborted }));
+    const message = error instanceof Error ? error.message : '';
+    throw new Error(saladErrorMessage({ aborted, body: aborted ? '' : message, url: target }));
   } finally {
     clearTimeout(timer);
   }
   const raw = await response.text();
-  if (!response.ok) throw new Error(saladErrorMessage({ aborted: false, status: response.status, body: raw }));
-  const body = JSON.parse(raw) as { images?: string[] };
+  if (!response.ok) throw new Error(saladErrorMessage({ aborted: false, status: response.status, body: raw, url: target }));
+  const body = JSON.parse(raw) as { images?: string[]; seeds?: number[] };
   if (!body.images?.length) throw new Error('Salad returned no images.');
-  return { pngs: body.images.map((item) => base64ToBytes(item)), parameters };
+  const returned = Array.isArray(body.seeds) ? body.seeds.filter((seed) => typeof seed === 'number' && seed >= 0) : [];
+  return { pngs: body.images.map((item) => base64ToBytes(item)), parameters, seeds: returned.length ? returned : seeds };
 }

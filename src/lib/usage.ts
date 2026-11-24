@@ -27,6 +27,8 @@ export type CloudStats = {
   jobProgress: number | null;
   model: string;
   source: string;
+  powerWatts: number | null;
+  powerLimitWatts: number | null;
 };
 
 export function emptyStats(): CloudStats {
@@ -43,5 +45,7 @@ export function emptyStats(): CloudStats {
     jobProgress: null,
     model: 'Animagine XL 4.0',
     source: 'none',
+    powerWatts: null,
+    powerLimitWatts: null,
   };
 }

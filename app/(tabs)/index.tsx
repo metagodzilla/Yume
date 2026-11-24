@@ -1,4 +1,4 @@
-import { router } from 'expo-router';
+import { router, useLocalSearchParams } from 'expo-router';
 import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Image } from 'expo-image';
@@ -19,13 +19,14 @@ const CHIPS = [
 
 export default function HomeScreen() {
   const studio = useStudio();
+  const params = useLocalSearchParams<{ panel?: string }>();
   const frames = studio.history;
 
   return (
     <SafeAreaView style={styles.safe} edges={['top']}>
       <AppBar dot={colors.faint} />
       <ScrollView contentContainerStyle={styles.scroll}>
-        <StatusPanel />
+        <StatusPanel preview={typeof params.panel === 'string' ? params.panel : ''} />
         <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.chips}>
           {CHIPS.map((chip) => (
             <Pressable

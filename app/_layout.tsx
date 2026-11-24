@@ -6,7 +6,7 @@ import {
   Nunito_800ExtraBold,
 } from '@expo-google-fonts/nunito';
 import { useFonts } from 'expo-font';
-import { DarkTheme, Stack, ThemeProvider } from 'expo-router';
+import { DarkTheme, Stack, ThemeProvider, router, usePathname } from 'expo-router';
 import * as SplashScreen from 'expo-splash-screen';
 import { StatusBar } from 'expo-status-bar';
 import { useEffect } from 'react';
@@ -14,9 +14,14 @@ import { Platform, View } from 'react-native';
 import 'react-native-reanimated';
 
 import { AppErrorBoundary } from '@/components/ErrorBoundary';
+import '@/src/lib/downloadTask';
+import { UpdateCheck } from '@/components/UpdateCheck';
+import { IdleStop } from '@/components/IdleStop';
+import { InstallRunner } from '@/components/InstallRunner';
+import { ThermalGuard } from '@/components/ThermalGuard';
 import { Viewer } from '@/components/Viewer';
 import { installErrorHooks } from '@/src/lib/log';
-import { StudioProvider } from '@/src/studio';
+import { StudioProvider, useStudio } from '@/src/studio';
 import { colors } from '@/src/theme';
 
 export { ErrorBoundary } from 'expo-router';
@@ -59,6 +64,10 @@ export default function RootLayout() {
   return (
     <AppErrorBoundary>
     <StudioProvider>
+      <FirstLaunch />
+      <IdleStop />
+      <InstallRunner />
+      <ThermalGuard />
       <StatusBar style="light" />
       <ThemeProvider value={navTheme}>
         <View style={phone.outer}>
@@ -73,11 +82,15 @@ export default function RootLayout() {
               <Stack.Screen name="model" options={{ animation: 'slide_from_right' }} />
               <Stack.Screen name="import" options={{ animation: 'slide_from_bottom' }} />
               <Stack.Screen name="cloud-check" options={{ animation: 'slide_from_bottom' }} />
+              <Stack.Screen name="setup" options={{ animation: 'fade' }} />
+              <Stack.Screen name="connect" options={{ animation: 'slide_from_right' }} />
               <Stack.Screen name="report" options={{ animation: 'slide_from_bottom' }} />
+              <Stack.Screen name="downloads" options={{ animation: 'slide_from_right' }} />
               <Stack.Screen name="offline" options={{ animation: 'slide_from_right' }} />
               <Stack.Screen name="watch" options={{ animation: 'slide_from_bottom' }} />
               <Stack.Screen name="shorts" options={{ animation: 'fade' }} />
             </Stack>
+            <UpdateCheck />
           </View>
         </View>
       </ThemeProvider>
@@ -85,6 +98,17 @@ export default function RootLayout() {
     </StudioProvider>
     </AppErrorBoundary>
   );
+}
+
+function FirstLaunch() {
+  const studio = useStudio();
+  const path = usePathname();
+  useEffect(() => {
+    if (!studio.ready || studio.settings.setupComplete) return;
+    if (path === '/setup' || path === '/connect') return;
+    router.replace('/setup');
+  }, [path, studio.ready, studio.settings.setupComplete]);
+  return null;
 }
 
 const phone = {

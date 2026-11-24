@@ -1,0 +1,46 @@
+name: Publish signed APK
+
+# Does not sign. The release keystore is not in this repo.
+# Give this workflow an already signed APK URL (from the signing machine or an Actions artifact),
+# or run scripts/publish-release.sh locally with that APK.
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Release tag, such as v1.4.1
+        required: true
+        type: string
+      version_code:
+        description: Android versionCode written into the release notes
+        required: true
+        type: string
+      apk_url:
+        description: HTTPS URL of the already signed APK to attach
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download the signed APK
+        run: |
+          set -euo pipefail
+          curl -fL --retry 3 -o "yume.apk" "${{ inputs.apk_url }}"
+          test -s yume.apk
+      - name: Create or update the GitHub release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          TAG="${{ inputs.tag }}"
+          CODE="${{ inputs.version_code }}"
+          NOTES="$(printf 'versionCode: %s\n\nSigned APK attached for %s.' "$CODE" "$TAG")"
+          if gh release view "$TAG" --repo "${{ github.repository }}" >/dev/null 2>&1; then
+            gh release upload "$TAG" yume.apk --repo "${{ github.repository }}" --clobber
+          else
+            gh release create "$TAG" yume.apk --repo "${{ github.repository }}" --title "$TAG" --notes "$NOTES"
+          fi

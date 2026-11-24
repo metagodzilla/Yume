@@ -22,6 +22,8 @@ export type LoraSpec = {
   id: string;
   name: string;
   weight: number;
+  modelId?: number;
+  versionId?: number;
 };
 
 export type UserStyle = {
@@ -114,6 +116,8 @@ export type Generation = {
   saladModel: string;
   loras: LoraSpec[];
   warning?: string;
+  durationMs?: number;
+  favoriteIndexes?: number[];
 };
 
 export type Settings = {
@@ -137,9 +141,13 @@ export type Settings = {
   loras: LoraSpec[];
   updateManifestUrl: string;
   hourlyRate: number;
+  hourlyRateTouched: boolean;
   spendCap: number;
   autoResume: boolean;
   sourceMode: 'cloud' | 'phone' | 'auto';
+  setupComplete: boolean;
+  idleStopMinutes: number;
+  lowPower: boolean;
 };
 
 export type Session = {
@@ -152,12 +160,19 @@ export type Session = {
   selectedCharacterId: string | null;
 };
 
+export type ViewerFrame = {
+  generationId: string;
+  imageIndex: number;
+};
+
 export type ViewerState = {
   images: string[];
   index: number;
   prompt: string;
   title: string;
   filename: string;
+  generationId?: string;
+  frames?: ViewerFrame[];
 };
 
 export const DEFAULT_SETTINGS: Settings = {
@@ -181,9 +196,13 @@ export const DEFAULT_SETTINGS: Settings = {
   loras: [],
   updateManifestUrl: '',
   hourlyRate: 0.13,
+  hourlyRateTouched: false,
   spendCap: 0,
   autoResume: true,
   sourceMode: 'auto',
+  setupComplete: false,
+  idleStopMinutes: 0,
+  lowPower: false,
 };
 
 export const DEFAULT_SESSION: Session = {

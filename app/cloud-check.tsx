@@ -1,9 +1,11 @@
-import { router } from 'expo-router';
-import { useState } from 'react';
+import { router, useLocalSearchParams } from 'expo-router';
+import { useEffect, useRef, useState } from 'react';
 import { Platform, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { probe } from '@/src/lib/connection';
+import { classifyGatewayInput, redactSecrets } from '@/src/lib/salad';
+import { normalizeSaladKey } from '@/src/lib/saladCloud';
 import { pushLog } from '@/src/lib/log';
 import { readSaladKey } from '@/src/lib/storage';
 import { useStudio } from '@/src/studio';
@@ -13,34 +15,36 @@ type Check = { name: string; status: 'pass' | 'fail' | 'warn'; detail: string };
 
 export default function CloudCheckScreen() {
   const studio = useStudio();
+  const params = useLocalSearchParams<{ auto?: string }>();
   const [checks, setChecks] = useState<Check[]>([]);
   const [busy, setBusy] = useState(false);
+  const started = useRef(false);
 
   async function run() {
     setBusy(true);
     const next: Check[] = [];
-    const endpoint = studio.settings.saladEndpoint.trim().replace(/\/+$/, '');
+    const classified = classifyGatewayInput(studio.settings.saladEndpoint);
+    if (classified.kind === 'key') {
+      next.push({ name: 'URL', status: 'fail', detail: 'The saved address is a Salad API key, not a gateway URL. Open Connect and move it to Key.' });
+      setChecks(next);
+      setBusy(false);
+      return;
+    }
+    const endpoint = classified.kind === 'url' ? classified.url : '';
     if (studio.settings.provider === 'demo' || !endpoint) {
       next.push({ name: 'URL', status: 'warn', detail: 'Demo mode has no server URL. Add one in Settings to check the cloud.' });
       setChecks(next);
       setBusy(false);
       return;
     }
-    try {
-      const host = new URL(endpoint);
-      next.push({ name: 'URL', status: host.protocol === 'https:' ? 'pass' : 'warn', detail: host.protocol === 'https:' ? 'HTTPS address looks valid.' : 'The address is not HTTPS.' });
-    } catch {
-      next.push({ name: 'URL', status: 'fail', detail: 'That address is not a valid URL.' });
-      setChecks(next);
-      setBusy(false);
-      return;
-    }
+    const host = new URL(endpoint);
+    next.push({ name: 'URL', status: host.protocol === 'https:' ? 'pass' : 'warn', detail: host.protocol === 'https:' ? 'HTTPS address looks valid.' : 'The address is not HTTPS.' });
     const health = await probe(`${endpoint}/health`, {}, 8000);
-    next.push(health.ok ? { name: 'Reachable', status: 'pass', detail: `Answered in ${health.ms} ms.` } : { name: 'Reachable', status: 'fail', detail: health.error || 'No answer. Check DNS, the gateway, and that the group is running.' });
+    next.push(health.ok ? { name: 'Reachable', status: 'pass', detail: `Answered in ${health.ms} ms.` } : { name: 'Reachable', status: 'fail', detail: redactSecrets(health.error || 'No answer. Check DNS, the gateway, and that the group is running.') });
     next.push(health.ok ? { name: 'TLS', status: endpoint.startsWith('https') ? 'pass' : 'warn', detail: endpoint.startsWith('https') ? 'The connection used HTTPS.' : 'Plain HTTP has no TLS.' } : { name: 'TLS', status: 'fail', detail: 'Could not complete a secure request.' });
     const stored = await readSaladKey();
     const webKey = Platform.OS === 'web' && typeof localStorage !== 'undefined' ? localStorage.getItem('yume.webSaladKey') || '' : '';
-    const key = stored || webKey;
+    const key = normalizeSaladKey(stored || webKey);
     const auth = key ? await probe(`${endpoint}/models`, { headers: { Authorization: `Bearer ${key}`, 'Salad-Api-Key': key, 'X-Api-Key': key } }, 8000) : undefined;
     if (!key) next.push({ name: 'Auth', status: 'fail', detail: 'No API key is saved.' });
     else if (auth?.status === 401 || auth?.status === 403) next.push({ name: 'Auth', status: 'fail', detail: 'The key was rejected.' });
@@ -71,6 +75,13 @@ export default function CloudCheckScreen() {
     pushLog('info', `Cloud check finished with ${next.filter((item) => item.status === 'fail').length} failures.`);
     setBusy(false);
   }
+
+  useEffect(() => {
+    if (params.auto === '1' && !started.current && studio.ready) {
+      started.current = true;
+      void run();
+    }
+  }, [params.auto, studio.ready]);
 
   return (
     <SafeAreaView style={styles.safe} edges={['top']}>

@@ -1,14 +1,23 @@
+import * as Clipboard from 'expo-clipboard';
 import { router } from 'expo-router';
 import { useEffect, useState } from 'react';
 import { Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
-import { FrameGrid } from '@/components/FrameGrid';
+import { CheckpointSheet } from '@/components/CheckpointSheet';
+import { Gallery } from '@/components/Gallery';
 import { characterClause } from '@/src/lib/prompt';
-import { composeGenerationPrompt, drawFrames, generationParams, samplerId } from '@/src/lib/draw';
+import { composeGenerationPrompt, drawFrames, generationParams, samplerId, sentPositiveText } from '@/src/lib/draw';
+import { sendClientReport } from '@/src/lib/clientReport';
+import { rememberFault } from '@/src/lib/reportText';
+import { baseLabel, modelCardPress } from '@/src/lib/checkpoints';
 import { SAMPLERS, sizesFor } from '@/src/lib/defaultModel';
 import { extractLoras } from '@/src/lib/a1111';
-import { patchGenerator, useGenerator } from '@/src/lib/genstore';
+import { loraPage } from '@/src/lib/civitai';
+import { openLink } from '@/src/lib/openLink';
+import { patchGenerator, resetModelDefaults, useGenerator } from '@/src/lib/genstore';
+import { endpointDiffersFromLive, LIVE_GATEWAY_URL, normalizeEndpoint } from '@/src/lib/salad';
+import { chooseSeeds } from '@/src/lib/seeds';
 import { persistPng, readApiKey, readSaladKey } from '@/src/lib/storage';
 import { uid } from '@/src/lib/id';
 import { useStudio } from '@/src/studio';
@@ -23,10 +32,15 @@ export default function GenerateScreen() {
   const [status, setStatus] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [negativeOpen, setNegativeOpen] = useState(false);
+  const [lastSeeds, setLastSeeds] = useState<number[]>([]);
+  const [picker, setPicker] = useState(false);
   const checkpoint = gen.installed.find((item) => item.versionId === gen.checkpointId) ?? gen.installed[0];
   const latest = studio.history[0];
   const parsed = extractLoras(gen.prompt).loras;
   const character = studio.selectedCharacter;
+  const characterText = character ? characterClause(character) : '';
+  const finalPrompt = sentPositiveText(gen, characterText);
 
   useEffect(() => {
     void import('@/src/lib/genstore').then(({ hydrateFromDisk }) => hydrateFromDisk());
@@ -41,16 +55,18 @@ export default function GenerateScreen() {
     }
     setBusy(true);
     setError(null);
+    const started = Date.now();
     setStatus(studio.settings.provider === 'salad' ? 'Sending it to Salad…' : 'Drawing on this phone…');
     try {
-      const seed = gen.seedRandom ? Math.floor(Math.random() * 2_147_483_646) : Math.max(0, Number(gen.seed) || 0);
+      const chosen = chooseSeeds({ locked: !gen.seedRandom, seedText: gen.seed, count: gen.count });
+      const seed = chosen.requestSeed;
       const [saladKey] = await Promise.all([readSaladKey(), readApiKey()]);
       const result = await drawFrames({
         state: gen,
         prompt,
         seed,
         provider: studio.settings.provider,
-        endpoint: studio.settings.saladEndpoint,
+        endpoint: normalizeEndpoint(studio.settings.saladEndpoint),
         apiKey: saladKey,
         character,
       });
@@ -78,23 +94,35 @@ export default function GenerateScreen() {
         model: params.model,
         provider: studio.settings.provider === 'salad' ? 'salad' : 'demo',
         enhance: false,
-        seed,
-        seeds: result.pngs.map((_, index) => seed + index),
+        seed: (result.seeds[0] ?? chosen.seeds[0]) ?? null,
+        seeds: result.seeds.length ? result.seeds : chosen.seeds,
         steps: gen.steps,
         cfg: gen.cfg,
         sampler: samplerId(gen.sampler),
         width: gen.width,
         height: gen.height,
         saladModel: checkpoint?.filename ?? '',
-        loras: params.loras.map((lora, index) => ({ id: `${lora.name}-${index}`, name: lora.name, weight: lora.weight })),
+        loras: gen.loras.map((lora, index) => ({
+          id: `${lora.name}-${index}`,
+          name: lora.name,
+          weight: lora.weight,
+          ...(lora.modelId ? { modelId: lora.modelId } : {}),
+          ...(lora.versionId ? { versionId: lora.versionId } : {}),
+        })),
         warning: result.warning,
+        durationMs: Date.now() - started,
       };
       await studio.rememberGeneration(record);
-      if (!gen.seedRandom) patchGenerator({ seed: String(seed) });
-      else patchGenerator({ seed: String(seed), seedRandom: false });
-      setStatus(result.warning ?? 'Saved. The PNG carries Automatic1111 parameters, so Civitai can read the resources.');
+      const used = result.seeds.length ? result.seeds : chosen.seeds;
+      setLastSeeds(used);
+      setStatus(`${result.warning ? `${result.warning} ` : ''}Seed ${used.join(', ')}.`);
     } catch (caught) {
-      setError(caught instanceof Error ? caught.message : 'The image could not be drawn.');
+      const message = caught instanceof Error ? caught.message : 'The image could not be drawn.';
+      setError(message);
+      const endpoint = normalizeEndpoint(studio.settings.saladEndpoint);
+      rememberFault({ time: Date.now(), source: 'generate', message, endpoint });
+      const key = await readSaladKey();
+      if (endpoint && key) void sendClientReport(endpoint, key).catch(() => undefined);
     } finally {
       setBusy(false);
     }
@@ -112,14 +140,20 @@ export default function GenerateScreen() {
             <Text style={styles.link}>Import</Text>
           </Pressable>
         </View>
-        <Pressable testID="gen-checkpoint" style={styles.checkpoint} onPress={() => router.push('/models')}>
+        <Pressable
+          testID="gen-checkpoint"
+          style={styles.checkpoint}
+          onPress={() => {
+            if (modelCardPress().action === 'open-sheet') setPicker(true);
+          }}>
           <View style={{ flex: 1 }}>
             <Text style={styles.checkpointName}>{checkpoint?.name ?? 'No checkpoint'}</Text>
             <Text style={styles.meta}>
-              {checkpoint?.baseModel} · {checkpoint?.isDefault ? 'Default' : checkpoint?.version} · browse Civitai
+              {baseLabel(checkpoint?.baseModel ?? '')} · {checkpoint?.isDefault ? 'Active' : checkpoint?.version}
             </Text>
           </View>
         </Pressable>
+        <CheckpointSheet visible={picker} onClose={() => setPicker(false)} />
         <Text style={styles.label}>Prompt</Text>
         <TextInput
           testID="gen-prompt"
@@ -130,6 +164,25 @@ export default function GenerateScreen() {
           multiline
           style={styles.prompt}
         />
+        <View style={styles.finalBox}>
+          <View style={styles.row}>
+            <Text style={styles.label}>Final prompt</Text>
+            <Pressable testID="copy-final-prompt" onPress={() => void Clipboard.setStringAsync(finalPrompt)}>
+              <Text style={styles.link}>Copy</Text>
+            </Pressable>
+          </View>
+          <Text testID="final-prompt" selectable style={styles.final}>
+            {finalPrompt || 'The prompt is empty.'}
+          </Text>
+          <Pressable onPress={() => setNegativeOpen((open) => !open)}>
+            <Text style={styles.hint}>{negativeOpen ? 'Hide final negative' : 'Final negative'}</Text>
+          </Pressable>
+          {negativeOpen ? (
+            <Text testID="final-negative" selectable style={styles.final}>
+              {gen.negative || 'No negative prompt.'}
+            </Text>
+          ) : null}
+        </View>
         <Text style={styles.hint}>
           (word:1.2) weights, [de-emphasis], {'<lora:name:0.8>'}, BREAK, and embedding names are kept. Quality tags and trigger words can be added in front.
         </Text>
@@ -174,17 +227,31 @@ export default function GenerateScreen() {
           </Pressable>
         </View>
         <View style={styles.row}>
-          {gen.loras.map((lora) => (
-            <Pressable key={`${lora.name}-${lora.weight}`} onPress={() => patchGenerator({ loras: gen.loras.filter((item) => item !== lora) })}>
-              <Text style={styles.chip}>{`<lora:${lora.name}:${lora.weight}>`}</Text>
-            </Pressable>
-          ))}
+          {gen.loras.map((lora) => {
+            const page = loraPage(lora);
+            return (
+              <View key={`${lora.name}-${lora.versionId ?? lora.weight}`} style={styles.chipButton}>
+                <Pressable onPress={() => openLink(page.url)}>
+                  <Text style={styles.chipText}>{page.label === 'Search on Civitai' ? `Search ${lora.name}` : lora.name}</Text>
+                </Pressable>
+                <Text style={styles.chipText}>{lora.weight}</Text>
+                <Pressable onPress={() => patchGenerator({ loras: gen.loras.filter((item) => item !== lora) })}>
+                  <Text style={styles.chipText}>×</Text>
+                </Pressable>
+              </View>
+            );
+          })}
           {parsed.map((lora) => (
             <Text key={`tag-${lora.name}`} style={styles.chip}>
               from prompt {lora.name}:{lora.weight}
             </Text>
           ))}
         </View>
+        <Pressable
+          testID="reset-model-defaults"
+          onPress={() => resetModelDefaults(checkpoint?.baseModel ?? '', checkpoint?.name ?? '')}>
+          <Text style={styles.link}>Reset to model defaults</Text>
+        </Pressable>
         <Text style={styles.label}>Sampler</Text>
         <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.row}>
           {SAMPLERS.map((sampler) => (
@@ -202,13 +269,14 @@ export default function GenerateScreen() {
         <View style={styles.row}>
           <TextInput
             testID="gen-seed"
-            value={gen.seed}
-            onChangeText={(seed) => patchGenerator({ seed, seedRandom: false })}
+            value={gen.seedRandom ? 'random' : gen.seed}
+            editable={!gen.seedRandom}
+            onChangeText={(seed) => patchGenerator({ seed: seed.replace(/[^\d]/g, ''), seedRandom: false })}
             keyboardType="number-pad"
             style={[styles.input, { flex: 1 }]}
           />
-          <Pressable onPress={() => patchGenerator({ seedRandom: true })}>
-            <Text style={styles.link}>{gen.seedRandom ? 'Seed random' : 'Use this seed'}</Text>
+          <Pressable testID="seed-lock" onPress={() => patchGenerator({ seedRandom: !gen.seedRandom })}>
+            <Text style={styles.link}>{gen.seedRandom ? 'Seed unlocked' : 'Seed locked'}</Text>
           </Pressable>
         </View>
         <Text style={styles.label}>Size · {checkpoint?.baseModel}</Text>
@@ -255,25 +323,18 @@ export default function GenerateScreen() {
           <Text style={styles.goText}>{busy ? 'Drawing…' : `Generate ${gen.count}`}</Text>
         </Pressable>
         {status ? <Text style={styles.ok}>{status}</Text> : null}
-        {error ? <Text style={styles.error}>{error}</Text> : null}
-        {latest ? (
-          <>
-            <Text style={styles.label}>Latest</Text>
-            <FrameGrid
-              uris={latest.imageUris}
-              aspectId={latest.aspectId}
-              onPress={(index) =>
-                studio.openViewer({
-                  images: latest.imageUris,
-                  index,
-                  prompt: latest.finalPrompt,
-                  title: latest.styleName,
-                  filename: `${latest.id}.png`,
-                })
-              }
-            />
-          </>
+        {lastSeeds.length ? (
+          <Pressable testID="reuse-seed" onPress={() => patchGenerator({ seed: String(lastSeeds[0]), seedRandom: false })}>
+            <Text style={styles.link}>Reuse seed {lastSeeds.join(', ')}</Text>
+          </Pressable>
         ) : null}
+        {error ? <Text style={styles.error}>{error}</Text> : null}
+        {studio.settings.provider === 'salad' && endpointDiffersFromLive(studio.settings.saladEndpoint) ? (
+          <Pressable testID="use-live-server" onPress={() => void studio.saveSaladEndpoint(LIVE_GATEWAY_URL)}>
+            <Text style={styles.link}>Use live server</Text>
+          </Pressable>
+        ) : null}
+        <Gallery variant="strip" />
         <View style={styles.row}>
           <Pressable onPress={() => router.push('/(tabs)/cast')}>
             <Text style={styles.link}>Cast</Text>
@@ -324,6 +385,8 @@ const styles = StyleSheet.create({
   checkpointName: { color: colors.text, fontFamily: font.black, fontSize: 16 },
   meta: { color: colors.muted, fontFamily: font.semibold, fontSize: 13 },
   label: { color: colors.sakura, fontFamily: font.black, fontSize: 12, letterSpacing: 0.8, textTransform: 'uppercase' },
+  finalBox: { gap: 6, borderRadius: 12, borderWidth: 1, borderColor: colors.line, padding: 10 },
+  final: { color: colors.text, fontFamily: font.semibold, fontSize: 13, lineHeight: 18 },
   prompt: {
     minHeight: 110,
     borderRadius: 16,

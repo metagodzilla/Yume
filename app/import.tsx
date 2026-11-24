@@ -4,6 +4,7 @@ import { Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, View } fr
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { civitaiImageId, parseParameters } from '@/src/lib/a1111';
+import { BROWSE_CIVITAI_ROUTE } from '@/src/lib/checkpoints';
 import { getCivitaiImage } from '@/src/lib/civitai';
 import { patchGenerator, useGenerator } from '@/src/lib/genstore';
 import { readParameters } from '@/src/lib/pngmeta';
@@ -134,7 +135,7 @@ export default function ImportScreen() {
                 {item}. Install it from the model browser if you have the Civitai version.
               </Text>
             ))}
-            <Pressable onPress={() => router.push('/models')}>
+            <Pressable onPress={() => router.push(BROWSE_CIVITAI_ROUTE)}>
               <Text style={styles.link}>Open the browser</Text>
             </Pressable>
           </View>

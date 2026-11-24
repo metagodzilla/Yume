@@ -7,6 +7,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { getLog, pushLog } from '@/src/lib/log';
 import { buildReport } from '@/src/lib/report';
 import { shareFile } from '@/src/lib/media';
+import { APP_VERSION, APP_VERSION_CODE } from '@/src/lib/version';
 import { useStudio } from '@/src/studio';
 import { colors, font } from '@/src/theme';
 
@@ -16,8 +17,8 @@ export default function ReportScreen() {
   const report = useMemo(
     () =>
       buildReport({
-        version: '1.2.0',
-        versionCode: 3,
+        version: APP_VERSION,
+        versionCode: APP_VERSION_CODE,
         device: 'phone',
         android: 'Android',
         settings: { ...studio.settings, provider: studio.settings.provider },

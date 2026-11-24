@@ -26,8 +26,13 @@ import {
   styleByStoredId,
   upsertStyle,
 } from '@/src/lib/library';
+import { dropTiles, withFavorite } from '@/src/lib/gallery';
 import { produceImages } from '@/src/lib/produce';
+import { classifyGatewayInput, migrateKeyStoredAsUrl } from '@/src/lib/salad';
+import { normalizeSaladKey } from '@/src/lib/saladCloud';
 import { exportBundle } from '@/src/lib/library';
+import { throttleSteps } from '@/src/lib/phonePower';
+import { getThrottle } from '@/src/lib/thermalState';
 import {
   deleteImageUri,
   loadCharacters,
@@ -131,12 +136,16 @@ type StudioContextValue = {
   saveSaladKey: (value: string) => Promise<void>;
   clearSaladKey: () => Promise<void>;
   saveSaladEndpoint: (value: string) => Promise<void>;
+  cloudNotice: string | null;
+  dismissCloudNotice: () => void;
   loading: boolean;
   status: string;
   error: string | null;
   clearError: () => void;
   generate: () => Promise<void>;
   rememberGeneration: (record: Generation) => Promise<void>;
+  toggleFavorite: (id: string, index: number) => Promise<void>;
+  removeGalleryTiles: (keys: { generationId: string; index: number }[]) => Promise<void>;
   viewer: ViewerState | null;
   openViewer: (viewer: ViewerState) => void;
   closeViewer: () => void;
@@ -168,6 +177,7 @@ export function StudioProvider({ children }: { children: ReactNode }) {
   const [loading, setLoading] = useState(false);
   const [status, setStatus] = useState('');
   const [error, setError] = useState<string | null>(null);
+  const [cloudNotice, setCloudNotice] = useState<string | null>(null);
   const [viewer, setViewer] = useState<ViewerState | null>(null);
   const sessionTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const settingsTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -200,10 +210,30 @@ export function StudioProvider({ children }: { children: ReactNode }) {
         ? session.selectedCharacterId
         : null;
       setSelectedCharacterId(selected);
-      setSettings({ ...storedSettings, saladEndpoint: saladEndpoint || storedSettings.saladEndpoint });
+      let endpoint = saladEndpoint || storedSettings.saladEndpoint || '';
+      let nextSaladKey = saladKey;
+      let nextSettings = storedSettings;
+      const migrated = migrateKeyStoredAsUrl(endpoint, saladKey);
+      if (migrated.moved) {
+        const hadKey = Boolean(saladKey?.trim());
+        let storedKey = hadKey;
+        if (!hadKey && migrated.key && keychain) {
+          await writeSaladKey(migrated.key);
+          nextSaladKey = migrated.key;
+          storedKey = true;
+        }
+        if (storedKey) {
+          endpoint = '';
+          nextSettings = { ...storedSettings, saladEndpoint: '' };
+          if (keychain) await writeSaladEndpoint(null);
+          await saveSettings(nextSettings);
+          setCloudNotice(migrated.notice);
+        }
+      }
+      setSettings({ ...nextSettings, saladEndpoint: endpoint });
       setLibrary(storedLibrary);
       setHasKey(Boolean(key));
-      setHasSaladKey(Boolean(saladKey));
+      setHasSaladKey(Boolean(nextSaladKey));
       setSecureStoreAvailable(keychain);
       setReady(true);
     })().catch(() => {
@@ -344,6 +374,29 @@ export function StudioProvider({ children }: { children: ReactNode }) {
     [history],
   );
 
+  const persistHistory = useCallback(async (next: Generation[]) => {
+    setHistory(next);
+    await saveHistory(next);
+  }, []);
+
+  const toggleFavorite = useCallback(
+    async (id: string, index: number) => {
+      const next = history.map((item) => (item.id === id ? withFavorite(item, index) : item));
+      await persistHistory(next);
+    },
+    [history, persistHistory],
+  );
+
+  const removeGalleryTiles = useCallback(
+    async (keys: { generationId: string; index: number }[]) => {
+      const { next, removed } = dropTiles(history, keys);
+      await persistHistory(next);
+      await Promise.all(removed.map((uri) => deleteImageUri(uri)));
+      setViewer(null);
+    },
+    [history, persistHistory],
+  );
+
   const clearHistory = useCallback(async () => {
     const previous = history;
     setHistory([]);
@@ -385,6 +438,7 @@ export function StudioProvider({ children }: { children: ReactNode }) {
 
   const generate = useCallback(async () => {
     if (loading) return;
+    void import('@/src/lib/storage').then(({ touchCloudActivity }) => touchCloudActivity());
     setError(null);
     const sent = (previewDirty ? preview : composePreview({
       userPrompt: prompt,
@@ -410,17 +464,29 @@ export function StudioProvider({ children }: { children: ReactNode }) {
     const started = Date.now();
     try {
       const [openaiKey, saladKey] = await Promise.all([readApiKey(), readSaladKey()]);
+      const throttle = getThrottle();
+      let provider = settings.provider;
+      if (throttle.preferCloud && settings.saladEndpoint.trim() && saladKey) provider = 'salad';
+      const scaled =
+        provider === 'demo' || settings.sourceMode === 'phone' ? throttleSteps(settings.steps, count, throttle) : { steps: settings.steps, count };
+      if (throttle.pauseQueue && provider !== 'salad') {
+        setError(throttle.notice || 'Phone is hot. The queue is paused until it cools.');
+        return;
+      }
+      if (scaled.steps !== settings.steps && throttle.pauseMs > 0) {
+        await new Promise((resolve) => setTimeout(resolve, throttle.pauseMs));
+      }
       const result = await produceImages({
-        provider: settings.provider,
+        provider,
         prompt: sent,
         negative: settings.negative,
         styleId,
         aspectId,
         character: selectedCharacter,
-        count,
+        count: scaled.count,
         width: settings.width,
         height: settings.height,
-        steps: settings.steps,
+        steps: scaled.steps,
         cfg: settings.cfg,
         sampler: settings.sampler,
         seedMode: settings.seedMode,
@@ -471,6 +537,7 @@ export function StudioProvider({ children }: { children: ReactNode }) {
         saladModel: settings.saladModel,
         loras: settings.loras,
         warning: result.warning,
+        durationMs: Date.now() - started,
       };
       const combined = [record, ...history];
       const next = combined.slice(0, HISTORY_LIMIT);
@@ -613,9 +680,9 @@ export function StudioProvider({ children }: { children: ReactNode }) {
         setHasKey(false);
       },
       saveSaladKey: async (value) => {
-        const trimmed = value.trim();
-        if (!trimmed) throw new Error('Paste the key before saving.');
-        await writeSaladKey(trimmed);
+        const key = normalizeSaladKey(value);
+        if (!key) throw new Error('Paste the key before saving.');
+        await writeSaladKey(key);
         setHasSaladKey(true);
       },
       clearSaladKey: async () => {
@@ -623,10 +690,15 @@ export function StudioProvider({ children }: { children: ReactNode }) {
         setHasSaladKey(false);
       },
       saveSaladEndpoint: async (value) => {
-        const endpoint = value.trim().replace(/\/+$/, '');
+        const classified = classifyGatewayInput(value);
+        if (classified.kind === 'key') throw new Error('This looks like your API key — move it to Key?');
+        if (classified.kind === 'invalid') throw new Error('The server URL has to start with http:// or https:// and include a host.');
+        const endpoint = classified.kind === 'url' ? classified.url : '';
         patchSettings({ saladEndpoint: endpoint });
-        if (await secureStoreReady()) await writeSaladEndpoint(endpoint);
+        if (await secureStoreReady()) await writeSaladEndpoint(endpoint || null);
       },
+      cloudNotice,
+      dismissCloudNotice: () => setCloudNotice(null),
       loading,
       status,
       error,
@@ -639,6 +711,8 @@ export function StudioProvider({ children }: { children: ReactNode }) {
         await saveHistory(next);
         if (combined.length > HISTORY_LIMIT) await dropImages(combined.slice(HISTORY_LIMIT));
       },
+      toggleFavorite,
+      removeGalleryTiles,
       viewer,
       openViewer: setViewer,
       closeViewer: () => setViewer(null),
@@ -663,6 +737,8 @@ export function StudioProvider({ children }: { children: ReactNode }) {
       history,
       deleteGeneration,
       clearHistory,
+      toggleFavorite,
+      removeGalleryTiles,
       remix,
       settings,
       updateSettings,
@@ -673,6 +749,7 @@ export function StudioProvider({ children }: { children: ReactNode }) {
       hasKey,
       hasSaladKey,
       secureStoreAvailable,
+      cloudNotice,
       loading,
       status,
       error,

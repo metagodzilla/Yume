@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
 import { router } from 'expo-router';
 import { Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
@@ -23,13 +23,6 @@ const MODELS: { id: ModelId; label: string; body: string }[] = [
 export default function SettingsScreen() {
   const studio = useStudio();
   const [openaiDraft, setOpenaiDraft] = useState('');
-  const [saladDraft, setSaladDraft] = useState('');
-  const [endpoint, setEndpoint] = useState(studio.settings.saladEndpoint);
-  const [meshEndpoint, setMeshEndpoint] = useState(studio.settings.meshEndpoint);
-  useEffect(() => {
-    setEndpoint(studio.settings.saladEndpoint);
-    setMeshEndpoint(studio.settings.meshEndpoint);
-  }, [studio.settings.saladEndpoint, studio.settings.meshEndpoint]);
   const [show, setShow] = useState(false);
   const [civitaiDraft, setCivitaiDraft] = useState('');
   const [message, setMessage] = useState<string | null>(null);
@@ -48,20 +41,8 @@ export default function SettingsScreen() {
         <View style={styles.card}>
           <Text style={styles.cardTitle}>App update</Text>
           <Text style={styles.body}>
-            Paste the HTTPS address of releases/latest.json. Yume compares the version code, downloads the APK, checks the checksum, and opens the Android installer. You allow installs from Yume once. There is no Expo account. JavaScript-only OTA updates are not wired up: the Expo update protocol needs a signed update server, and skipping that is more reliable than a half-working one.
+            The Update button stays in the top right of every screen. It checks the latest GitHub release of metagodzilla/Yume, and a red dot means a newer APK is ready. Tap it to download the APK and open the Android installer. You allow installs from Yume once.
           </Text>
-          <TextInput
-            testID="update-url"
-            value={studio.settings.updateManifestUrl}
-            onChangeText={(updateManifestUrl) => void studio.updateSettings({ updateManifestUrl })}
-            placeholder="https://example.com/latest.json"
-            placeholderTextColor={colors.faint}
-            autoCapitalize="none"
-            style={styles.input}
-          />
-          <Pressable testID="check-updates" onPress={() => void studio.updateSettings({ updateManifestUrl: studio.settings.updateManifestUrl.trim() })}>
-            <Text style={styles.link}>Check for updates</Text>
-          </Pressable>
           <Text style={styles.label}>Cloud hourly rate (USD)</Text>
           <TextInput
             testID="hourly-rate"
@@ -75,6 +56,22 @@ export default function SettingsScreen() {
           </Pressable>
           <Pressable onPress={() => router.push('/report')}>
             <Text style={styles.link}>Report a problem</Text>
+          </Pressable>
+        </View>
+
+        <View style={styles.card}>
+          <Text style={styles.cardTitle}>Cloud setup</Text>
+          <Text style={styles.body}>
+            A short wizard creates the Salad server, or you can connect a gateway you already have. The server URL and key live on one Connect screen.
+          </Text>
+          <Pressable testID="open-cloud-setup" style={styles.save} onPress={() => router.push('/setup')}>
+            <Text style={styles.saveText}>Cloud setup</Text>
+          </Pressable>
+          <Pressable testID="open-connect" onPress={() => router.push('/connect')}>
+            <Text style={styles.link}>Connect</Text>
+          </Pressable>
+          <Pressable testID="low-power" onPress={() => void studio.updateSettings({ lowPower: !studio.settings.lowPower })}>
+            <Text style={styles.link}>{studio.settings.lowPower ? 'Low-power mode on' : 'Low-power mode off'}</Text>
           </Pressable>
         </View>
 
@@ -195,121 +192,6 @@ export default function SettingsScreen() {
                 </Pressable>
               );
             })}
-          </View>
-        ) : null}
-
-        {studio.settings.provider === 'salad' ? (
-          <View testID="salad-settings" style={styles.card}>
-            <Text style={styles.cardTitle}>SaladCloud</Text>
-            <Text style={styles.body}>
-              Paste the Container Gateway URL, then the key. On a phone both are stored with Secure Store. The app sends that key as Salad-Api-Key and as Authorization, so it can pass the gateway and the container.
-            </Text>
-            <Text style={styles.label}>Endpoint</Text>
-            <TextInput
-              testID="salad-endpoint"
-              value={endpoint}
-              onChangeText={setEndpoint}
-              placeholder="https://your-group.salad.cloud"
-              placeholderTextColor={colors.faint}
-              autoCapitalize="none"
-              autoCorrect={false}
-              style={styles.input}
-            />
-            <Pressable
-              style={styles.save}
-              onPress={() => {
-                void studio
-                  .saveSaladEndpoint(endpoint)
-                  .then(() => note('Endpoint saved on this phone.'))
-                  .catch((error: unknown) => note(error instanceof Error ? error.message : 'Could not save the endpoint.', true));
-              }}>
-              <Text style={styles.saveText}>Save endpoint</Text>
-            </Pressable>
-            <Text style={styles.label}>3D endpoint</Text>
-            <Text style={styles.body}>
-              Optional. The mesh model is a second container. Leave this empty to ask the image endpoint for /mesh. Paste the mesh gateway URL when you deploy that image on its own.
-            </Text>
-            <TextInput
-              testID="mesh-endpoint"
-              value={meshEndpoint}
-              onChangeText={setMeshEndpoint}
-              placeholder="https://your-mesh-group.salad.cloud"
-              placeholderTextColor={colors.faint}
-              autoCapitalize="none"
-              autoCorrect={false}
-              style={styles.input}
-            />
-            <Pressable
-              style={styles.save}
-              onPress={() => {
-                void studio
-                  .updateSettings({ meshEndpoint: meshEndpoint.trim() })
-                  .then(() => note('3D endpoint saved on this phone.'))
-                  .catch((error: unknown) => note(error instanceof Error ? error.message : 'Could not save the 3D endpoint.', true));
-              }}>
-              <Text style={styles.saveText}>Save 3D endpoint</Text>
-            </Pressable>
-            <Text style={styles.label}>API key</Text>
-            {studio.secureStoreAvailable ? (
-              <>
-                <Text style={styles.body}>
-                  {studio.hasSaladKey
-                    ? 'A Salad key is in Secure Store. It is not written to logs.'
-                    : 'Use the same value as YUME_API_KEY on the container. If gateway auth is on, that is also your Salad API key.'}
-                </Text>
-                <TextInput
-                  testID="salad-key"
-                  value={saladDraft}
-                  onChangeText={setSaladDraft}
-                  placeholder={studio.hasSaladKey ? 'Paste a replacement key' : 'Salad API key'}
-                  placeholderTextColor={colors.faint}
-                  autoCapitalize="none"
-                  autoCorrect={false}
-                  secureTextEntry={!show}
-                  style={styles.input}
-                />
-                <View style={styles.row}>
-                  <Pressable onPress={() => setShow((value) => !value)}>
-                    <Text style={styles.link}>{show ? 'Hide' : 'Show'}</Text>
-                  </Pressable>
-                  <Pressable
-                    style={[styles.save, !saladDraft.trim() && styles.saveOff]}
-                    disabled={!saladDraft.trim()}
-                    onPress={() => {
-                      void studio
-                        .saveSaladKey(saladDraft)
-                        .then(() => {
-                          setSaladDraft('');
-                          setShow(false);
-                          note('Salad key saved in Secure Store.');
-                        })
-                        .catch((error: unknown) => note(error instanceof Error ? error.message : 'Could not save that key.', true));
-                    }}>
-                    <Text style={styles.saveText}>Save key</Text>
-                  </Pressable>
-                </View>
-                {studio.hasSaladKey ? (
-                  <Pressable
-                    onPress={() => {
-                      void (async () => {
-                        const ok = await confirmAction('Remove the Salad key?', 'The endpoint stays.', 'Remove');
-                        if (!ok) return;
-                        await studio.clearSaladKey();
-                        note('Salad key removed.');
-                      })();
-                    }}>
-                    <Text style={styles.danger}>Remove key</Text>
-                  </Pressable>
-                ) : null}
-              </>
-            ) : (
-              <Text style={styles.body}>
-                This browser preview has no phone keychain, so the Salad key cannot be saved here. The endpoint can. Open Yume in Expo Go to store the key.
-              </Text>
-            )}
-            <Text style={styles.body}>
-              A sleeping node is not an error in your prompt. The first request can take several minutes while Salad allocates a GPU and the model loads. You are not billed for that wait, only for time the instance is running.
-            </Text>
           </View>
         ) : null}
 

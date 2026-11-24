@@ -3,6 +3,7 @@ import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { AppBar } from '@/components/AppBar';
+import { Gallery } from '@/components/Gallery';
 import { useGenerator } from '@/src/lib/genstore';
 import { useStudio } from '@/src/studio';
 import { colors, font } from '@/src/theme';
@@ -16,10 +17,8 @@ export default function LibraryScreen() {
       <ScrollView contentContainerStyle={styles.scroll}>
         <Text style={styles.title}>Library</Text>
         <Text style={styles.heading}>Gallery</Text>
-        <Text style={styles.body}>{studio.history.length} pictures on this phone.</Text>
-        <Pressable onPress={() => router.push('/(tabs)/history')}>
-          <Text style={styles.link}>Open history</Text>
-        </Pressable>
+        <Text style={styles.body}>{studio.history.length} saved generations, newest first.</Text>
+        <Gallery />
         <Text style={styles.heading}>Characters</Text>
         {studio.characters.filter((item) => item.saved).map((character) => (
           <Pressable key={character.id} onPress={() => router.push({ pathname: '/turnaround', params: { id: character.id } })}>

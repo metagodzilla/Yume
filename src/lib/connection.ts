@@ -1,3 +1,5 @@
+import { isGatewayUrl, redactSecrets } from '@/src/lib/salad';
+
 export type HealthInfo = {
   gpu?: string;
   vramUsedMb?: number | null;
@@ -92,6 +94,7 @@ function explainFailure(probe?: Probe): string {
 }
 
 export async function probe(url: string, init: RequestInit, timeoutMs: number, fetchImpl: typeof fetch = fetch): Promise<Probe> {
+  if (!isGatewayUrl(url)) return { ok: false, ms: 0, error: 'That address is not an http(s) gateway URL.' };
   const started = Date.now();
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
@@ -108,7 +111,7 @@ export async function probe(url: string, init: RequestInit, timeoutMs: number, f
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Request failed';
     const aborted = error instanceof Error && error.name === 'AbortError';
-    return { ok: false, ms: Date.now() - started, error: aborted ? 'timeout' : message };
+    return { ok: false, ms: Date.now() - started, error: aborted ? 'timeout' : redactSecrets(message) };
   } finally {
     clearTimeout(timer);
   }

@@ -1,13 +1,25 @@
 import { Image } from 'expo-image';
-import { router, useLocalSearchParams } from 'expo-router';
-import { useEffect, useState } from 'react';
+import { router, useFocusEffect, useLocalSearchParams } from 'expo-router';
+import { useCallback, useEffect, useState } from 'react';
 import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
-import { getCivitaiModel, versionFile, type CivitaiModel, type CivitaiVersion } from '@/src/lib/civitai';
-import { getGenerator, installLocal, patchGenerator, setDefaultCheckpoint, useGenerator } from '@/src/lib/genstore';
-import { readCivitaiToken, readSaladKey } from '@/src/lib/storage';
-import { normalizeEndpoint, saladErrorMessage } from '@/src/lib/salad';
+import { civitaiModelUrl, getCivitaiModel, loraFileName, thumbnailUrl, versionFile, type CivitaiModel, type CivitaiVersion } from '@/src/lib/civitai';
+import { openLink } from '@/src/lib/openLink';
+import { applyCheckpoint, getGenerator, patchGenerator, rememberServerModels, setDefaultCheckpoint, toggleLora } from '@/src/lib/genstore';
+import { toInstalled, type CatalogCheckpoint } from '@/src/lib/checkpoints';
+import { runCheckpointUse } from '@/src/lib/checkpointUse';
+import { changeContainerGroup, liveContainerGroup } from '@/src/lib/cloudActions';
+import { deploymentForEndpoint } from '@/src/lib/cloudSteps';
+import { readCloudReady } from '@/src/lib/cloudReady';
+import { confirmAction } from '@/src/lib/confirm';
+import { CLOUD_OFF_INSTALL, canUseAsDefault, installAction, isServerInstalled, needsCloudStart } from '@/src/lib/installGate';
+import { startDownload } from '@/src/lib/downloadClient';
+import { queueInstall } from '@/src/lib/queuestore';
+import { sendClientReport } from '@/src/lib/clientReport';
+import { rememberFault } from '@/src/lib/reportText';
+import { readCivitaiToken, readCloudDeployment, readSaladKey } from '@/src/lib/storage';
+import { normalizeEndpoint } from '@/src/lib/salad';
 import { useStudio } from '@/src/studio';
 import { colors, font } from '@/src/theme';
 
@@ -15,12 +27,42 @@ export default function ModelScreen() {
   const params = useLocalSearchParams<{ id?: string }>();
   const id = Number(params.id);
   const studio = useStudio();
-  const gen = useGenerator();
   const [model, setModel] = useState<CivitaiModel | null>(null);
   const [versionId, setVersionId] = useState<number | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [status, setStatus] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [progress, setProgress] = useState(0);
+  const [serverIds, setServerIds] = useState<number[]>([]);
+  const [cloudOff, setCloudOff] = useState(true);
+
+  const refreshServer = useCallback(async () => {
+    const endpoint = normalizeEndpoint(studio.settings.saladEndpoint);
+    const key = await readSaladKey();
+    if (!endpoint || !key) {
+      setServerIds([]);
+      setCloudOff(true);
+      return;
+    }
+    const ready = await readCloudReady(endpoint, key);
+    setServerIds(ready.versionIds);
+    setCloudOff(ready.off);
+    if (!ready.off && ready.versionIds.length) {
+      const listed = await fetch(`${endpoint}/models`, {
+        headers: { Authorization: `Bearer ${key}`, 'Salad-Api-Key': key, 'X-Api-Key': key },
+      });
+      if (listed.ok) {
+        const body = (await listed.json()) as { models?: CatalogCheckpoint[] };
+        rememberServerModels((body.models ?? []).filter((item) => item.type === 'Checkpoint').map(toInstalled));
+      }
+    }
+  }, [studio.settings.saladEndpoint]);
+
+  useFocusEffect(
+    useCallback(() => {
+      void refreshServer();
+    }, [refreshServer]),
+  );
 
   useEffect(() => {
     if (!id) return;
@@ -35,7 +77,8 @@ export default function ModelScreen() {
   const version = model?.modelVersions?.find((item) => item.id === versionId) ?? model?.modelVersions?.[0];
   const file = version ? versionFile(version) : undefined;
   const sample = (version?.images?.[0]?.meta ?? {}) as Record<string, unknown>;
-  const installed = version ? gen.installed.some((item) => item.versionId === version.id) : false;
+  const serverInstalled = version ? isServerInstalled(serverIds, [], version.id) : false;
+  const action = installAction({ cloudReady: !cloudOff, serverInstalled });
 
   async function install(item: CivitaiVersion) {
     if (!model || busy) return;
@@ -43,50 +86,33 @@ export default function ModelScreen() {
     setError(null);
     try {
       const primary = versionFile(item);
-      const record = {
-        versionId: item.id,
-        modelId: model.id,
-        name: model.name,
-        version: item.name,
-        type: model.type,
-        baseModel: item.baseModel,
-        filename: primary?.name ?? `civitai-${item.id}.safetensors`,
-        hash: (primary?.hashes?.AutoV2 ?? '').toLowerCase(),
-        sha256: primary?.hashes?.SHA256 ?? '',
-        triggers: item.trainedWords ?? [],
-        isDefault: false,
-      };
-      if (studio.settings.provider === 'salad') {
-        const endpoint = normalizeEndpoint(studio.settings.saladEndpoint);
-        const [key, token] = await Promise.all([readSaladKey(), readCivitaiToken()]);
-        if (!endpoint || !key) throw new Error('Salad needs an endpoint and API key before it can download a file.');
-        setStatus('Asking the Salad container to download this version…');
-        const response = await fetch(`${endpoint}/models/install`, {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            Authorization: `Bearer ${key}`,
-            'Salad-Api-Key': key,
-            ...(token ? { 'X-Civitai-Token': token } : {}),
-          },
-          body: JSON.stringify({ versionId: item.id }),
-        });
-        if (!response.ok) {
-          const raw = await response.text();
-          let detail = '';
-          try {
-            const parsed = JSON.parse(raw) as { detail?: unknown };
-            if (typeof parsed.detail === 'string') detail = parsed.detail;
-          } catch {
-            detail = '';
-          }
-          if (/civitai/i.test(detail)) throw new Error(detail);
-          throw new Error(saladErrorMessage({ aborted: false, status: response.status, body: raw }));
-        }
-      } else {
-        setStatus('Saved on this phone as installed. Demo mode does not download the weights.');
+      const endpoint = normalizeEndpoint(studio.settings.saladEndpoint);
+      const [key, token] = await Promise.all([readSaladKey(), readCivitaiToken()]);
+      if (!endpoint || !key) throw new Error('Salad needs an endpoint and API key before it can download a file.');
+      const ready = await readCloudReady(endpoint, key);
+      setCloudOff(ready.off);
+      setServerIds(ready.versionIds);
+      if (isServerInstalled(ready.versionIds, [], item.id)) {
+        setStatus('This version is already on the server.');
+        return;
       }
-      installLocal(record);
+      if (ready.off) {
+        const agreed = await confirmAction('Start cloud and install?', 'The cloud is off. Yume will start it, then download this file when the server is ready.', 'Start cloud');
+        if (!agreed) return;
+        if (needsCloudStart(ready.groupStatus)) {
+          const deployment = deploymentForEndpoint(endpoint, await readCloudDeployment()) ?? liveContainerGroup();
+          await changeContainerGroup({ apiKey: key, deployment, action: 'start' });
+        }
+        queueInstall(item.id, model.name);
+        setStatus('Queued. The download starts when the cloud is ready. Progress is on Downloads.');
+        router.push('/downloads');
+        return;
+      }
+      setStatus('Download queued');
+      setProgress(0);
+      await startDownload(endpoint, key, item.id, { type: model.type, name: model.name, filename: primary?.name }, token);
+      setStatus('Downloading on the server. Progress is on Downloads.');
+      router.push('/downloads');
       if (model.type === 'Checkpoint') {
         const meta = item.images?.[0]?.meta as { sampler?: string; steps?: number; cfgScale?: number } | null;
         if (meta?.sampler || meta?.steps || meta?.cfgScale) {
@@ -98,7 +124,12 @@ export default function ModelScreen() {
         }
       }
     } catch (caught) {
-      setError(caught instanceof Error ? caught.message : 'Install failed.');
+      const message = caught instanceof Error ? caught.message : 'Install failed.';
+      setError(message);
+      const endpoint = normalizeEndpoint(studio.settings.saladEndpoint);
+      rememberFault({ time: Date.now(), source: 'install', message, endpoint, payload: { versionId: item.id } });
+      const key = await readSaladKey();
+      if (endpoint && key) void sendClientReport(endpoint, key).catch(() => undefined);
     } finally {
       setBusy(false);
     }
@@ -143,14 +174,109 @@ export default function ModelScreen() {
               File {file?.name ?? 'unknown'}
               {file?.hashes?.AutoV2 ? ` · hash ${file.hashes.AutoV2}` : ''}
             </Text>
-            <Pressable testID="model-install" style={styles.go} disabled={busy || installed} onPress={() => void install(version)}>
-              <Text style={styles.goText}>{installed ? 'Installed' : busy ? 'Installing…' : 'Install'}</Text>
+            <Pressable onPress={() => openLink(civitaiModelUrl(model.id, version.id))}>
+              <Text style={styles.link}>Open on Civitai</Text>
             </Pressable>
-            {model.type === 'Checkpoint' && installed ? (
+            {model.type === 'LORA' || model.type === 'LoCon' ? (
+              <Pressable
+                onPress={() =>
+                  toggleLora({
+                    name: loraFileName(version, model.name),
+                    weight: 0.8,
+                    modelId: model.id,
+                    versionId: version.id,
+                  })
+                }>
+                <Text style={styles.link}>Use this LoRA</Text>
+              </Pressable>
+            ) : null}
+            {busy ? (
+              <View testID="install-progress" style={styles.track}>
+                <View style={[styles.bar, { width: `${Math.round(progress * 100)}%` }]} />
+              </View>
+            ) : null}
+            <Pressable testID="model-install" style={styles.go} disabled={busy || action === 'installed'} onPress={() => void install(version)}>
+              <Text style={styles.goText}>{action === 'installed' ? 'Installed' : action === 'start-and-install' ? CLOUD_OFF_INSTALL : busy ? 'Installing…' : 'Install'}</Text>
+            </Pressable>
+            <Pressable onPress={() => router.push('/downloads')}>
+              <Text style={styles.link}>Downloads</Text>
+            </Pressable>
+            {model.type === 'Checkpoint' && serverInstalled ? (
+              <Pressable
+                testID="use-now"
+                onPress={() => {
+                  void (async () => {
+                    if (!version || busy) return;
+                    const resource = {
+                      versionId: version.id,
+                      modelId: model.id,
+                      name: model.name,
+                      version: version.name,
+                      type: model.type,
+                      baseModel: version.baseModel,
+                      filename: file?.name ?? `civitai-${version.id}.safetensors`,
+                      hash: (file?.hashes?.AutoV2 ?? '').toLowerCase(),
+                      sha256: file?.hashes?.SHA256 ?? '',
+                      triggers: version.trainedWords ?? [],
+                      isDefault: true,
+                    };
+                    setBusy(true);
+                    setError(null);
+                    try {
+                      if (studio.settings.provider === 'salad') {
+                        const endpoint = normalizeEndpoint(studio.settings.saladEndpoint);
+                        const key = await readSaladKey();
+                        if (!endpoint || !key) throw new Error('Connect a Salad gateway before loading this checkpoint.');
+                        setStatus('Loading checkpoint');
+                        await runCheckpointUse({
+                          endpoint,
+                          apiKey: key,
+                          versionId: version.id,
+                          onProgress: (label, fraction) => {
+                            setStatus(label);
+                            setProgress(fraction == null ? 0 : fraction / 100);
+                          },
+                        });
+                      }
+                      applyCheckpoint(toInstalled(resource));
+                      setStatus('This checkpoint is loaded.');
+                    } catch (caught) {
+                      setError(caught instanceof Error ? caught.message : 'The checkpoint could not be loaded.');
+                    } finally {
+                      setBusy(false);
+                    }
+                  })();
+                }}>
+                <Text style={styles.link}>Use now</Text>
+              </Pressable>
+            ) : null}
+            {model.type === 'Checkpoint' && canUseAsDefault(serverInstalled) ? (
               <Pressable
                 onPress={() => {
-                  setDefaultCheckpoint(version.id);
-                  setStatus('This checkpoint is now the default.');
+                  void (async () => {
+                    const endpoint = normalizeEndpoint(studio.settings.saladEndpoint);
+                    const key = await readSaladKey();
+                    if (!endpoint || !key || !canUseAsDefault(serverInstalled)) {
+                      setError('Use as default is only available after the server has this checkpoint.');
+                      return;
+                    }
+                    const response = await fetch(`${endpoint}/models/default`, {
+                      method: 'POST',
+                      headers: {
+                        'Content-Type': 'application/json',
+                        Authorization: `Bearer ${key}`,
+                        'Salad-Api-Key': key,
+                        'X-Api-Key': key,
+                      },
+                      body: JSON.stringify({ versionId: version.id }),
+                    });
+                    if (!response.ok) {
+                      setError('The server does not have this checkpoint yet.');
+                      return;
+                    }
+                    setDefaultCheckpoint(version.id);
+                    setStatus('This checkpoint is now the default.');
+                  })();
                 }}>
                 <Text style={styles.link}>Use as default</Text>
               </Pressable>
@@ -187,6 +313,8 @@ const styles = StyleSheet.create({
   chip: { borderRadius: 999, borderWidth: 1, borderColor: colors.line, paddingHorizontal: 10, paddingVertical: 6 },
   chipOn: { borderColor: colors.sakura },
   chipText: { color: colors.text, fontFamily: font.bold, fontSize: 13 },
+  track: { height: 8, borderRadius: 999, backgroundColor: colors.ink, overflow: 'hidden' },
+  bar: { height: 8, backgroundColor: colors.sakura },
   go: { backgroundColor: colors.sakura, borderRadius: 999, paddingVertical: 12, alignItems: 'center' },
   goText: { color: colors.ink, fontFamily: font.black, fontSize: 16 },
   ok: { color: colors.ok, fontFamily: font.semibold, fontSize: 14 },

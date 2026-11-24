@@ -1,5 +1,7 @@
 import { useSyncExternalStore } from 'react';
 
+import type { ContentFilter } from '@/src/lib/civitai';
+import { familyPreset } from '@/src/lib/checkpoints';
 import { DEFAULT_CHECKPOINT } from '@/src/lib/defaultModel';
 
 export type InstalledResource = {
@@ -31,7 +33,8 @@ export type GeneratorState = {
   qualityTags: boolean;
   triggers: boolean;
   checkpointId: number;
-  loras: { name: string; weight: number }[];
+  loras: { name: string; weight: number; modelId?: number; versionId?: number }[];
+  contentFilter: ContentFilter;
   embeddings: string;
   vae: string;
   hires: boolean;
@@ -43,6 +46,7 @@ export type GeneratorState = {
   denoise: number;
   nsfw: boolean;
   installed: InstalledResource[];
+  vPrediction: boolean;
 };
 
 export const defaultResource = (): InstalledResource => ({
@@ -85,7 +89,9 @@ export const initialGenerator = (): GeneratorState => ({
   mode: 'txt2img',
   denoise: 0.55,
   nsfw: false,
+  contentFilter: 'sfw',
   installed: [defaultResource()],
+  vPrediction: false,
 });
 
 let state = initialGenerator();
@@ -101,15 +107,83 @@ export function getGenerator(): GeneratorState {
 }
 
 export function patchGenerator(patch: Partial<GeneratorState>) {
-  state = { ...state, ...patch };
+  const contentFilter = patch.contentFilter ?? state.contentFilter;
+  state = { ...state, ...patch, contentFilter, nsfw: contentFilter !== 'sfw' };
   emit();
   void persist();
+}
+
+export function toggleLora(lora: { name: string; weight: number; modelId?: number; versionId?: number }) {
+  const same = (item: GeneratorState['loras'][number]) =>
+    lora.versionId && item.versionId ? item.versionId === lora.versionId : item.name === lora.name;
+  const exists = state.loras.some(same);
+  patchGenerator({ loras: exists ? state.loras.filter((item) => !same(item)) : [...state.loras, lora] });
 }
 
 export function installLocal(resource: InstalledResource) {
   const others = state.installed.filter((item) => item.versionId !== resource.versionId);
   const installed = [...others, resource];
   patchGenerator({ installed, checkpointId: resource.type === 'Checkpoint' ? resource.versionId : state.checkpointId });
+}
+
+export function applyCheckpoint(resource: InstalledResource) {
+  const preset = familyPreset(resource.baseModel, resource.name);
+  const installed = [
+    ...state.installed
+      .filter((item) => item.versionId !== resource.versionId)
+      .map((item) => (item.type === 'Checkpoint' ? { ...item, isDefault: false } : item)),
+    { ...resource, isDefault: resource.type === 'Checkpoint' },
+  ];
+  patchGenerator({
+    installed,
+    checkpointId: resource.type === 'Checkpoint' ? resource.versionId : state.checkpointId,
+    sampler: preset.sampler,
+    steps: preset.steps,
+    cfg: preset.cfg,
+    clipSkip: preset.clipSkip,
+    width: preset.width,
+    height: preset.height,
+    negative: preset.negative,
+    qualityTags: true,
+    vPrediction: preset.vPrediction,
+  });
+}
+
+export function resetModelDefaults(baseModel: string, name = '') {
+  const preset = familyPreset(baseModel, name);
+  patchGenerator({
+    sampler: preset.sampler,
+    steps: preset.steps,
+    cfg: preset.cfg,
+    clipSkip: preset.clipSkip,
+    width: preset.width,
+    height: preset.height,
+    negative: preset.negative,
+    qualityTags: true,
+    vPrediction: preset.vPrediction,
+  });
+}
+
+export function rememberServerModels(records: InstalledResource[]) {
+  const checkpoints = records.filter((item) => item.type === 'Checkpoint');
+  const rest = state.installed.filter((item) => item.type !== 'Checkpoint' && !checkpoints.some((record) => record.versionId === item.versionId));
+  const installed = [...checkpoints, ...rest];
+  const checkpointId = installed.some((item) => item.versionId === state.checkpointId)
+    ? state.checkpointId
+    : checkpoints.find((item) => item.isDefault)?.versionId ?? state.checkpointId;
+  patchGenerator({ installed, checkpointId });
+}
+
+export function replaceServerCheckpoints(records: InstalledResource[], activeId: number | null) {
+  const extras = state.installed.filter((item) => item.type !== 'Checkpoint');
+  const installed = [...records.map((item) => ({ ...item, isDefault: item.versionId === activeId })), ...extras];
+  const stillSelected = records.some((item) => item.versionId === state.checkpointId);
+  const checkpointId = stillSelected
+    ? state.checkpointId
+    : activeId && records.some((item) => item.versionId === activeId)
+      ? activeId
+      : records[0]?.versionId ?? state.checkpointId;
+  patchGenerator({ installed, checkpointId });
 }
 
 export function setDefaultCheckpoint(versionId: number) {
@@ -151,7 +225,13 @@ export async function hydrateFromDisk() {
     const parsed = JSON.parse(raw) as Partial<GeneratorState>;
     const installed = Array.isArray(parsed.installed) && parsed.installed.length ? parsed.installed : [defaultResource()];
     if (!installed.some((item) => item.versionId === DEFAULT_CHECKPOINT.versionId)) installed.unshift(defaultResource());
-    state = { ...initialGenerator(), ...parsed, installed, nsfw: parsed.nsfw === true };
+    const contentFilter: ContentFilter =
+      parsed.contentFilter === 'all' || parsed.contentFilter === 'sfw' || parsed.contentFilter === 'nsfw'
+        ? parsed.contentFilter
+        : parsed.nsfw
+          ? 'all'
+          : 'sfw';
+    state = { ...initialGenerator(), ...parsed, installed, contentFilter, nsfw: contentFilter !== 'sfw' };
     emit();
   } catch {
     state = initialGenerator();

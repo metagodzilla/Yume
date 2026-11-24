@@ -3,6 +3,8 @@ import { Pressable, StyleSheet, Switch, Text, TextInput, View } from 'react-nati
 
 import { SAMPLERS, snapSize } from '@/src/lib/library';
 import { uid } from '@/src/lib/id';
+import { loraPage } from '@/src/lib/civitai';
+import { openLink } from '@/src/lib/openLink';
 import { useStudio } from '@/src/studio';
 import { colors, font } from '@/src/theme';
 import type { SamplerId } from '@/src/lib/types';
@@ -219,6 +221,9 @@ export function AdvancedPanel() {
                 keyboardType="decimal-pad"
                 style={styles.weight}
               />
+              <Pressable onPress={() => openLink(loraPage(lora).url)}>
+                <Text style={styles.link}>{loraPage(lora).label === 'Search on Civitai' ? 'Search' : 'Civitai'}</Text>
+              </Pressable>
               <Pressable onPress={() => studio.setLoras(studio.settings.loras.filter((item) => item.id !== lora.id))}>
                 <Text style={styles.link}>Remove</Text>
               </Pressable>

@@ -26,7 +26,7 @@ export function AppBar({ dot }: { dot?: string }) {
 }
 
 const styles = StyleSheet.create({
-  bar: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 12, paddingVertical: 8 },
+  bar: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 12, paddingVertical: 8, paddingRight: 96 },
   logo: { color: colors.text, fontFamily: font.logo, fontSize: 22 },
   actions: { flexDirection: 'row', alignItems: 'center', gap: 12 },
   dot: { width: 10, height: 10, borderRadius: 5 },
