@@ -12,10 +12,14 @@ from yume_server.main import app  # noqa: E402
 from yume_server.manga_edit import edit_prompt, expand_for_body, page_is_color, segment_person  # noqa: E402
 from yume_server.pose import retarget_anchored, synthetic_reference  # noqa: E402
 from yume_server.upscale import (  # noqa: E402
+    LINEART_REPO,
+    TILE_REPO,
     compose_prompt,
+    controlnet_kwargs,
     detail_denoise,
     find_bubbles,
     find_panels,
+    picture_failure,
     plan_target,
     redraw_denoise,
     repair_denoise,
@@ -74,6 +78,34 @@ def test_panels_and_bubbles() -> None:
     found = find_bubbles(bubble, 80, 80)
     assert len(found) == 1
     assert scale_rects([(10, 10, 20, 20)], 100, 100, 200, 200) == [(20, 20, 40, 40)]
+
+
+def test_lineart_loads_the_fp16_safetensors_not_a_missing_bin() -> None:
+    line = controlnet_kwargs(LINEART_REPO)
+    assert line["variant"] == "fp16" and line["use_safetensors"] is True
+    assert controlnet_kwargs(TILE_REPO) == {"use_safetensors": True}
+    from yume_server.reference import CONTROLNET_REPO, IP_WEIGHT
+
+    assert controlnet_kwargs(CONTROLNET_REPO)["use_safetensors"] is True
+    assert IP_WEIGHT.endswith(".safetensors")
+    message = picture_failure(OSError("TheMistoAI/MistoLine does not appear to have a file named diffusion_pytorch_model.bin"))
+    assert message == "The lineart ControlNet could not be loaded. The picture was not changed."
+
+
+def test_a_failed_manga_edit_is_an_error_not_the_original_page(monkeypatch) -> None:
+    def boom(*_args, **_kwargs):
+        raise OSError("TheMistoAI/MistoLine does not appear to have a file named diffusion_pytorch_model.bin")
+
+    monkeypatch.setattr("yume_server.upscale.mock_mode", lambda: False)
+    monkeypatch.setattr("yume_server.upscale._gpu", boom)
+    headers = {"Authorization": "Bearer test-key"}
+    image = _picture(32, 48)
+    with TestClient(app) as client:
+        failed = client.post("/manga", headers=headers, json={"image": image, "job": "edit", "preset": "2k"})
+    assert failed.status_code == 500, failed.text
+    body = failed.json()
+    assert body["detail"] == "The lineart ControlNet could not be loaded. The picture was not changed."
+    assert "image" not in body
 
 
 def test_upscale_and_manga_are_separate_endpoints() -> None:

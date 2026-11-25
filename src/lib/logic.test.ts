@@ -58,6 +58,7 @@ import { emptyCloudWatch, observeCloud, STUCK_QUIET_MS, STUCK_STATE_MS } from '@
 import { DEFAULT_SETTINGS } from '@/src/lib/types';
 import { fileLine, filesForPhase, formatReadyIn, overallEtaSeconds, softwareDetail } from '@/src/lib/startupEta';
 import { getCloudSnapshot, setCloudGate } from '@/src/lib/cloudGate';
+import { compareDirection } from '@/src/lib/compare';
 import { cloudIsWaiting, phoneDropNote, shouldUsePhone } from '@/src/lib/phoneFallback';
 import { areaCounts } from '@/src/lib/checkRows';
 import { classifyHeat, estimatePowerWatts, shouldKeepScreenAwake, throttleFor, throttleSteps } from '@/src/lib/phonePower';
@@ -688,6 +689,7 @@ assert(readySnap.gate === 'ready' && readySnap.toast === 'Cloud is ready. New pi
 setCloudGate('ready');
 assert(getCloudSnapshot() === readySnap, 'repeating ready does not toast again');
 assert(cloudIsWaiting('slow') && phoneDropNote({ loras: 1, reference: true }).includes('LoRA') && phoneDropNote({ loras: 1, reference: true }).includes('clothes prompt'), 'phone keeps the prompt and says what the cloud must do');
+assert(compareDirection(390) === 'column' && compareDirection(800) === 'row', 'a narrow screen stacks the original above the results');
 const moving = cloudChecklist({ hasEndpoint: true, healthStatus: 503, readyStatus: 503, readyDetail: 'Cloud has no internet - moving to a new machine', startupMessage: 'Cloud has no internet - moving to a new machine' });
 assert(moving.liveTitle === 'Cloud has no internet - moving to a new machine' && moving.pill === 'Moving', 'dead network tells the phone the machine is moving');
 const locked = cloudChecklist({ hasEndpoint: true, healthStatus: 403, readyStatus: 403 });

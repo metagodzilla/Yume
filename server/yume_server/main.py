@@ -705,12 +705,19 @@ def _picture_job(kind: str, body: Any) -> dict[str, Any]:
         raise HTTPException(status_code=503, detail="Model is still loading.")
     try:
         return run_manga(body) if kind == "manga" else run_upscale(body)
+    except HTTPException:
+        raise
     except LoraInstalling as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except RuntimeError as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
+    except Exception as exc:
+        from yume_server.upscale import picture_failure
+
+        _LOG.exception("%s failed", kind)
+        raise HTTPException(status_code=500, detail=picture_failure(exc)) from exc
 
 
 @app.post("/upscale")

@@ -25,6 +25,38 @@ LINEART_REPO = "TheMistoAI/MistoLine"
 FACE_WEIGHT = "ip-adapter-plus-face_sdxl_vit-h.safetensors"
 IP_REPO = "h94/IP-Adapter"
 IP_SUBFOLDER = "sdxl_models"
+
+
+def controlnet_kwargs(repo: str) -> dict[str, Any]:
+    """MistoLine ships diffusion_pytorch_model.fp16.safetensors, not a .bin file.
+
+    The xinsir SDXL ControlNets ship diffusion_pytorch_model.safetensors.
+    IP-Adapter and the anime upscaler are loaded by those exact filenames.
+    """
+    if repo == LINEART_REPO:
+        return {"variant": "fp16", "use_safetensors": True}
+    return {"use_safetensors": True}
+
+
+def load_controlnet(repo: str, dtype: Any) -> Any:
+    from diffusers import ControlNetModel
+
+    return ControlNetModel.from_pretrained(repo, torch_dtype=dtype, **controlnet_kwargs(repo))
+
+
+def picture_failure(exc: BaseException) -> str:
+    text = " ".join(str(exc).split())
+    if "MistoLine" in text or "diffusion_pytorch_model" in text:
+        return "The lineart ControlNet could not be loaded. The picture was not changed."
+    if "controlnet-openpose" in text:
+        return "The pose ControlNet could not be loaded. The picture was not changed."
+    if "controlnet-tile" in text:
+        return "The tile ControlNet could not be loaded. The picture was not changed."
+    if "ip-adapter" in text.lower():
+        return "The style adapter could not be loaded. The picture was not changed."
+    if len(text) > 180:
+        text = text[:180].rstrip() + "…"
+    return text or "The picture could not be finished. The original was not replaced."
 _READY = False
 _LOCK = threading.Lock()
 
@@ -463,7 +495,7 @@ def _ink(image: Any) -> Any:
 
 
 def _refine(image: Any, reference: Any, mode: str, denoise: float, prompt: str, loras: list[Any], pose: Any = None) -> Any:
-    from diffusers import ControlNetModel, StableDiffusionXLControlNetImg2ImgPipeline, StableDiffusionXLImg2ImgPipeline
+    from diffusers import StableDiffusionXLControlNetImg2ImgPipeline, StableDiffusionXLImg2ImgPipeline
 
     from yume_server.generate import _apply_loras, _clear_loras, loaded_pipe
 
@@ -479,18 +511,18 @@ def _refine(image: Any, reference: Any, mode: str, denoise: float, prompt: str, 
         from yume_server.reference import CONTROLNET_REPO
 
         controls = [
-            ControlNetModel.from_pretrained(CONTROLNET_REPO, torch_dtype=pipe.unet.dtype),
-            ControlNetModel.from_pretrained(LINEART_REPO, torch_dtype=pipe.unet.dtype),
+            load_controlnet(CONTROLNET_REPO, pipe.unet.dtype),
+            load_controlnet(LINEART_REPO, pipe.unet.dtype),
         ]
         scales = [0.85, 0.55]
     elif mode == "manga":
         controls = [
-            ControlNetModel.from_pretrained(LINEART_REPO, torch_dtype=pipe.unet.dtype),
-            ControlNetModel.from_pretrained(TILE_REPO, torch_dtype=pipe.unet.dtype),
+            load_controlnet(LINEART_REPO, pipe.unet.dtype),
+            load_controlnet(TILE_REPO, pipe.unet.dtype),
         ]
         scales = [0.85, 0.45 if "full color" in prompt else 0.7]
     elif mode == "repair":
-        controls = [ControlNetModel.from_pretrained(TILE_REPO, torch_dtype=pipe.unet.dtype)]
+        controls = [load_controlnet(TILE_REPO, pipe.unet.dtype)]
         scales = [max(0.45, 0.9 - denoise)]
     adapters: list[str] = []
     if controls:

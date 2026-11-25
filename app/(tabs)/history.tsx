@@ -3,6 +3,7 @@ import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { FrameGrid } from '@/components/FrameGrid';
+import { ResultCompare } from '@/components/ResultCompare';
 import { ago } from '@/src/lib/id';
 import { confirmAction } from '@/src/lib/confirm';
 import { aspectById, styleById } from '@/src/lib/presets';
@@ -63,21 +64,39 @@ export default function HistoryScreen() {
                   <Ionicons name="close" size={18} color={colors.faint} />
                 </Pressable>
               </View>
-              <FrameGrid
-                uris={item.imageUris}
-                aspectId={item.aspectId}
-                onPress={(index) =>
-                  openViewer({
-                    images: item.imageUris,
-                    index,
-                    prompt: item.finalPrompt || item.enhancedPrompt || item.userPrompt,
-                    title: item.characterName || item.styleName || 'Yume',
-                    filename: `yume-${item.id}-${index + 1}.png`,
-                    generationId: item.id,
-                    frames: item.imageUris.map((_, imageIndex) => ({ generationId: item.id, imageIndex })),
-                  })
-                }
-              />
+              {item.originalUri ? (
+                <ResultCompare
+                  original={item.originalUri}
+                  results={item.imageUris}
+                  onOpen={(index) =>
+                    openViewer({
+                      images: item.imageUris,
+                      index: Math.max(0, index),
+                      prompt: item.finalPrompt || item.enhancedPrompt || item.userPrompt,
+                      title: item.characterName || item.styleName || 'Yume',
+                      filename: `yume-${item.id}-${Math.max(0, index) + 1}.png`,
+                      generationId: item.id,
+                      frames: item.imageUris.map((_, imageIndex) => ({ generationId: item.id, imageIndex })),
+                    })
+                  }
+                />
+              ) : (
+                <FrameGrid
+                  uris={item.imageUris}
+                  aspectId={item.aspectId}
+                  onPress={(index) =>
+                    openViewer({
+                      images: item.imageUris,
+                      index,
+                      prompt: item.finalPrompt || item.enhancedPrompt || item.userPrompt,
+                      title: item.characterName || item.styleName || 'Yume',
+                      filename: `yume-${item.id}-${index + 1}.png`,
+                      generationId: item.id,
+                      frames: item.imageUris.map((_, imageIndex) => ({ generationId: item.id, imageIndex })),
+                    })
+                  }
+                />
+              )}
               <View style={styles.cardHead}>
                 <Text style={styles.when}>
                   {ago(item.createdAt)}

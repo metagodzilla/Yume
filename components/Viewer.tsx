@@ -22,12 +22,14 @@ export function Viewer() {
   const [busy, setBusy] = useState(false);
   const [details, setDetails] = useState(false);
   const [scale, setScale] = useState(1);
+  const [showOriginal, setShowOriginal] = useState(false);
   const scaleRef = useRef(1);
   const viewerKey = viewer ? `${viewer.title}:${viewer.index}:${viewer.images.length}` : '';
 
   useEffect(() => {
     setNote(null);
     setScale(1);
+    setShowOriginal(false);
     scaleRef.current = 1;
   }, [viewerKey]);
 
@@ -69,6 +71,8 @@ export function Viewer() {
   const uri = viewer.images[viewer.index];
   const frame = viewer.frames?.[viewer.index];
   const generation = frame ? studio.history.find((item) => item.id === frame.generationId) : viewer.generationId ? studio.history.find((item) => item.id === viewer.generationId) : undefined;
+  const original = generation?.originalUri;
+  const shown = scale > 1 && showOriginal && original ? original : uri;
   const imageIndex = frame?.imageIndex ?? viewer.index;
   const favorite = generation ? (generation.favoriteIndexes ?? []).includes(imageIndex) : false;
   const prompt = generation?.finalPrompt || generation?.userPrompt || viewer.prompt;
@@ -103,8 +107,10 @@ export function Viewer() {
         </View>
 
         <View style={styles.stage} {...swipe.panHandlers}>
-          {uri ? (
-            <Image source={{ uri }} style={[styles.image, { transform: [{ scale }] }]} contentFit="contain" cachePolicy="memory-disk" />
+          {shown ? (
+            <Pressable style={styles.image} disabled={!(scale > 1 && original)} onPress={() => setShowOriginal((value) => !value)}>
+              <Image source={{ uri: shown }} style={[styles.image, { transform: [{ scale }] }]} contentFit="contain" cachePolicy="memory-disk" />
+            </Pressable>
           ) : null}
         </View>
 
@@ -119,6 +125,7 @@ export function Viewer() {
               {prompt || 'Character sheet only'}
             </Text>
           )}
+          {scale > 1 && original ? <Text style={styles.note}>{showOriginal ? 'Original. Tap the picture for this result.' : 'Result. Tap the picture for the original.'}</Text> : null}
           {note ? <Text style={styles.note}>{note}</Text> : null}
           <View style={styles.actions}>
             <Action icon="download-outline" label="Save" onPress={() => run(() => saveImageToLibrary(uri, filename))} />

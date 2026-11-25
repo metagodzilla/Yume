@@ -113,6 +113,8 @@ export type Generation = {
   characterId: string | null;
   characterName: string | null;
   imageUris: string[];
+  /** The page or photo these results were made from, kept so history can compare. */
+  originalUri?: string;
   source: 'demo' | 'openai' | 'salad';
   model: string;
   provider: ProviderId;

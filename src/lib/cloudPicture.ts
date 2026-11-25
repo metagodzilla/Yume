@@ -21,7 +21,7 @@ export async function cloudPost(endpoint: string, key: string, path: string, bod
   return { image: payload.image, mask: payload.mask, width: payload.width || 0, height: payload.height || 0, prompt: payload.prompt, mode: payload.mode, page: payload.page, bubbles: payload.bubbles };
 }
 
-export function pictureRecord(input: { id: string; uri: string; prompt: string; negative: string; model: string; width: number; height: number; provider: Generation['provider'] }): Generation {
+export function pictureRecord(input: { id: string; uri: string; uris?: string[]; originalUri?: string; prompt: string; negative: string; model: string; width: number; height: number; provider: Generation['provider'] }): Generation {
   return {
     id: input.id,
     createdAt: Date.now(),
@@ -35,7 +35,8 @@ export function pictureRecord(input: { id: string; uri: string; prompt: string; 
     count: 1,
     characterId: null,
     characterName: null,
-    imageUris: [input.uri],
+    imageUris: input.uris?.length ? input.uris : [input.uri],
+    ...(input.originalUri ? { originalUri: input.originalUri } : {}),
     source: input.provider === 'salad' ? 'salad' : 'demo',
     model: input.model,
     provider: input.provider,

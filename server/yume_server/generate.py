@@ -900,9 +900,11 @@ def _draw_reference(pipe: Any, body: Any, common: dict[str, Any], strength: floa
     control = _pose_image(body) if pose_on else None
     if pose_on:
         ensure_reference_weights()
-        from diffusers import ControlNetModel, StableDiffusionXLControlNetImg2ImgPipeline, StableDiffusionXLControlNetPipeline
+        from diffusers import StableDiffusionXLControlNetImg2ImgPipeline, StableDiffusionXLControlNetPipeline
 
-        controlnet = ControlNetModel.from_pretrained(CONTROLNET_REPO, torch_dtype=pipe.unet.dtype)
+        from yume_server.upscale import load_controlnet
+
+        controlnet = load_controlnet(CONTROLNET_REPO, pipe.unet.dtype)
         if copy_on:
             runner = StableDiffusionXLControlNetImg2ImgPipeline(**pipe.components, controlnet=controlnet)
             if style_on:
