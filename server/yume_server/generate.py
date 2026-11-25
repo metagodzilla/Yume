@@ -449,6 +449,10 @@ def prepare_loras(body: Any, token: str | None) -> None:
 def _apply_loras(pipe: Any, loras: list[Any]) -> list[str]:
     if not loras:
         return []
+    from yume_server.peft_setup import MISSING, ensure_peft
+
+    if not ensure_peft():
+        raise RuntimeError(MISSING)
     names: list[str] = []
     weights: list[float] = []
     for index, lora in enumerate(loras):
