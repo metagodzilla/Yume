@@ -525,6 +525,64 @@ export function supportTags(input: {
   return tags.join(', ');
 }
 
+export type GeneratedPrompt = {
+  prompt: string;
+  clothes: string;
+  positive: string;
+  autoPrompt: string;
+  autoClothes: string;
+  autoPositive: string;
+  error: string | null;
+};
+
+/** Local tag conversion. It does not call the cloud, so it works offline and while Salad is up. */
+export function generatePromptFromDescribe(input: {
+  describe: string;
+  prompt: string;
+  clothes: string;
+  positive: string;
+  autoPrompt?: string;
+  autoClothes?: string;
+  autoPositive?: string;
+  people?: NamedPerson[];
+  baseModel?: string;
+  style?: string;
+  character?: Character | null;
+}): GeneratedPrompt {
+  const text = input.describe.trim();
+  const unchanged = {
+    prompt: input.prompt,
+    clothes: input.clothes,
+    positive: input.positive,
+    autoPrompt: input.autoPrompt ?? '',
+    autoClothes: input.autoClothes ?? '',
+    autoPositive: input.autoPositive ?? '',
+  };
+  if (!text) {
+    return { ...unchanged, error: 'Write a description first. The prompt was not changed.' };
+  }
+  const parts = describeParts(text, input.people ?? []);
+  const support = supportTags({
+    text,
+    baseModel: input.baseModel,
+    style: input.style,
+    character: input.character,
+    people: input.people,
+  });
+  if (!parts.prompt && !parts.clothes && !support) {
+    return { ...unchanged, error: 'That description did not become any tags. Name a person, a place, or an action.' };
+  }
+  return {
+    prompt: keepManualTags(parts.prompt, input.prompt, input.autoPrompt ?? '', 'edited'),
+    clothes: keepManualTags(parts.clothes, input.clothes, input.autoClothes ?? '', 'edited'),
+    positive: keepManualTags(support, input.positive, input.autoPositive ?? '', 'edited'),
+    autoPrompt: parts.prompt,
+    autoClothes: parts.clothes,
+    autoPositive: support,
+    error: null,
+  };
+}
+
 /** 1.5.4 Positive stays Positive. Extra starts empty. An older Extra with no Positive becomes Positive. */
 export function settleSavedPrompts(parsed: { positive?: string; extraPrompt?: string; positiveAuto?: boolean; promptAuto?: boolean }): {
   positive: string;
@@ -535,7 +593,7 @@ export function settleSavedPrompts(parsed: { positive?: string; extraPrompt?: st
   const storedPositive = typeof parsed.positive === 'string' ? parsed.positive : '';
   const legacyExtra = typeof parsed.extraPrompt === 'string' ? parsed.extraPrompt : '';
   const positive = storedPositive.trim() ? storedPositive : legacyExtra;
-  const positiveAuto = typeof parsed.positiveAuto === 'boolean' ? parsed.positiveAuto : !positive.trim();
-  const promptAuto = typeof parsed.promptAuto === 'boolean' ? parsed.promptAuto : true;
+  const positiveAuto = typeof parsed.positiveAuto === 'boolean' ? parsed.positiveAuto : false;
+  const promptAuto = typeof parsed.promptAuto === 'boolean' ? parsed.promptAuto : false;
   return { positive, extraPrompt: '', positiveAuto, promptAuto };
 }
