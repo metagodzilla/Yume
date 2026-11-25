@@ -2,6 +2,7 @@ import { useSyncExternalStore } from 'react';
 
 import type { ContentFilter } from '@/src/lib/civitai';
 import { ANIME_STUDIO_CHECKPOINT, STUDIO_APPLIED, type StudioStyleId } from '@/src/lib/animeStudio';
+import { settleSavedPrompts } from '@/src/lib/positiveTags';
 import { settingsForCheckpoint, type RecommendedSettings } from '@/src/lib/checkpoints';
 import { DEFAULT_CHECKPOINT } from '@/src/lib/defaultModel';
 
@@ -20,8 +21,13 @@ export type InstalledResource = {
 };
 
 export type GeneratorState = {
+  describe: string;
   prompt: string;
+  /** When true, Describe is converted into the Prompt box. */
+  promptAuto: boolean;
   positive: string;
+  /** When true, Positive is filled with supporting tags from the same description. */
+  positiveAuto: boolean;
   quality: string;
   qualityEdited: boolean;
   /** @deprecated Merged into positive. Kept so a 1.4.9 save still loads. */
@@ -39,7 +45,7 @@ export type GeneratorState = {
   qualityTags: boolean;
   triggers: boolean;
   checkpointId: number;
-  loras: { name: string; weight: number; modelId?: number; versionId?: number; baseModel?: string; triggers?: string[] }[];
+  loras: { name: string; weight: number; modelId?: number; versionId?: number; baseModel?: string; triggers?: string[]; triggerGroup?: number }[];
   contentFilter: ContentFilter;
   embeddings: string;
   vae: string;
@@ -86,8 +92,11 @@ export const studioResource = (): InstalledResource => ({
 });
 
 export const initialGenerator = (): GeneratorState => ({
+  describe: '',
   prompt: '',
+  promptAuto: true,
   positive: '',
+  positiveAuto: true,
   quality: ANIME_STUDIO_CHECKPOINT.quality,
   qualityEdited: false,
   extraPrompt: '',
@@ -219,7 +228,7 @@ export function resetModelDefaults(baseModel: string, name = '') {
 
 export function resetBuiltPrompt(baseModel: string, name = '') {
   const preset = settingsForCheckpoint(baseModel, name);
-  patchGenerator({ quality: preset.quality, qualityEdited: false, qualityTags: true, positive: '', extraPrompt: '' });
+  patchGenerator({ quality: preset.quality, qualityEdited: false, qualityTags: true, extraPrompt: '' });
 }
 
 export function resetQualityTags(baseModel: string, name = '') {
@@ -228,16 +237,11 @@ export function resetQualityTags(baseModel: string, name = '') {
 }
 
 export function addLora(lora: { name: string; weight: number; modelId?: number; versionId?: number; triggers?: string[]; baseModel?: string }) {
-  const triggers = (lora.triggers ?? []).map((item) => item.trim()).filter(Boolean);
-  const existing = state.prompt.trim();
-  const missing = triggers.filter((item) => !existing.toLowerCase().includes(item.toLowerCase()));
-  const prompt = missing.length ? [existing, missing.join(', ')].filter(Boolean).join(', ') : state.prompt;
   const same = (item: GeneratorState['loras'][number]) =>
     lora.versionId && item.versionId ? item.versionId === lora.versionId : item.name === lora.name;
   const others = state.loras.filter((item) => !same(item));
   patchGenerator({
-    loras: [...others, { name: lora.name, weight: lora.weight, modelId: lora.modelId, versionId: lora.versionId, baseModel: lora.baseModel, triggers: lora.triggers }],
-    prompt,
+    loras: [...others, { name: lora.name, weight: lora.weight, modelId: lora.modelId, versionId: lora.versionId, baseModel: lora.baseModel, triggers: lora.triggers, triggerGroup: 0 }],
     triggers: true,
   });
   if (lora.versionId) {
@@ -316,9 +320,8 @@ export async function hydrateFromDisk() {
           ? 'all'
           : 'sfw';
     const fresh = initialGenerator();
-    const legacyExtra = typeof parsed.extraPrompt === 'string' ? parsed.extraPrompt : '';
-    const positive = typeof parsed.positive === 'string' && parsed.positive.trim() ? parsed.positive : legacyExtra;
-    state = { ...fresh, ...parsed, positive, extraPrompt: '', installed, contentFilter, nsfw: contentFilter !== 'sfw' };
+    const settled = settleSavedPrompts(parsed);
+    state = { ...fresh, ...parsed, ...settled, installed, contentFilter, nsfw: contentFilter !== 'sfw' };
     if (parsed.studioApplied !== STUDIO_APPLIED) {
       if (!state.installed.some((item) => item.versionId === ANIME_STUDIO_CHECKPOINT.versionId)) {
         state.installed = [studioResource(), ...state.installed.map((item) => ({ ...item, isDefault: false }))];

@@ -16,13 +16,14 @@ import {
   parseBundle,
 } from '@/src/lib/library';
 import { ASPECTS, STYLES } from '@/src/lib/presets';
+import { bodyShapeTags, isChildTag } from '@/src/lib/measurements';
 import { buildEnhancedPrompt, characterClause } from '@/src/lib/prompt';
 import { buildMockGlb, parseGlb } from '@/src/lib/glb';
 import { encodePng } from '@/src/lib/png';
 import { produceImages, resolveSeeds } from '@/src/lib/produce';
 import { renderDemoFrames } from '@/src/lib/render';
 import { describeUpdateError, downloadLabel } from '@/src/lib/apkInstall';
-import { baseFamily, baseLabel, defaultsForBase, familyPreset, settingsForCheckpoint, modelCardPress, routeLeavesCreate } from '@/src/lib/checkpoints';
+import { baseFamily, baseLabel, defaultsForBase, familyPreset, illustriousOffer, settingsForCheckpoint, modelCardPress, routeLeavesCreate } from '@/src/lib/checkpoints';
 import { modelsToRestore, modelPresence } from '@/src/lib/keptModels';
 import { friendlyLoraMessage, loraChoices, loraStem, missingSelectedLoras } from '@/src/lib/loraGate';
 import { meshPlan, PICTURE_SERVER_MESH_MESSAGE } from '@/src/lib/mesh';
@@ -31,8 +32,9 @@ import { CAST_ROUTE, castRouteOpensScreen } from '@/src/lib/routes';
 import { chooseSeeds } from '@/src/lib/seeds';
 import { redactValue } from '@/src/lib/reportText';
 import { CREATE_PROMPT_FIELDS } from '@/src/lib/createFields';
-import { buildSaladGenerateBody, composeGenerationPrompt, positiveText, sentPositiveText } from '@/src/lib/draw';
-import { getGenerator, patchGenerator, resetBuiltPrompt, resetModelDefaults, resetQualityTags, type GeneratorState } from '@/src/lib/genstore';
+import { describeToTags, settleSavedPrompts, supportTags } from '@/src/lib/positiveTags';
+import { buildSaladGenerateBody, composeGenerationPrompt, sentPositiveText } from '@/src/lib/draw';
+import { addLora, getGenerator, patchGenerator, resetBuiltPrompt, resetModelDefaults, resetQualityTags, type GeneratorState } from '@/src/lib/genstore';
 import { downloadButtons, downloadKind, downloadPercent, formatEta, formatSpeed, RECONNECTING } from '@/src/lib/downloads';
 import { installFailureMessage } from '@/src/lib/modelInstall';
 import { buildSaladBody, classifyGatewayInput, friendlyGatewayMessage, generateUrl, LIVE_GATEWAY_URL, migrateKeyStoredAsUrl, normalizeEndpoint, redactSecrets, saladErrorMessage } from '@/src/lib/salad';
@@ -117,6 +119,10 @@ for (const style of STYLES) {
 
 const empty: Character = { ...character, hairColor: '', hairStyle: '', eyeColor: '', outfit: '', expression: '', pose: '', setting: '', lighting: '' };
 assert(characterClause(empty) === '', 'empty sheet should not invent a character');
+const shaped = bodyShapeTags({ bustCm: 92, waistCm: 62, hipCm: 98, heightCm: 172 });
+assert(shaped.includes('narrow waist') && shaped.includes('wide hips') && shaped.includes('curvy') && shaped.includes('tall') && shaped.every((tag) => !isChildTag(tag)), 'measurements become adult body tags');
+const withSizes = characterClause({ ...character, measurements: { bustCm: 92, waistCm: 62, hipCm: 98 } });
+assert(withSizes.includes('adult') && withSizes.includes('mature female') && withSizes.includes('narrow waist') && !withSizes.toLowerCase().includes('loli'), 'a cast character stays adult');
 
 const roundtrip = new Uint8Array([0, 1, 2, 250, 255, 127]);
 const decoded = base64ToBytes(bytesToBase64(roundtrip));
@@ -504,6 +510,7 @@ const offer = newerServerRelease(
   '1.5.2',
 );
 assert(offer?.ref === 'server-v1.5.4' && newerServerRelease([{ tag_name: 'server-v1.5.4', assets: [{ name: 'yume-server-code.sha256', browser_download_url: 'https://example.test/sha' }] }], '1.5.4') === null, 'server update skips app releases');
+assert(newerServerRelease([{ tag_name: 'server-v1.5.5', prerelease: true, assets: [{ name: 'yume-server-code.sha256', browser_download_url: 'https://example.test/sha' }] }, { tag_name: 'server-v1.5.4', assets: [{ name: 'yume-server-code.sha256', browser_download_url: 'https://example.test/live' }] }], '1.5.2')?.ref === 'server-v1.5.4', 'server update skips prerelease code');
 const updateCall = serverUpdateCall({ endpoint: 'https://cloud.example', adminToken: 'phone-token', gatewayKey: 'salad-key', ref: 'server-v1.5.4', sha256: 'abc' });
 assert(updateCall.url === 'https://cloud.example/admin/update' && updateCall.headers['X-Admin-Token'] === 'phone-token' && updateCall.body.includes('server-v1.5.4'), 'update call sends the admin token');
 assert(container.container.resources.cpu === 4 && container.container.resources.memory === 16384 && container.container.resources.storage_amount === 26843545600, 'deploy size');
@@ -677,7 +684,10 @@ const previewState = {
   contentFilter: 'sfw',
   quality: 'masterpiece, high score, great score, absurdres',
   qualityEdited: false,
+  describe: '',
+  promptAuto: true,
   positive: '',
+  positiveAuto: true,
   extraPrompt: 'shiny eyes',
   vPrediction: false,
   studioStyle: 'off',
@@ -698,7 +708,7 @@ patchGenerator({ positive: 'shiny eyes', prompt: 'girl' });
 resetModelDefaults('Illustrious', 'Wai');
 assert(getGenerator().positive === 'shiny eyes' && getGenerator().hires, 'positive prompt survives a model preset');
 resetBuiltPrompt('Illustrious', 'Wai');
-assert(getGenerator().positive === '' && getGenerator().quality.includes('very aesthetic'), 'reset restores the auto-built prompt');
+assert(getGenerator().positive === 'shiny eyes' && getGenerator().extraPrompt === '' && getGenerator().quality.includes('very aesthetic'), 'reset clears extra and keeps positive');
 patchGenerator({ quality: 'custom tags', qualityEdited: true });
 resetModelDefaults('Pony', 'Pony');
 assert(getGenerator().quality === 'custom tags', 'edited quality tags survive a preset change');
@@ -715,19 +725,31 @@ assert(studioPrompt.startsWith('girl in a skirt') && studioPrompt.indexOf(studio
 const withPositive = composeGenerationPrompt({
   ...studioState,
   positive: 'shiny eyes',
-  extraPrompt: 'shiny eyes',
+  extraPrompt: 'wet clothes',
   studioStyle: 'anime',
   loras: [{ name: 'ribbon', weight: 0.8, triggers: ['ribbon hair'] }],
 });
 assert(
-  withPositive.startsWith('girl in a skirt, shiny eyes') &&
-    withPositive.indexOf('shiny eyes') < withPositive.indexOf(studioSuffix('anime')) &&
-    withPositive.indexOf(studioSuffix('anime')) < withPositive.indexOf('ribbon hair') &&
-    withPositive.endsWith('absurdres') &&
-    withPositive.indexOf('shiny eyes') === withPositive.lastIndexOf('shiny eyes'),
-  'sent order is prompt, positive, style, lora triggers, quality',
+  withPositive.startsWith('girl in a skirt, ribbon hair, shiny eyes, wet clothes') &&
+    withPositive.indexOf('ribbon hair') < withPositive.indexOf('shiny eyes') &&
+    withPositive.indexOf('wet clothes') < withPositive.indexOf(studioSuffix('anime')) &&
+    withPositive.endsWith('absurdres'),
+  'sent order is prompt, lora triggers, positive, extra, style, quality',
 );
-assert(positiveText({ extraPrompt: 'kept tags' }) === 'kept tags' && CREATE_PROMPT_FIELDS.join('|') === 'Prompt|Positive prompt|Negative prompt|Quality tags', 'positive box keeps a saved extra prompt');
+patchGenerator({ prompt: 'girl, manga', positive: '', extraPrompt: '', quality: 'absurdres', studioStyle: 'off', loras: [{ name: 'ink', weight: 0.8, triggers: ['monochrome, ribbon hair', 'alt sparkle'], baseModel: 'Illustrious' }], triggers: true });
+const added = getGenerator();
+assert(added.prompt === 'girl, manga', 'adding a lora does not write triggers into the prompt');
+addLora({ name: 'extra', weight: 0.5, triggers: ['should not land in prompt'] });
+assert(getGenerator().prompt === 'girl, manga', 'addLora leaves the prompt box alone');
+const triggered = composeGenerationPrompt(added);
+assert(triggered.startsWith('girl, manga, ribbon hair') && !triggered.toLowerCase().includes('monochrome') && triggered.endsWith('absurdres'), 'first trigger group is used and blocklisted lora tags are dropped');
+assert(illustriousOffer('SDXL 1.0', 'Illustrious', []) === 'install' && illustriousOffer('SDXL 1.0', 'Illustrious', [{ type: 'Checkpoint', baseModel: 'Illustrious' }]) === 'switch', 'illustrious lora offers a matching checkpoint');
+const selfie = describeToTags('a girl with pink hair taking a selfie in her room');
+assert(selfie === '1girl, solo, pink hair, selfie, holding phone, bedroom, indoors', 'describe becomes danbooru tags');
+assert(supportTags({ text: 'a girl with pink hair taking a selfie in her room', baseModel: 'SDXL 1.0', style: 'anime' }).includes('detailed eyes') && !supportTags({ text: 'a girl with pink hair taking a selfie in her room', baseModel: 'SDXL 1.0', style: 'anime' }).includes('1girl'), 'positive adds detail tags only');
+const settled = settleSavedPrompts({ positive: 'shiny eyes', extraPrompt: 'old extra' });
+assert(settled.positive === 'shiny eyes' && settled.extraPrompt === '' && settled.positiveAuto === false, 'saved positive stays and extra starts empty');
+assert(CREATE_PROMPT_FIELDS.join('|') === 'Describe|Prompt|Positive prompt|Extra prompt|Negative prompt|Quality tags', 'create field order');
 assert(scaleLoraStack(studioState.loras).every((item) => item.weight <= 0.68) && scaleLoraStack([{ name: 'a', weight: 0.8 }, { name: 'b', weight: 0.4 }])[0]?.weight === 0.8, 'three strong loras scale down');
 assert(ANIME_STUDIO_CHECKPOINT.versionId === 1408658 && ANIME_STUDIO_CHECKPOINT.steps === 26 && ANIME_STUDIO_CHECKPOINT.width === 896, 'anime studio checkpoint');
 assert(CAST_ROUTE === '/cast' && castRouteOpensScreen('/cast') && !castRouteOpensScreen('/(tabs)/cast'), 'cast is a real screen, not a hidden tab');

@@ -36,6 +36,7 @@ from yume_server.jobs import resume as resume_job
 from yume_server.jobs import submit as submit_job
 from yume_server.startup import snapshot as startup_snapshot
 from yume_server.stats import collect as collect_stats
+from yume_server.tagger import read_appearance
 from yume_server.version import version_payload
 
 state: dict[str, Any] = {"ready": False, "error": None}
@@ -48,6 +49,10 @@ class LoraIn(BaseModel):
     versionId: int | None = None
     baseModel: str | None = None
     triggers: list[str] = []
+
+
+class TagIn(BaseModel):
+    image: str = Field(min_length=1)
 
 
 class UpdateIn(BaseModel):
@@ -146,6 +151,9 @@ async def lifespan(app: FastAPI):
         yield
         return
 
+    from yume_server.peft_setup import ensure_peft
+
+    threading.Thread(target=ensure_peft, name="peft-setup", daemon=True).start()
     task = asyncio.create_task(prepare())
     yield
     task.cancel()
@@ -592,6 +600,18 @@ def generate(body: GenerateIn, request: Request) -> dict[str, Any]:
         "consistency": consistency,
         "switched": switched,
     }
+
+
+@app.post("/tag")
+def tag_photo(body: TagIn, request: Request) -> dict[str, Any]:
+    _check_key(request)
+    import base64
+
+    try:
+        raw = base64.b64decode(body.image, validate=False)
+        return read_appearance(raw)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @app.post("/mesh")

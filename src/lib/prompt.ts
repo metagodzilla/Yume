@@ -12,6 +12,7 @@ import {
   traitLabel,
   traitPrompt,
 } from '@/src/lib/presets';
+import { adultTags, bodyShapeTags, isChildTag, measurementLine } from '@/src/lib/measurements';
 import type { AspectId, Character, StyleId } from '@/src/lib/types';
 
 const QUALITY =
@@ -39,8 +40,9 @@ export function characterClause(character: Character): string {
     traitPrompt(LIGHTING, character.lighting, (text) => `under ${text}`),
     character.notes?.trim() ?? '',
   ].filter(Boolean);
-  if (!bits.length) return '';
-  return `Character: an anime character ${bits.join(', ')}`;
+  const shape = [...bodyShapeTags(character.measurements), ...(character.bodyTags ?? [])].filter((tag) => !isChildTag(tag));
+  if (!bits.length && !shape.length) return '';
+  return `Character: an anime character ${[...bits, ...shape, ...adultTags()].join(', ')}`;
 }
 
 export function characterSummary(character: Character): string {
@@ -54,6 +56,8 @@ export function characterSummary(character: Character): string {
     traitLabel(SETTINGS, character.setting),
     traitLabel(LIGHTING, character.lighting),
   ].filter(Boolean);
+  const sizes = measurementLine(character.measurements);
+  if (sizes) parts.push(sizes);
   return parts.join(' · ');
 }
 

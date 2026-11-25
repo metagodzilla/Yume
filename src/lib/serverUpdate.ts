@@ -1,5 +1,5 @@
 export type ServerReleaseAsset = { name?: string; browser_download_url?: string };
-export type ServerRelease = { tag_name?: string; assets?: ServerReleaseAsset[] };
+export type ServerRelease = { tag_name?: string; prerelease?: boolean; draft?: boolean; assets?: ServerReleaseAsset[] };
 
 export type ServerCodeOffer = { ref: string; version: string; shaUrl: string };
 
@@ -16,6 +16,7 @@ export function compareVersions(left: string, right: string): number {
 
 export function newerServerRelease(releases: ServerRelease[], runningVersion: string): ServerCodeOffer | null {
   for (const release of releases) {
+    if (release.prerelease || release.draft) continue;
     const match = SERVER_TAG.exec(release.tag_name || '');
     const sha = release.assets?.find((asset) => asset.name === 'yume-server-code.sha256');
     if (!match || !sha?.browser_download_url) continue;

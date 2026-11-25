@@ -33,37 +33,90 @@ export function namedLoras(state: GeneratorState, prompt: string): { name: strin
     .filter((lora) => lora.name || lora.versionId);
 }
 
-/** Positive tags. A saved Extra prompt from 1.4.9 is the same box. */
-export function positiveText(state: { positive?: string; extraPrompt?: string }): string {
-  const positive = (state.positive || '').trim();
-  const extra = (state.extraPrompt || '').trim();
-  if (!positive) return extra;
-  if (!extra || extra.toLowerCase() === positive.toLowerCase()) return positive;
-  return `${positive}, ${extra}`;
+export function positiveText(state: { positive?: string }): string {
+  return (state.positive || '').trim();
+}
+
+const LORA_STYLE_BLOCKLIST = new Set([
+  'monochrome',
+  'greyscale',
+  'grayscale',
+  'sketch',
+  'lineart',
+  'line art',
+  'manga',
+  'comic',
+  '1koma',
+  '4koma',
+  'speech bubble',
+  'partially colored',
+  'spot color',
+]);
+
+export function splitPromptTags(text: string): string[] {
+  return (text || '')
+    .split(',')
+    .map((part) => part.trim())
+    .filter(Boolean);
+}
+
+function normTag(tag: string): string {
+  return tag.trim().toLowerCase().replace(/\s+/g, ' ');
+}
+
+export function triggerGroups(triggers: string[] | undefined): string[][] {
+  return (triggers ?? []).map((group) => splitPromptTags(group)).filter((group) => group.length > 0);
+}
+
+export function loraTriggerTags(
+  lora: { triggers?: string[]; triggerGroup?: number },
+  match: { triggers?: string[] } | undefined,
+  reserved: Set<string>,
+  typed: Set<string>,
+): string[] {
+  const own = triggerGroups(lora.triggers);
+  const groups = own.length ? own : triggerGroups(match?.triggers);
+  const group = groups[lora.triggerGroup ?? 0] ?? groups[0] ?? [];
+  const tags: string[] = [];
+  for (const tag of group) {
+    const key = normTag(tag);
+    if (!key || reserved.has(key)) continue;
+    if (LORA_STYLE_BLOCKLIST.has(key) && !typed.has(key)) continue;
+    reserved.add(key);
+    tags.push(tag);
+  }
+  return tags;
 }
 
 export function composeGenerationPrompt(state: GeneratorState, characterText = ''): string {
   const checkpoint = state.installed.find((item) => item.versionId === state.checkpointId);
+  const style = state.studioStyle && state.studioStyle !== 'off' ? studioSuffix(state.studioStyle) : '';
+  const typed = new Set(
+    [state.prompt, positiveText(state), state.extraPrompt || ''].flatMap((part) => splitPromptTags(part).map(normTag)),
+  );
+  const reserved = new Set<string>([
+    ...typed,
+    ...splitPromptTags(style).map(normTag),
+    ...splitPromptTags(state.quality || '').map(normTag),
+  ]);
   const loraTriggers = state.triggers
     ? state.loras
         .flatMap((lora) => {
-          const own = lora.triggers ?? [];
           const match = state.installed.find(
             (item) => (lora.versionId && item.versionId === lora.versionId) || item.filename === lora.name || item.name === lora.name,
           );
-          return [...own, ...(match?.triggers ?? [])];
+          return loraTriggerTags(lora, match, reserved, typed);
         })
-        .filter(Boolean)
         .join(', ')
     : '';
-  const style = state.studioStyle && state.studioStyle !== 'off' ? studioSuffix(state.studioStyle) : '';
   const afterStyle = [
-    loraTriggers,
     state.triggers ? (checkpoint?.triggers ?? []).join(', ') : '',
     characterText.trim(),
     embeddingTokens(state).join(', '),
   ];
-  const head = [state.prompt.trim(), positiveText(state), style, ...afterStyle].filter(Boolean).join(', ');
+  const head = [state.prompt.trim(), loraTriggers, positiveText(state), (state.extraPrompt || '').trim(), style, ...afterStyle]
+    .filter(Boolean)
+    .join(', ');
   const quality = (state.quality || '').trim();
   return [head, quality].filter(Boolean).join(', ');
 }

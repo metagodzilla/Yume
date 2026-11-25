@@ -189,7 +189,7 @@ export default function MeshScreen() {
   if (!studio.ready) {
     return (
       <SafeAreaView style={styles.safe}>
-        <Text style={styles.kicker}>3D sheet</Text>
+        <Text style={styles.kicker}>3D turnaround</Text>
       </SafeAreaView>
     );
   }
@@ -209,7 +209,7 @@ export default function MeshScreen() {
           <Ionicons name="chevron-back" size={26} color={colors.text} />
         </Pressable>
         <View style={{ flex: 1 }}>
-          <Text style={styles.kicker}>3D sheet</Text>
+          <Text style={styles.kicker}>3D turnaround</Text>
           <Text style={styles.title}>{character.name}</Text>
         </View>
       </View>
@@ -218,7 +218,7 @@ export default function MeshScreen() {
           {note} {MESH_LIMIT}
         </Text>
         <Pressable testID="make-3d" style={styles.primary} disabled={busy} onPress={() => void make()}>
-          <Text style={styles.primaryText}>{busy ? 'Building the mesh…' : glb ? 'Build again' : 'Make 3D'}</Text>
+          <Text style={styles.primaryText}>{busy ? 'Building the mesh…' : glb ? 'Build again' : 'Build 3D turnaround'}</Text>
         </Pressable>
         {step >= 0 ? (
           <View testID="mesh-progress" style={styles.steps}>
