@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import base64
 import json
+import logging
 import os
 import re
 import struct
@@ -11,6 +12,11 @@ import threading
 import uuid
 import zlib
 from typing import Any
+
+_LOG = logging.getLogger("yume.generate")
+FIXED_VAE_REPO = "madebyollin/sdxl-vae-fp16-fix"
+ANIME_ESRGAN_URL = "https://github.com/xinntao/Real-ESRGAN/releases/download/v0.2.2.4/RealESRGAN_x4plus_anime_6B.pth"
+_FIXED_VAE: str | None = None
 
 SCHEDULERS = ("euler_a", "euler", "dpm_2m", "dpm_2m_karras", "ddim", "lcm")
 A1111_SAMPLERS = {
@@ -94,47 +100,158 @@ def mark_default_loaded() -> None:
     note_loaded(DEFAULT_VERSION)
 
 
-def start_model() -> None:
-    global _PIPE
-    from yume_server.startup import mark, note_download
+def loaded_model_name() -> str:
+    """The checkpoint that is actually loaded, from the catalog, not a hardcoded name."""
+    from yume_server.catalog import list_models
 
+    version = loaded_version()
+    models = list_models()
+    if version is not None:
+        match = next((item for item in models if item.get("versionId") == version), None)
+        if match and match.get("name"):
+            return str(match["name"])
+    default = next((item for item in models if item.get("isDefault") and (item.get("type") or "Checkpoint") == "Checkpoint"), None)
+    if default and default.get("name"):
+        return str(default["name"])
+    return "Animagine XL 4.0"
+
+
+def needs_fixed_vae(base_model: str) -> bool:
+    text = (base_model or "").lower()
+    if "flux" in text or "sd 1" in text or "sd1" in text:
+        return False
+    return any(token in text for token in ("sdxl", "illustrious", "pony", "noob", "xl"))
+
+
+def hires_plan(body: Any) -> dict[str, Any] | None:
+    scale = float(getattr(body, "hires_scale", None) or 0)
+    if scale <= 1:
+        return None
+    denoise = getattr(body, "hires_denoise", None)
+    denoise_value = 0.4 if denoise is None else float(denoise)
+    steps = int(getattr(body, "hires_steps", None) or 18)
+    return {
+        "scale": scale,
+        "denoise": max(0.05, min(0.95, denoise_value)),
+        "steps": max(1, min(50, steps)),
+        "upscaler": str(getattr(body, "hires_upscaler", None) or "Latent"),
+    }
+
+
+def upscaler_kind(name: str) -> str:
+    text = (name or "").lower()
+    if "esrgan" in text or "animesharp" in text or "anime" in text:
+        return "esrgan"
+    return "latent"
+
+
+def lora_directories() -> list[str]:
+    """New installs use /models/loras. Older containers may still have files in /loras."""
+    configured = os.environ.get("YUME_LORA_DIR", "").strip()
+    primary = "/models/loras" if not configured or os.path.normpath(configured) == "/loras" else configured
+    ordered = [primary, "/models/loras", "/loras"]
+    seen: list[str] = []
+    for path in ordered:
+        if path and path not in seen:
+            seen.append(path)
+    return seen
+
+
+def boot_checkpoint() -> dict[str, Any]:
+    """The catalog default, or Animagine when that file is not on disk."""
+    from yume_server.catalog import ensure_default, list_models
+
+    ensure_default()
+    models = [item for item in list_models() if (item.get("type") or "Checkpoint") == "Checkpoint"]
+    chosen = next((item for item in models if item.get("isDefault")), None) or next(
+        (item for item in models if item.get("versionId") == DEFAULT_VERSION),
+        None,
+    )
+    if chosen is None:
+        return ensure_default()
+    version = int(chosen.get("versionId") or 0)
+    path = str(chosen.get("path") or "")
+    diffusers = chosen.get("source") == "diffusers" or (version == DEFAULT_VERSION and not path)
+    if diffusers or (path and os.path.exists(path) and os.path.getsize(path) > 1_000_000):
+        return chosen
+    if path and not mock_mode():
+        _LOG.warning("default checkpoint %s is not on disk; loading Animagine", chosen.get("name"))
+    return ensure_default()
+
+
+def cache_dir() -> str:
+    root = os.environ.get("HF_HOME") or os.environ.get("YUME_MODEL_DIR") or "/models"
+    return os.path.join(root, "hub")
+
+
+def ensure_fixed_vae() -> str | None:
+    """Download the fp16-safe SDXL VAE once. A missing download does not stop boot."""
+    global _FIXED_VAE
     if mock_mode():
-        mark_default_loaded()
+        return None
+    if _FIXED_VAE and os.path.isdir(_FIXED_VAE):
+        return _FIXED_VAE
+    try:
+        from huggingface_hub import snapshot_download
+
+        local = snapshot_download(FIXED_VAE_REPO, cache_dir=cache_dir(), allow_patterns=["*.json", "*.safetensors"])
+    except Exception as exc:
+        _LOG.warning("fixed VAE was not downloaded: %s", exc)
+        return None
+    _FIXED_VAE = local
+    return local
+
+
+def anime_upscaler_path() -> str:
+    root = os.environ.get("YUME_MODEL_DIR") or "/models"
+    return os.path.join(root, "upscalers", "RealESRGAN_x4plus_anime_6B.pth")
+
+
+def ensure_anime_upscaler() -> str | None:
+    """Best-effort anime ESRGAN. Generation still runs with a Lanczos upscale if this fails."""
+    if mock_mode():
+        return None
+    path = anime_upscaler_path()
+    if os.path.exists(path) and os.path.getsize(path) > 1_000_000:
+        return path
+    try:
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        import urllib.request
+
+        urllib.request.urlretrieve(ANIME_ESRGAN_URL, path)
+    except Exception as exc:
+        _LOG.warning("anime upscaler was not downloaded: %s", exc)
+        return None
+    return path if os.path.exists(path) else None
+
+
+def start_model() -> None:
+    from yume_server.startup import mark
+
+    record = boot_checkpoint()
+    version = int(record.get("versionId") or DEFAULT_VERSION)
+    if mock_mode():
+        note_loaded(version)
         mark("ready", "Ready", done=1, total=1)
         return
-    import torch
-    from diffusers import StableDiffusionXLPipeline
-    from huggingface_hub import snapshot_download
-    from tqdm.auto import tqdm
-
-    class _DownloadBar(tqdm):
-        def update(self, n=1):
-            shown = super().update(n)
-            note_download(int(self.n or 0), int(self.total or 0))
-            return shown
-
-    mark("downloading", "Downloading model")
-    cache = os.environ.get("HF_HOME") or os.environ.get("YUME_MODEL_DIR") or "/models"
     try:
-        local = snapshot_download(
-            repo_id=model_id(),
-            cache_dir=os.path.join(cache, "hub"),
-            ignore_patterns=list(DIFFUSERS_IGNORE),
-            tqdm_class=_DownloadBar,
-        )
-        mark("loading", "Loading the model")
-        _PIPE = StableDiffusionXLPipeline.from_pretrained(
-            local,
-            torch_dtype=torch.float16,
-            use_safetensors=True,
-            local_files_only=True,
-        )
-        _PIPE.to("cuda")
-        _PIPE.enable_vae_slicing()
-        mark_default_loaded()
+        mark("downloading", "Downloading the fixed VAE")
+        ensure_fixed_vae()
+        ensure_anime_upscaler()
+        name = str(record.get("name") or "Animagine XL 4.0")
+        path = str(record.get("path") or "")
+        diffusers = record.get("source") == "diffusers" or (version == DEFAULT_VERSION and not path)
+        if diffusers:
+            mark("downloading", "Downloading model")
+            _load_default_diffusers()
+        else:
+            mark("loading", f"Loading {name}")
+            _load_single_file(record)
+        note_loaded(version)
         mark("ready", "Ready", done=1, total=1)
     except Exception as exc:
         mark("error", str(exc))
+        _LOG.exception("model startup failed")
         raise
 
 
@@ -234,25 +351,50 @@ def _use_clip_skip(pipe: Any, clip_skip: int) -> None:
         setattr(pipe, attr, _ClipSkipEncoder(encoder, skip))
 
 
-def _apply_loras(pipe: Any, loras: list[Any]) -> None:
+def _find_lora(filename: str) -> str | None:
+    names = [filename]
+    if not filename.endswith(".safetensors"):
+        names.append(filename + ".safetensors")
+    for root in lora_directories():
+        for name in names:
+            path = os.path.join(root, name)
+            if os.path.exists(path):
+                return path
+    return None
+
+
+def _apply_loras(pipe: Any, loras: list[Any]) -> list[str]:
     if not loras:
-        return
-    root = os.environ.get("YUME_LORA_DIR", "/loras")
+        return []
     names: list[str] = []
     weights: list[float] = []
     for index, lora in enumerate(loras):
-        filename = lora.name.strip()
-        path = os.path.join(root, filename)
-        if not os.path.exists(path):
-            alt = path if path.endswith(".safetensors") else path + ".safetensors"
-            path = alt if os.path.exists(alt) else path
-        if not os.path.exists(path):
-            raise FileNotFoundError(f"LoRA not found on the server: {filename}. Put the file in {root}.")
+        filename = str(getattr(lora, "name", "") or "").strip()
+        if not filename:
+            continue
+        path = _find_lora(filename)
+        if path is None:
+            roots = ", ".join(lora_directories())
+            raise FileNotFoundError(f"LoRA not found on the server: {filename}. Put the file in {roots}.")
         adapter = f"lora_{index}"
         pipe.load_lora_weights(path, adapter_name=adapter)
         names.append(adapter)
         weights.append(float(lora.weight))
-    pipe.set_adapters(names, weights)
+    if names:
+        pipe.set_adapters(names, weights)
+    return names
+
+
+def _clear_loras(pipe: Any, adapters: list[str]) -> None:
+    if not adapters:
+        return
+    try:
+        pipe.unload_lora_weights()
+    except Exception:
+        try:
+            pipe.delete_adapters(adapters)
+        except Exception:
+            _LOG.warning("could not unload LoRA adapters %s", adapters)
 
 
 def _consistency(body: Any) -> str:
@@ -276,10 +418,33 @@ def _seed_list(body: Any) -> list[int]:
     return [(base + index) % 2_147_483_647 for index in range(count)]
 
 
-def generate_images(body: Any) -> tuple[list[str], list[int], str, str]:
+def ensure_requested_loaded(body: Any, on_progress: Any = None) -> tuple[str, bool]:
+    """Load an installed checkpoint that /generate asked for instead of returning 503."""
+    requested = (getattr(body, "model", None) or "").strip()
+    match = find_checkpoint(requested)
+    if requested and match is None:
+        raise ValueError("That checkpoint is not installed. Install it from Civitai first.")
+    if match is None:
+        if loaded_version() is None and not mock_mode():
+            raise RuntimeError("Model is not loaded.")
+        return loaded_model_name(), False
+    version = int(match.get("versionId") or 0)
+    loaded = loaded_version()
+    switched = loaded != version
+    if switched:
+        name = str(match.get("name") or requested or "checkpoint")
+        if on_progress:
+            on_progress(f"Switching to {name}")
+        _load_record(match)
+    elif loaded is None and not mock_mode():
+        raise RuntimeError("Model is not loaded.")
+    return str(match.get("name") or requested or loaded_model_name()), switched
+
+
+def generate_images(body: Any, on_progress: Any = None) -> tuple[list[str], list[int], str, str, bool]:
+    chosen, switched = ensure_requested_loaded(body, on_progress)
     seeds = _seed_list(body)
     consistency = _consistency(body)
-    chosen = selected_checkpoint_name(body)
     if mock_mode():
         from yume_server.metadata import embed_parameters, parameters_text
 
@@ -289,7 +454,7 @@ def generate_images(body: Any) -> tuple[list[str], list[int], str, str]:
         for seed in seeds:
             raw = base64.b64decode(_png(body.width, body.height, seed + bump))
             images.append(base64.b64encode(embed_parameters(raw, note)).decode("ascii"))
-        return images, seeds, chosen, consistency
+        return images, seeds, chosen, consistency, switched
 
     if _PIPE is None:
         raise RuntimeError("Model is not loaded.")
@@ -299,63 +464,75 @@ def generate_images(body: Any) -> tuple[list[str], list[int], str, str]:
     )
     _apply_scheduler(_PIPE, A1111_SAMPLERS.get(body.scheduler, body.scheduler), v_prediction)
     _use_clip_skip(_PIPE, int(getattr(body, "clip_skip", 2) or 2))
-    _apply_loras(_PIPE, body.loras)
+    adapters = _apply_loras(_PIPE, body.loras)
     images: list[str] = []
     strength = float(getattr(body, "strength", 0.45) or 0.45)
-    for seed in seeds:
-        import torch
+    try:
+        for seed in seeds:
+            import torch
 
-        generator = torch.Generator(device="cuda").manual_seed(seed)
-        import inspect
+            generator = torch.Generator(device="cuda").manual_seed(seed)
+            import inspect
 
-        common = {
-            "prompt": body.prompt,
-            "negative_prompt": body.negative_prompt or None,
-            "num_inference_steps": body.steps,
-            "guidance_scale": body.cfg,
-            "generator": generator,
-        }
-        if "clip_skip" in inspect.signature(_PIPE.__call__).parameters:
-            common["clip_skip"] = getattr(body, "clip_skip", 2)
-        if consistency == "ip-adapter":
-            if not getattr(_PIPE, "_yume_ip", False):
-                _PIPE.load_ip_adapter("h94/IP-Adapter", subfolder="sdxl_models", weight_name="ip-adapter_sdxl.bin")
-                _PIPE.set_ip_adapter_scale(0.6)
-                _PIPE._yume_ip = True
-            result = _PIPE(**common, width=body.width, height=body.height, ip_adapter_image=_open_reference(body))
-        elif consistency == "img2img":
-            from diffusers import StableDiffusionXLImg2ImgPipeline
-
-            img2img = StableDiffusionXLImg2ImgPipeline(**_PIPE.components)
-            result = img2img(**common, image=_open_reference(body), strength=max(0.05, min(0.95, strength)))
-        else:
-            scale = float(getattr(body, "hires_scale", None) or 0)
-            width = body.width
-            height = body.height
-            if scale > 1:
-                width = max(512, int(body.width / scale) // 8 * 8)
-                height = max(512, int(body.height / scale) // 8 * 8)
-            result = _PIPE(**common, width=width, height=height)
-            if scale > 1:
-                from PIL import Image as PILImage
-
+            common = {
+                "prompt": body.prompt,
+                "negative_prompt": body.negative_prompt or None,
+                "num_inference_steps": body.steps,
+                "guidance_scale": body.cfg,
+                "generator": generator,
+            }
+            if "clip_skip" in inspect.signature(_PIPE.__call__).parameters:
+                common["clip_skip"] = getattr(body, "clip_skip", 2)
+            if consistency == "ip-adapter":
+                if not getattr(_PIPE, "_yume_ip", False):
+                    _PIPE.load_ip_adapter("h94/IP-Adapter", subfolder="sdxl_models", weight_name="ip-adapter_sdxl.bin")
+                    _PIPE.set_ip_adapter_scale(0.6)
+                    _PIPE._yume_ip = True
+                result = _PIPE(**common, width=body.width, height=body.height, ip_adapter_image=_open_reference(body))
+            elif consistency == "img2img":
                 from diffusers import StableDiffusionXLImg2ImgPipeline
 
-                upscaled = result.images[0].resize((body.width, body.height), PILImage.Resampling.LANCZOS)
                 img2img = StableDiffusionXLImg2ImgPipeline(**_PIPE.components)
-                second = dict(common)
-                second["num_inference_steps"] = int(getattr(body, "hires_steps", None) or body.steps)
-                result = img2img(
-                    **second,
-                    image=upscaled,
-                    strength=max(0.05, min(0.95, float(getattr(body, "hires_denoise", 0.45) or 0.45))),
-                )
-        from io import BytesIO
+                result = img2img(**common, image=_open_reference(body), strength=max(0.05, min(0.95, strength)))
+            else:
+                result = _draw_with_hires(_PIPE, common, body)
+            from io import BytesIO
 
-        buffer = BytesIO()
-        result.images[0].save(buffer, format="PNG")
-        images.append(base64.b64encode(buffer.getvalue()).decode("ascii"))
-    return images, seeds, chosen, consistency
+            buffer = BytesIO()
+            result.images[0].save(buffer, format="PNG")
+            images.append(base64.b64encode(buffer.getvalue()).decode("ascii"))
+    finally:
+        _clear_loras(_PIPE, adapters)
+    return images, seeds, chosen, consistency, switched
+
+
+def _draw_with_hires(pipe: Any, common: dict[str, Any], body: Any) -> Any:
+    plan = hires_plan(body)
+    width = body.width
+    height = body.height
+    if plan:
+        width = max(512, int(body.width / plan["scale"]) // 8 * 8)
+        height = max(512, int(body.height / plan["scale"]) // 8 * 8)
+    result = pipe(**common, width=width, height=height)
+    if not plan:
+        return result
+    from diffusers import StableDiffusionXLImg2ImgPipeline
+
+    upscaled = _upscale_image(result.images[0], body.width, body.height, plan["upscaler"])
+    img2img = StableDiffusionXLImg2ImgPipeline(**pipe.components)
+    second = dict(common)
+    second["num_inference_steps"] = plan["steps"]
+    return img2img(**second, image=upscaled, strength=plan["denoise"])
+
+
+def _upscale_image(image: Any, width: int, height: int, upscaler: str) -> Any:
+    if upscaler_kind(upscaler) == "esrgan":
+        restored = _esrgan_upscale(image, width, height)
+        if restored is not None:
+            return restored
+    from PIL import Image as PILImage
+
+    return image.resize((width, height), PILImage.Resampling.LANCZOS)
 
 
 def uses_loaded_pipeline(requested: str, models: list[dict[str, Any]]) -> bool:
@@ -452,19 +629,40 @@ def release_loaded() -> None:
         pass
 
 
+def _snapshot_animagine() -> str:
+    from huggingface_hub import snapshot_download
+    from tqdm.auto import tqdm
+
+    from yume_server.startup import note_download
+
+    class _DownloadBar(tqdm):
+        def update(self, n=1):
+            shown = super().update(n)
+            note_download(int(self.n or 0), int(self.total or 0))
+            return shown
+
+    try:
+        return snapshot_download(
+            repo_id=model_id(),
+            cache_dir=cache_dir(),
+            ignore_patterns=list(DIFFUSERS_IGNORE),
+            local_files_only=True,
+        )
+    except Exception:
+        return snapshot_download(
+            repo_id=model_id(),
+            cache_dir=cache_dir(),
+            ignore_patterns=list(DIFFUSERS_IGNORE),
+            tqdm_class=_DownloadBar,
+        )
+
+
 def _load_default_diffusers() -> None:
     global _PIPE
     import torch
     from diffusers import StableDiffusionXLPipeline
-    from huggingface_hub import snapshot_download
 
-    cache = os.environ.get("HF_HOME") or os.environ.get("YUME_MODEL_DIR") or "/models"
-    local = snapshot_download(
-        repo_id=model_id(),
-        cache_dir=os.path.join(cache, "hub"),
-        ignore_patterns=list(DIFFUSERS_IGNORE),
-        local_files_only=True,
-    )
+    local = _snapshot_animagine()
     pipe = StableDiffusionXLPipeline.from_pretrained(
         local,
         torch_dtype=torch.float16,
@@ -474,6 +672,15 @@ def _load_default_diffusers() -> None:
     pipe.to("cuda")
     pipe.enable_vae_slicing()
     _PIPE = pipe
+
+
+def _fixed_vae(dtype: Any) -> Any:
+    local = ensure_fixed_vae()
+    if not local:
+        return None
+    from diffusers import AutoencoderKL
+
+    return AutoencoderKL.from_pretrained(local, torch_dtype=dtype)
 
 
 def _load_single_file(record: dict[str, Any]) -> None:
@@ -496,11 +703,41 @@ def _load_single_file(record: dict[str, Any]) -> None:
     else:
         from diffusers import StableDiffusionXLPipeline
 
-        pipe = StableDiffusionXLPipeline.from_single_file(path, torch_dtype=dtype)
+        vae = _fixed_vae(dtype) if needs_fixed_vae(base) else None
+        kwargs: dict[str, Any] = {"torch_dtype": dtype}
+        if vae is not None:
+            kwargs["vae"] = vae
+        pipe = StableDiffusionXLPipeline.from_single_file(path, **kwargs)
     pipe.to("cuda")
     pipe.enable_vae_slicing()
     pipe._yume_vpred = looks_v_prediction(record, path)
     _PIPE = pipe
+
+
+def _esrgan_upscale(image: Any, width: int, height: int) -> Any:
+    weight = anime_upscaler_path()
+    if not os.path.exists(weight):
+        return None
+    try:
+        import torch
+        from spandrel import ImageModelDescriptor, ModelLoader
+
+        model = ModelLoader().load_from_file(weight)
+        if not isinstance(model, ImageModelDescriptor):
+            return None
+        model.to("cuda" if torch.cuda.is_available() else "cpu").eval()
+        array = __import__("numpy").asarray(image)
+        tensor = torch.from_numpy(array).permute(2, 0, 1).unsqueeze(0).float().div(255.0)
+        tensor = tensor.to(next(model.model.parameters()).device)
+        with torch.no_grad():
+            out = model(tensor).clamp(0, 1)
+        restored = (out[0].permute(1, 2, 0).cpu().numpy() * 255).astype("uint8")
+        from PIL import Image as PILImage
+
+        return PILImage.fromarray(restored).resize((width, height), PILImage.Resampling.LANCZOS)
+    except Exception as exc:
+        _LOG.warning("anime ESRGAN upscale failed: %s", exc)
+        return None
 
 
 def _load_record(record: dict[str, Any]) -> None:

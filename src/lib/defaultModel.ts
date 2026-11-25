@@ -65,6 +65,7 @@ export const SIZE_PRESETS: Record<string, { width: number; height: number; label
   Illustrious: [
     { width: 832, height: 1216, label: '832×1216' },
     { width: 1024, height: 1024, label: '1024 square' },
+    { width: 1024, height: 1344, label: '1024×1344' },
     { width: 1216, height: 832, label: '1216×832' },
   ],
   NoobAI: [

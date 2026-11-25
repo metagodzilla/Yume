@@ -1,4 +1,4 @@
-import { router } from 'expo-router';
+import { router, useLocalSearchParams } from 'expo-router';
 import { useEffect, useRef, useState } from 'react';
 import { Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
@@ -7,7 +7,7 @@ import { ModelThumb } from '@/components/ModelThumb';
 import { rememberFault } from '@/src/lib/reportText';
 import { civitaiModelUrl, errorText, loraFileName, loraPage, searchCivitai, type CivitaiModel, type ContentFilter } from '@/src/lib/civitai';
 import { BASE_MODELS, MODEL_TYPES, SORTS } from '@/src/lib/defaultModel';
-import { patchGenerator, toggleLora, useGenerator } from '@/src/lib/genstore';
+import { addLora, patchGenerator, useGenerator } from '@/src/lib/genstore';
 import { openLink } from '@/src/lib/openLink';
 import { readCivitaiToken } from '@/src/lib/storage';
 import { colors, font } from '@/src/theme';
@@ -21,7 +21,8 @@ const FILTERS: { id: ContentFilter; label: string }[] = [
 export default function ModelsScreen() {
   const gen = useGenerator();
   const [query, setQuery] = useState('');
-  const [type, setType] = useState<string>('Checkpoint');
+  const params = useLocalSearchParams<{ type?: string }>();
+  const [type, setType] = useState<string>(params.type || 'Checkpoint');
   const [base, setBase] = useState('SDXL 1.0');
   const [sort, setSort] = useState<string>('Most Downloaded');
   const [items, setItems] = useState<CivitaiModel[]>([]);
@@ -146,7 +147,17 @@ export default function ModelsScreen() {
               <Pressable
                 style={styles.cardMain}
                 onPress={() => openLink(civitaiModelUrl(model.id, version?.id))}
-                onLongPress={() => version && lora && toggleLora({ name: loraFileName(version, model.name), weight: 0.8, modelId: model.id, versionId: version.id })}>
+                onLongPress={() =>
+                  version &&
+                  lora &&
+                  addLora({
+                    name: loraFileName(version, model.name),
+                    weight: 0.8,
+                    modelId: model.id,
+                    versionId: version.id,
+                    triggers: version.trainedWords,
+                  })
+                }>
                 <ModelThumb model={model} filter={gen.contentFilter} />
                 <View style={{ flex: 1, gap: 4 }}>
                   <Text style={styles.name}>{model.name}</Text>
@@ -158,7 +169,19 @@ export default function ModelsScreen() {
               {lora && version ? (
                 <Pressable
                   testID={index === 0 ? 'lora-use' : undefined}
-                  onPress={() => toggleLora({ name: loraFileName(version, model.name), weight: 0.8, modelId: model.id, versionId: version.id })}>
+                  onPress={() => {
+                    if (selected) {
+                      patchGenerator({ loras: gen.loras.filter((item) => item.versionId !== version.id) });
+                      return;
+                    }
+                    addLora({
+                      name: loraFileName(version, model.name),
+                      weight: 0.8,
+                      modelId: model.id,
+                      versionId: version.id,
+                      triggers: version.trainedWords,
+                    });
+                  }}>
                   <Text style={styles.link}>{selected ? 'Remove' : 'Use'}</Text>
                 </Pressable>
               ) : (
@@ -187,7 +210,16 @@ export default function ModelsScreen() {
                 </Text>
               </Pressable>
               {lora ? (
-                <Pressable onPress={() => toggleLora({ name: item.filename.replace(/\.(safetensors|pt|ckpt|bin)$/i, ''), weight: 0.8, modelId: item.modelId, versionId: item.versionId })}>
+                <Pressable
+                  onPress={() =>
+                    addLora({
+                      name: item.filename || item.name,
+                      weight: 0.8,
+                      modelId: item.modelId,
+                      versionId: item.versionId,
+                      triggers: item.triggers,
+                    })
+                  }>
                   <Text style={styles.link}>Use</Text>
                 </Pressable>
               ) : null}

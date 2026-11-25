@@ -74,10 +74,18 @@ def verify_download(path: str, expected_size: int, expected_sha256: str) -> None
         raise RuntimeError("Download hash does not match Civitai.")
 
 
+def lora_root() -> str:
+    """LoRAs land in /models/loras. A custom YUME_LORA_DIR is kept, except the old /loras default."""
+    configured = os.environ.get("YUME_LORA_DIR", "").strip()
+    if not configured or os.path.normpath(configured) == "/loras":
+        return "/models/loras"
+    return configured
+
+
 def resource_root(record: dict[str, Any]) -> str:
     kind = str(record.get("type") or "Checkpoint").lower().replace(" ", "").replace("_", "")
     if kind in {"lora", "locon", "dora", "lycoris"}:
-        root = os.environ.get("YUME_LORA_DIR", "/loras")
+        root = lora_root()
     elif kind in {"textualinversion", "embedding", "embeddings"}:
         root = os.environ.get("YUME_EMBEDDING_DIR", "/embeddings")
     else:

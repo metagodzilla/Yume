@@ -59,7 +59,24 @@ export type FamilyPreset = {
   quality: string;
   negative: string;
   vPrediction: boolean;
+  hires: boolean;
+  hiresScale: number;
+  hiresDenoise: number;
+  hiresSteps: number;
+  hiresUpscaler: string;
 };
+
+export type RecommendedSettings = {
+  sampler?: string;
+  steps?: number;
+  cfg?: number;
+  clipSkip?: number;
+  width?: number;
+  height?: number;
+};
+
+const HIRES_OFF = { hires: false, hiresScale: 1.5, hiresDenoise: 0.4, hiresSteps: 18, hiresUpscaler: 'Latent' };
+const HIRES_ON = { hires: true, hiresScale: 1.5, hiresDenoise: 0.4, hiresSteps: 18, hiresUpscaler: 'Latent' };
 
 const ILLUSTRIOUS_NEGATIVE =
   'lowres, worst quality, bad quality, bad anatomy, bad hands, text, error, missing fingers, extra digit, fewer digits, cropped, jpeg artifacts, signature, watermark, artist name, username, blurry, 3d, shiny skin, oversaturated';
@@ -84,6 +101,7 @@ export function familyPreset(baseModel: string, name = ''): FamilyPreset {
       negative:
         'lowres, bad anatomy, bad hands, text, error, missing finger, extra digits, fewer digits, cropped, worst quality, low quality, low score, bad score, average score, signature, watermark, username, blurry',
       vPrediction: false,
+      ...HIRES_OFF,
     };
   }
   if (family === 'Illustrious') {
@@ -91,12 +109,13 @@ export function familyPreset(baseModel: string, name = ''): FamilyPreset {
       sampler: 'Euler a',
       steps: 28,
       cfg: 5,
-      clipSkip: 2,
+      clipSkip: /\bprefect\b/i.test(name) && !/prefectious/i.test(name) ? 1 : 2,
       width: 832,
       height: 1216,
       quality: 'masterpiece, best quality, amazing quality, very aesthetic, absurdres',
       negative: ILLUSTRIOUS_NEGATIVE,
       vPrediction,
+      ...HIRES_ON,
     };
   }
   if (family === 'Pony') {
@@ -110,6 +129,7 @@ export function familyPreset(baseModel: string, name = ''): FamilyPreset {
       quality: 'score_9, score_8_up, score_7_up, score_6_up, score_5_up, score_4_up',
       negative: 'score_6, score_5, score_4, score_3, score_2, score_1, source_pony, worst quality, low quality, bad anatomy, signature, watermark',
       vPrediction,
+      ...HIRES_OFF,
     };
   }
   if (family === 'NoobAI') {
@@ -123,6 +143,7 @@ export function familyPreset(baseModel: string, name = ''): FamilyPreset {
       quality: 'masterpiece, best quality, amazing quality, very aesthetic, absurdres',
       negative: ILLUSTRIOUS_NEGATIVE,
       vPrediction,
+      ...HIRES_OFF,
     };
   }
   if (family === 'Flux') {
@@ -136,6 +157,7 @@ export function familyPreset(baseModel: string, name = ''): FamilyPreset {
       quality: '',
       negative: '',
       vPrediction: false,
+      ...HIRES_OFF,
     };
   }
   if (family === 'SD 1.5') {
@@ -149,6 +171,7 @@ export function familyPreset(baseModel: string, name = ''): FamilyPreset {
       quality: 'masterpiece, best quality',
       negative: 'lowres, bad anatomy, bad hands, text, error, missing fingers, extra digit, fewer digits, cropped, worst quality, low quality, signature, watermark, username, blurry',
       vPrediction: false,
+      ...HIRES_OFF,
     };
   }
   return {
@@ -161,7 +184,49 @@ export function familyPreset(baseModel: string, name = ''): FamilyPreset {
     quality: 'masterpiece, best quality, very aesthetic, absurdres',
     negative: 'lowres, worst quality, bad quality, bad anatomy, bad hands, signature, watermark, username, blurry',
     vPrediction,
+    ...HIRES_OFF,
   };
+}
+
+export function settingsForCheckpoint(baseModel: string, name = '', recommended?: RecommendedSettings): FamilyPreset {
+  const preset = familyPreset(baseModel, name);
+  return {
+    ...preset,
+    sampler: recommended?.sampler?.trim() || preset.sampler,
+    steps: numberOr(recommended?.steps, preset.steps),
+    cfg: numberOr(recommended?.cfg, preset.cfg),
+    clipSkip: numberOr(recommended?.clipSkip, preset.clipSkip),
+    width: numberOr(recommended?.width, preset.width),
+    height: numberOr(recommended?.height, preset.height),
+  };
+}
+
+export function recommendedFromMeta(meta: Record<string, unknown> | null | undefined): RecommendedSettings {
+  if (!meta) return {};
+  const steps = Number(meta.steps);
+  const cfg = Number(meta.cfgScale ?? meta.cfg);
+  const clipSkip = Number(meta.clipSkip);
+  const size = String(meta.size || meta.Size || '');
+  const parsed = size.match(/(\d+)\s*[x×]\s*(\d+)/i);
+  return {
+    sampler: typeof meta.sampler === 'string' ? meta.sampler : undefined,
+    steps: Number.isFinite(steps) && steps > 0 ? steps : undefined,
+    cfg: Number.isFinite(cfg) && cfg > 0 ? cfg : undefined,
+    clipSkip: Number.isFinite(clipSkip) && clipSkip > 0 ? clipSkip : undefined,
+    width: parsed ? Number(parsed[1]) : undefined,
+    height: parsed ? Number(parsed[2]) : undefined,
+  };
+}
+
+export function loraBaseWarning(checkpointBase: string, loraBase: string): string {
+  if (!loraBase.trim()) return '';
+  if (baseFamily(checkpointBase) === baseFamily(loraBase)) return '';
+  return `This LoRA is ${baseLabel(loraBase)} and the checkpoint is ${baseLabel(checkpointBase)}. They do not match, so the picture can come out wrong.`;
+}
+
+export function loadedModelName(models: { versionId: number; name: string }[], active: number | null): string {
+  const match = models.find((item) => item.versionId === active);
+  return match?.name || 'Animagine XL 4.0';
 }
 
 export function defaultsForBase(
