@@ -300,6 +300,145 @@ def clip_skip_index(clip_skip: int) -> int:
     return -max(1, min(12, int(clip_skip or 2)))
 
 
+_CHUNK = 75
+_STYLE_BLOCKLIST = {
+    "monochrome",
+    "greyscale",
+    "grayscale",
+    "sketch",
+    "lineart",
+    "line art",
+    "manga",
+    "comic",
+    "1koma",
+    "4koma",
+    "speech bubble",
+    "partially colored",
+    "spot color",
+}
+
+
+def _norm_tag(tag: str) -> str:
+    return " ".join(tag.strip().casefold().split())
+
+
+def split_prompt_tags(text: str) -> list[str]:
+    """Split on commas, but leave <lora:...> and weighted (...) groups intact."""
+    parts: list[str] = []
+    buf: list[str] = []
+    paren = 0
+    angle = 0
+    for char in text or "":
+        if char == "(":
+            paren += 1
+        elif char == ")" and paren:
+            paren -= 1
+        elif char == "<":
+            angle += 1
+        elif char == ">" and angle:
+            angle -= 1
+        if char == "," and paren == 0 and angle == 0:
+            piece = "".join(buf).strip()
+            if piece:
+                parts.append(piece)
+            buf = []
+            continue
+        buf.append(char)
+    tail = "".join(buf).strip()
+    if tail:
+        parts.append(tail)
+    return parts
+
+
+def blocked_lora_tags(triggers: list[str]) -> set[str]:
+    blocked: set[str] = set()
+    for trigger in triggers:
+        for part in split_prompt_tags(trigger):
+            if _norm_tag(part) in _STYLE_BLOCKLIST:
+                blocked.add(_norm_tag(part))
+    return blocked
+
+
+def tidy_prompt(text: str, lora_triggers: list[str] | None = None) -> str:
+    """Trim, drop empties, and dedupe. Strip blocklisted style words that came from a LoRA trigger."""
+    blocked = blocked_lora_tags(lora_triggers or [])
+    seen: set[str] = set()
+    kept: list[str] = []
+    for part in split_prompt_tags(text):
+        key = _norm_tag(part)
+        if not key or key in seen:
+            continue
+        if key in blocked:
+            continue
+        seen.add(key)
+        kept.append(part.strip())
+    return ", ".join(kept)
+
+
+def chunk_token_ids(token_ids: list[int], bos: int, eos: int, size: int = _CHUNK) -> list[list[int]]:
+    """75 content tokens per CLIP chunk, with BOS and EOS, padded to 77."""
+    body = [int(token) for token in token_ids]
+    chunks: list[list[int]] = []
+    start = 0
+    while True:
+        piece = body[start : start + size]
+        if not piece and chunks:
+            break
+        if len(piece) < size:
+            piece = piece + [eos] * (size - len(piece))
+        chunks.append([bos, *piece, eos])
+        start += size
+        if start >= len(body):
+            break
+    if not chunks:
+        chunks.append([bos, *([eos] * size), eos])
+    return chunks
+
+
+def align_chunk_lists(groups: list[list[Any]], empty: Any) -> list[list[Any]]:
+    count = max((len(group) for group in groups), default=1)
+    aligned: list[list[Any]] = []
+    for group in groups:
+        padded = list(group)
+        while len(padded) < count:
+            padded.append(empty)
+        aligned.append(padded)
+    return aligned
+
+
+def _lora_trigger_texts(body: Any) -> list[str]:
+    texts: list[str] = []
+    for lora in getattr(body, "loras", None) or []:
+        for trigger in getattr(lora, "triggers", None) or []:
+            if str(trigger).strip():
+                texts.append(str(trigger))
+    return texts
+
+
+def _prepare_prompt_text(body: Any) -> int:
+    triggers = _lora_trigger_texts(body)
+    body.prompt = tidy_prompt(getattr(body, "prompt", "") or "", triggers)
+    body.negative_prompt = tidy_prompt(getattr(body, "negative_prompt", "") or "")
+    return len(split_prompt_tags(body.prompt))
+
+
+def _log_generate(body: Any, token_count: int) -> None:
+    checkpoint = find_checkpoint((getattr(body, "model", None) or "").strip())
+    checkpoint_base = str((checkpoint or {}).get("baseModel") or "")
+    parts = []
+    for lora in getattr(body, "loras", None) or []:
+        path = resolve_lora_path(lora) or str(getattr(lora, "name", "") or "")
+        parts.append(
+            f"file={path} weight={getattr(lora, 'weight', '')} lora_base={getattr(lora, 'baseModel', '') or ''}"
+        )
+    _LOG.info(
+        "generate %s checkpoint_base=%s tokens=%s",
+        " ".join(parts) if parts else "lora=none",
+        checkpoint_base,
+        token_count,
+    )
+
+
 def _apply_scheduler(pipe: Any, name: str, v_prediction: bool = False) -> None:
     from diffusers import (
         DDIMScheduler,
@@ -555,11 +694,83 @@ def ensure_requested_loaded(body: Any, on_progress: Any = None) -> tuple[str, bo
     return str(match.get("name") or requested or loaded_model_name()), switched
 
 
+def _tokenizer_ids(tokenizer: Any, text: str) -> tuple[list[int], int, int]:
+    encoded = tokenizer(
+        text or "",
+        truncation=False,
+        padding=False,
+        add_special_tokens=False,
+        return_attention_mask=False,
+    )
+    ids = encoded["input_ids"]
+    if ids and isinstance(ids[0], (list, tuple)):
+        ids = ids[0]
+    bos = int(tokenizer.bos_token_id)
+    eos = int(tokenizer.eos_token_id if tokenizer.eos_token_id is not None else bos)
+    return [int(token) for token in ids], bos, eos
+
+
+def _encode_chunks(encoder: Any, tokenizer: Any, text: str, clip_skip: int, device: Any) -> tuple[Any, Any, int]:
+    import torch
+
+    ids, bos, eos = _tokenizer_ids(tokenizer, text)
+    sequences = []
+    pooled = None
+    for index, chunk in enumerate(chunk_token_ids(ids, bos, eos)):
+        output = encoder(torch.tensor([chunk], device=device), output_hidden_states=True)
+        states = output.hidden_states
+        sequences.append(states[clip_skip_index(clip_skip)])
+        if index == 0:
+            pooled = getattr(output, "text_embeds", None)
+            if pooled is None and getattr(output[0], "ndim", 1) == 2:
+                pooled = output[0]
+            if pooled is None:
+                pooled = getattr(output, "pooler_output", None)
+    return torch.cat(sequences, dim=1), pooled, len(ids)
+
+
+def _pad_sequence(sequence: Any, empty: Any, width: int) -> Any:
+    import torch
+
+    while sequence.shape[1] < width:
+        sequence = torch.cat([sequence, empty], dim=1)
+    return sequence
+
+
+def sdxl_conditioning(pipe: Any, prompt: str, negative: str, clip_skip: int) -> tuple[dict[str, Any], int]:
+    """Encode past 77 tokens in 75-token CLIP chunks. Pooled values come from the first chunk."""
+    device = getattr(pipe, "device", None)
+    if device is None:
+        device = next(pipe.unet.parameters()).device
+    skip = max(1, min(4, int(clip_skip or 2)))
+    pos_1, _, count_1 = _encode_chunks(pipe.text_encoder, pipe.tokenizer, prompt, skip, device)
+    pos_2, pooled, count_2 = _encode_chunks(pipe.text_encoder_2, pipe.tokenizer_2, prompt, skip, device)
+    neg_1, _, _ = _encode_chunks(pipe.text_encoder, pipe.tokenizer, negative or "", skip, device)
+    neg_2, negative_pooled, _ = _encode_chunks(pipe.text_encoder_2, pipe.tokenizer_2, negative or "", skip, device)
+    empty_1, _, _ = _encode_chunks(pipe.text_encoder, pipe.tokenizer, "", skip, device)
+    empty_2, _, _ = _encode_chunks(pipe.text_encoder_2, pipe.tokenizer_2, "", skip, device)
+    width = max(pos_1.shape[1], pos_2.shape[1], neg_1.shape[1], neg_2.shape[1])
+    pos_1 = _pad_sequence(pos_1, empty_1, width)
+    pos_2 = _pad_sequence(pos_2, empty_2, width)
+    neg_1 = _pad_sequence(neg_1, empty_1, width)
+    neg_2 = _pad_sequence(neg_2, empty_2, width)
+    import torch
+
+    return {
+        "prompt_embeds": torch.cat([pos_1, pos_2], dim=-1),
+        "negative_prompt_embeds": torch.cat([neg_1, neg_2], dim=-1),
+        "pooled_prompt_embeds": pooled,
+        "negative_pooled_prompt_embeds": negative_pooled,
+    }, max(count_1, count_2)
+
+
 def generate_images(body: Any, on_progress: Any = None) -> tuple[list[str], list[int], str, str, bool]:
     chosen, switched = ensure_requested_loaded(body, on_progress)
+    _prepare_prompt_text(body)
     seeds = _seed_list(body)
     consistency = _consistency(body)
     if mock_mode():
+        _log_generate(body, len(split_prompt_tags(body.prompt)))
         from yume_server.metadata import embed_parameters, parameters_text
 
         bump = len(getattr(body, "reference_image", None) or "") % 97
@@ -580,31 +791,54 @@ def generate_images(body: Any, on_progress: Any = None) -> tuple[list[str], list
     # LoRA must see the real CLIP modules. Clip skip is applied only for the draw.
     unwrap_clip_skip(_PIPE)
     adapters = _apply_loras(_PIPE, body.loras)
-    images: list[str] = []
     strength = float(getattr(body, "strength", 0.45) or 0.45)
+    conditioning: dict[str, Any] | None = None
+    token_count = len(split_prompt_tags(body.prompt))
     try:
-        with _clip_skip_applied(_PIPE, int(getattr(body, "clip_skip", 2) or 2)):
-            images = _draw_seeds(_PIPE, body, seeds, consistency, strength)
+        conditioning, token_count = sdxl_conditioning(
+            _PIPE,
+            body.prompt,
+            body.negative_prompt or "",
+            int(getattr(body, "clip_skip", 2) or 2),
+        )
+    except Exception:
+        _LOG.exception("long prompt encode failed; sending the text instead")
+        conditioning = None
+    _log_generate(body, token_count)
+    try:
+        images = _draw_seeds(_PIPE, body, seeds, consistency, strength, conditioning)
     finally:
         unwrap_clip_skip(_PIPE)
         _clear_loras(_PIPE, adapters)
     return images, seeds, chosen, consistency, switched
 
 
-def _draw_seeds(pipe: Any, body: Any, seeds: list[int], consistency: str, strength: float) -> list[str]:
+def _draw_seeds(
+    pipe: Any,
+    body: Any,
+    seeds: list[int],
+    consistency: str,
+    strength: float,
+    conditioning: dict[str, Any] | None = None,
+) -> list[str]:
     import torch
     from io import BytesIO
 
     images: list[str] = []
     for seed in seeds:
         generator = torch.Generator(device="cuda").manual_seed(seed)
-        common = {
-            "prompt": body.prompt,
-            "negative_prompt": body.negative_prompt or None,
+        common: dict[str, Any] = {
             "num_inference_steps": body.steps,
             "guidance_scale": body.cfg,
             "generator": generator,
         }
+        if conditioning:
+            common.update(conditioning)
+            common["prompt"] = None
+            common["negative_prompt"] = None
+        else:
+            common["prompt"] = body.prompt
+            common["negative_prompt"] = body.negative_prompt or None
         if consistency == "ip-adapter":
             if not getattr(pipe, "_yume_ip", False):
                 pipe.load_ip_adapter("h94/IP-Adapter", subfolder="sdxl_models", weight_name="ip-adapter_sdxl.bin")
