@@ -1,7 +1,6 @@
 import { extractLoras, formatParameters, plainPrompt, type GenerationParams } from '@/src/lib/a1111';
 import { bytesToBase64, base64ToBytes } from '@/src/lib/base64';
 import { scaleLoraStack, studioSuffix } from '@/src/lib/animeStudio';
-import { familyPreset } from '@/src/lib/checkpoints';
 import { DEFAULT_CHECKPOINT } from '@/src/lib/defaultModel';
 import type { GeneratorState } from '@/src/lib/genstore';
 import { embedParameters } from '@/src/lib/pngmeta';
@@ -47,8 +46,6 @@ export function composeGenerationPrompt(state: GeneratorState, characterText = '
         .filter(Boolean)
         .join(', ')
     : '';
-  const preset = familyPreset(checkpoint?.baseModel ?? '', checkpoint?.name ?? '');
-  const quality = state.qualityTags ? (state.quality == null ? preset.quality : state.quality.trim()) : '';
   const style = state.studioStyle && state.studioStyle !== 'off' ? studioSuffix(state.studioStyle) : '';
   const triggers = [
     state.triggers ? (checkpoint?.triggers ?? []).join(', ') : '',
@@ -56,13 +53,10 @@ export function composeGenerationPrompt(state: GeneratorState, characterText = '
     characterText.trim(),
     embeddingTokens(state).join(', '),
   ];
-  const bits = style
-    ? [state.prompt.trim(), style, ...triggers, quality]
-    : [quality, ...triggers, state.prompt.trim()];
-  const auto = bits.filter(Boolean).join(', ');
+  const head = [state.prompt.trim(), style, ...triggers].filter(Boolean).join(', ');
   const extra = (state.extraPrompt || '').trim();
-  if (!extra) return auto;
-  return auto ? `${auto}, ${extra}` : extra;
+  const quality = (state.quality || '').trim();
+  return [head, extra, quality].filter(Boolean).join(', ');
 }
 
 export function generationParams(state: GeneratorState, prompt: string, seed: number): GenerationParams {

@@ -28,7 +28,7 @@ import { friendlyLoraMessage, loraChoices, loraStem, missingSelectedLoras } from
 import { chooseSeeds } from '@/src/lib/seeds';
 import { redactValue } from '@/src/lib/reportText';
 import { buildSaladGenerateBody, composeGenerationPrompt, sentPositiveText } from '@/src/lib/draw';
-import { getGenerator, patchGenerator, resetBuiltPrompt, resetModelDefaults, type GeneratorState } from '@/src/lib/genstore';
+import { getGenerator, patchGenerator, resetBuiltPrompt, resetModelDefaults, resetQualityTags, type GeneratorState } from '@/src/lib/genstore';
 import { downloadButtons, downloadKind, downloadPercent, formatEta, formatSpeed, RECONNECTING } from '@/src/lib/downloads';
 import { installFailureMessage } from '@/src/lib/modelInstall';
 import { buildSaladBody, classifyGatewayInput, friendlyGatewayMessage, generateUrl, LIVE_GATEWAY_URL, migrateKeyStoredAsUrl, normalizeEndpoint, redactSecrets, saladErrorMessage } from '@/src/lib/salad';
@@ -658,6 +658,7 @@ const previewState = {
   nsfw: false,
   contentFilter: 'sfw',
   quality: 'masterpiece, high score, great score, absurdres',
+  qualityEdited: false,
   extraPrompt: 'shiny eyes',
   vPrediction: false,
   studioStyle: 'off',
@@ -679,6 +680,11 @@ resetModelDefaults('Illustrious', 'Wai');
 assert(getGenerator().extraPrompt === 'shiny eyes' && getGenerator().hires, 'extra prompt survives a model preset');
 resetBuiltPrompt('Illustrious', 'Wai');
 assert(getGenerator().extraPrompt === '' && getGenerator().quality.includes('very aesthetic'), 'reset restores the auto-built prompt');
+patchGenerator({ quality: 'custom tags', qualityEdited: true });
+resetModelDefaults('Pony', 'Pony');
+assert(getGenerator().quality === 'custom tags', 'edited quality tags survive a preset change');
+resetQualityTags('Pony', 'Pony');
+assert(getGenerator().quality.startsWith('score_9') && getGenerator().qualityEdited === false, 'quality reset uses the preset');
 assert(loraStem('Momo-Koigasaki.safetensors') === 'momo-koigasaki' && loraChoices([{ versionId: 1, name: 'Animagine', type: 'Checkpoint' }, { versionId: 9, name: 'Momo', type: 'LORA' }], [{ versionId: 10, name: 'Ribbon', type: 'LORA' }]).map((item) => item.versionId).join(',') === '9,10', 'lora list is server loras plus restores');
 assert(missingSelectedLoras([{ name: 'MOMO.SAFETENSORS', versionId: 9 }], [{ versionId: 9, name: 'Momo', type: 'LORA', filename: 'momo.safetensors' }]).length === 0, 'lora match ignores case and extension');
 assert(friendlyLoraMessage('LoRA not found on the server: momo. Put the file in /models/loras, /loras.').includes('not on the cloud yet'), 'lora error stays friendly');
@@ -686,7 +692,9 @@ const restore = modelsToRestore({ models: [{ versionId: 5, type: 'LORA', name: '
 assert(restore.length === 1 && restore[0]?.name === 'Ribbon' && modelPresence(5, [1337429], [5]) === 'restoring', 'restore skips the built-in checkpoint');
 const studioState = { ...previewState, extraPrompt: '', studioStyle: 'anime' as const, prompt: 'girl in a skirt', quality: 'masterpiece, best quality, very aesthetic, absurdres', loras: [{ name: 'a', weight: 0.8 }, { name: 'b', weight: 0.8 }, { name: 'c', weight: 0.9 }] };
 const studioPrompt = composeGenerationPrompt(studioState);
-assert(studioPrompt.startsWith('girl in a skirt') && studioPrompt.indexOf('girl in a skirt') < studioPrompt.indexOf(studioSuffix('anime')) && studioPrompt.endsWith('absurdres'), 'anime studio prompt order');
+assert(studioPrompt.startsWith('girl in a skirt') && studioPrompt.indexOf(studioSuffix('anime')) < studioPrompt.indexOf('absurdres') && studioPrompt.endsWith('absurdres'), 'quality tags are last');
+const withExtra = composeGenerationPrompt({ ...studioState, extraPrompt: 'shiny eyes', studioStyle: 'off' });
+assert(withExtra.indexOf('shiny eyes') < withExtra.indexOf('absurdres') && !withExtra.startsWith('masterpiece'), 'extra prompt stays ahead of quality tags');
 assert(scaleLoraStack(studioState.loras).every((item) => item.weight <= 0.68) && scaleLoraStack([{ name: 'a', weight: 0.8 }, { name: 'b', weight: 0.4 }])[0]?.weight === 0.8, 'three strong loras scale down');
 assert(ANIME_STUDIO_CHECKPOINT.versionId === 1408658 && ANIME_STUDIO_CHECKPOINT.steps === 26 && ANIME_STUDIO_CHECKPOINT.width === 896, 'anime studio checkpoint');
 assert(familyPreset('Pony').quality.startsWith('score_9'), 'pony uses score tags');
