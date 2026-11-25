@@ -151,6 +151,9 @@ async def lifespan(app: FastAPI):
         yield
         return
 
+    from yume_server.peft_setup import ensure_peft
+
+    threading.Thread(target=ensure_peft, name="peft-setup", daemon=True).start()
     task = asyncio.create_task(prepare())
     yield
     task.cancel()
