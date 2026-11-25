@@ -23,7 +23,7 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
 from yume_mesh.generate import generate_mesh
-from yume_server.catalog import cancel_install, delete_version, ensure_default, ensure_jobs_loaded, install_progress, list_installs, list_models, pause_install, resume_install, set_default, start_install
+from yume_server.catalog import cancel_install, delete_version, ensure_default, ensure_jobs_loaded, install_progress, list_installs, list_models, pause_install, restore_models, resume_install, set_default, start_install
 from yume_server.errors import add_client_report, list_errors, record_error, sanitize
 from yume_server.generate import A1111_SAMPLERS, SCHEDULERS, generate_images, loaded_model_name, loaded_version, mark_default_loaded, mock_mode, release_loaded, start_model, start_use, use_progress
 from yume_server.jobs import cancel as cancel_job
@@ -335,6 +335,21 @@ class InstallIn(BaseModel):
     triggers: list[str] = []
 
 
+class RestoreModelIn(BaseModel):
+    versionId: int
+    type: str | None = None
+    name: str | None = None
+    filename: str | None = None
+    baseModel: str | None = None
+    triggers: list[str] = []
+
+
+class RestoreIn(BaseModel):
+    versionIds: list[int] = []
+    lastUsedVersionId: int | None = None
+    models: list[RestoreModelIn] = []
+
+
 class DefaultIn(BaseModel):
     versionId: int
 
@@ -374,6 +389,18 @@ def models(request: Request) -> dict[str, Any]:
 def installs(request: Request) -> dict[str, Any]:
     _check_key(request)
     return {"jobs": list_installs()}
+
+
+@app.post("/models/restore")
+def restore(body: RestoreIn, request: Request) -> dict[str, Any]:
+    _check_key(request)
+    token = request.headers.get("x-civitai-token", "").strip() or None
+    hints = {
+        item.versionId: {key: value for key, value in {"type": item.type, "name": item.name, "filename": item.filename, "baseModel": item.baseModel, "triggers": item.triggers}.items() if value}
+        for item in body.models
+    }
+    version_ids = list(body.versionIds) or [item.versionId for item in body.models]
+    return restore_models(version_ids, body.lastUsedVersionId, hints, token)
 
 
 @app.post("/models/install")

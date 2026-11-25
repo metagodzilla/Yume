@@ -9,6 +9,10 @@ import { rememberFault, reportDocument, type ServerFault } from '@/src/lib/repor
 import { changeContainerGroup, containerGroupUrl, liveContainerGroup, readContainerGroup, readContainerInstances } from '@/src/lib/cloudActions';
 import { beginCloudStart, beginCloudStop, cloudRunState, finishCloudStop, noteLiveSession, subscribeCloudRun } from '@/src/lib/cloudRun';
 import { capReached, checkLine, cloudChecklist, deploymentForEndpoint, formatCostLine, hostOf, LIVE_GATEWAY, resolveHourly, sessionUsd, type CheckLine, type ChecklistStep } from '@/src/lib/cloudSteps';
+import { DISK_RESET_NOTE, restoreSummary } from '@/src/lib/keptModels';
+import { fetchInstalls } from '@/src/lib/downloadClient';
+import { restoreMissingModels } from '@/src/lib/restoreModels';
+import { readCivitaiToken } from '@/src/lib/storage';
 import { confirmAction } from '@/src/lib/confirm';
 import { probe, type Probe } from '@/src/lib/connection';
 import { readPhone, type PhoneReading } from '@/src/lib/device';
@@ -51,6 +55,7 @@ export function StatusPanel({ preview = '' }: { preview?: string }) {
   const [stats, setStats] = useState<CloudStats>(emptyStats());
   const [phone, setPhone] = useState<PhoneReading | null>(null);
   const [steps, setSteps] = useState<ChecklistStep[]>([]);
+  const [restoreLines, setRestoreLines] = useState<string[]>([]);
   const [phase, setPhase] = useState<'starting' | 'running' | 'stopping' | 'stopped'>('stopped');
   const run = useSyncExternalStore(subscribeCloudRun, cloudRunState, cloudRunState);
   const [pill, setPill] = useState('Stopped');
@@ -159,6 +164,24 @@ export function StatusPanel({ preview = '' }: { preview?: string }) {
       const startup = saved ? await probe(`${saved}/startup`, { headers }, 8000) : undefined;
       const startupBody = startup?.body as { bytesDone?: number; bytesTotal?: number } | undefined;
       const probeError = [groupError, health?.error, ready?.error].filter(Boolean).join(' ');
+      let restoreTotal = 0;
+      let restorePercent: number | null = null;
+      if (saved && key && health?.ok) {
+        const token = await readCivitaiToken().catch(() => null);
+        const restored = await restoreMissingModels({ endpoint: saved, apiKey: key, civitaiToken: token }).catch(() => null);
+        const jobs = await fetchInstalls(saved, key).catch(() => []);
+        const lines = (restored?.restoring ?? []).map((model) => {
+          const job = jobs.find((item) => item.versionId === model.versionId);
+          const percent = job?.bytesTotal ? Math.round((job.bytesDone / job.bytesTotal) * 100) : job?.state === 'done' ? 100 : 0;
+          return { versionId: model.versionId, name: model.name, percent, state: job?.state || 'queued' };
+        });
+        const summary = restoreSummary(lines);
+        restoreTotal = summary.total;
+        restorePercent = summary.percent;
+        setRestoreLines(lines.map((item) => `${item.name} ${item.percent ?? 0}%`));
+      } else {
+        setRestoreLines([]);
+      }
       const view = cloudChecklist({
         hasEndpoint: Boolean(saved),
         groupStatus,
@@ -173,6 +196,8 @@ export function StatusPanel({ preview = '' }: { preview?: string }) {
         pullPercent: groupPull,
         modelDone: typeof startupBody?.bytesDone === 'number' ? startupBody.bytesDone : null,
         modelTotal: typeof startupBody?.bytesTotal === 'number' ? startupBody.bytesTotal : null,
+        restoreTotal,
+        restorePercent,
       });
       setOverall(view.overall);
       setPhase(view.phase);
@@ -452,6 +477,10 @@ export function StatusPanel({ preview = '' }: { preview?: string }) {
           <Text style={styles.liveTitle}>{liveTitle}</Text>
           <Text style={styles.help}>Elapsed {clock(frozen || shownPhase === 'stopped' ? shownUpSec * 1000 : cloudStart.current ? now - cloudStart.current : now - stepSince.current)}</Text>
           <ProgressBar percent={overall} />
+          <Text style={styles.help}>{DISK_RESET_NOTE}</Text>
+          {restoreLines.map((line) => (
+            <Text key={line} style={styles.help}>{line}</Text>
+          ))}
           {steps.map((step) => (
             <View key={step.label} style={styles.step}>
               <Text style={[styles.stepMark, step.state === 'done' && styles.done, step.state === 'current' && styles.current]}>

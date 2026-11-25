@@ -17,9 +17,11 @@ import { extractLoras } from '@/src/lib/a1111';
 import { loraPage } from '@/src/lib/civitai';
 import { openLink } from '@/src/lib/openLink';
 import { patchGenerator, resetBuiltPrompt, resetModelDefaults, useGenerator } from '@/src/lib/genstore';
+import { DISK_RESET_NOTE, modelPresence } from '@/src/lib/keptModels';
+import { restoreMissingModels, useRestoringIds } from '@/src/lib/restoreModels';
 import { endpointDiffersFromLive, LIVE_GATEWAY_URL, normalizeEndpoint } from '@/src/lib/salad';
 import { chooseSeeds } from '@/src/lib/seeds';
-import { persistPng, readApiKey, readSaladKey } from '@/src/lib/storage';
+import { persistPng, readApiKey, readCivitaiToken, readSaladKey } from '@/src/lib/storage';
 import { uid } from '@/src/lib/id';
 import { useStudio } from '@/src/studio';
 import { colors, font } from '@/src/theme';
@@ -36,6 +38,18 @@ export default function GenerateScreen() {
   const [lastSeeds, setLastSeeds] = useState<number[]>([]);
   const [picker, setPicker] = useState(false);
   const checkpoint = gen.installed.find((item) => item.versionId === gen.checkpointId) ?? gen.installed[0];
+  const restoringIds = useRestoringIds();
+  const restoring = checkpoint ? modelPresence(checkpoint.versionId, [], restoringIds) === 'restoring' : false;
+  useEffect(() => {
+    if (studio.settings.provider !== 'salad') return;
+    const endpoint = normalizeEndpoint(studio.settings.saladEndpoint);
+    if (!endpoint) return;
+    void (async () => {
+      const key = await readSaladKey();
+      const token = await readCivitaiToken().catch(() => null);
+      if (key) await restoreMissingModels({ endpoint, apiKey: key, civitaiToken: token }).catch(() => undefined);
+    })();
+  }, [studio.settings.provider, studio.settings.saladEndpoint]);
   const latest = studio.history[0];
   const parsed = extractLoras(gen.prompt).loras;
   const character = studio.selectedCharacter;
@@ -149,8 +163,9 @@ export default function GenerateScreen() {
           <View style={{ flex: 1 }}>
             <Text style={styles.checkpointName}>{checkpoint?.name ?? 'No checkpoint'}</Text>
             <Text style={styles.meta}>
-              {baseLabel(checkpoint?.baseModel ?? '')} · {checkpoint?.isDefault ? 'Active' : checkpoint?.version}
+              {baseLabel(checkpoint?.baseModel ?? '')} · {restoring ? 'restoring' : checkpoint?.isDefault ? 'Active' : checkpoint?.version}
             </Text>
+            <Text style={styles.hint}>{DISK_RESET_NOTE}</Text>
           </View>
         </Pressable>
         <CheckpointSheet visible={picker} onClose={() => setPicker(false)} />

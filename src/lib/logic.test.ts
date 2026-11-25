@@ -22,6 +22,7 @@ import { produceImages, resolveSeeds } from '@/src/lib/produce';
 import { renderDemoFrames } from '@/src/lib/render';
 import { describeUpdateError, downloadLabel } from '@/src/lib/apkInstall';
 import { baseFamily, baseLabel, defaultsForBase, familyPreset, settingsForCheckpoint, modelCardPress, routeLeavesCreate } from '@/src/lib/checkpoints';
+import { modelsToRestore, modelPresence } from '@/src/lib/keptModels';
 import { chooseSeeds } from '@/src/lib/seeds';
 import { redactValue } from '@/src/lib/reportText';
 import { buildSaladGenerateBody, composeGenerationPrompt, sentPositiveText } from '@/src/lib/draw';
@@ -566,7 +567,7 @@ assert(downloading.liveTitle.toLowerCase().includes('downloading model'), 'model
 const locked = cloudChecklist({ hasEndpoint: true, healthStatus: 403, readyStatus: 403 });
 assert(locked.authBlocked && locked.steps[0]?.state === 'done' && locked.steps[1]?.state === 'current', 'gateway 403 needs the key');
 const readyCloud = cloudChecklist({ hasEndpoint: true, readyStatus: 200, healthStatus: 200 });
-assert(readyCloud.phase === 'running' && readyCloud.steps[5]?.state === 'current' && readyCloud.steps[4]?.state === 'done', 'ready step');
+assert(readyCloud.phase === 'running' && readyCloud.steps.at(-1)?.state === 'current' && readyCloud.steps[4]?.state === 'done', 'ready step');
 const readyOnly = cloudChecklist({ hasEndpoint: true, readyStatus: 200 });
 assert(readyOnly.phase === 'running' && readyOnly.pill === 'Running' && readyOnly.liveTitle === 'Ready', 'ready 200 skips the GPU step');
 const group = groupStatusOf({
@@ -576,7 +577,7 @@ const group = groupStatusOf({
 assert(group.status === 'running' && group.running === 1 && group.priority === 'low', 'live group shape');
 assert(uptimeSeconds(group.startTime, Date.parse('2026-11-24T15:05:00Z')) === 300, 'uptime from start time');
 const runningReady = cloudChecklist({ hasEndpoint: true, groupStatus: group.status, running: group.running, readyStatus: 200, healthStatus: 200 });
-assert(runningReady.phase === 'running' && runningReady.steps[5]?.state === 'current', 'running group with ready 200');
+assert(runningReady.phase === 'running' && runningReady.steps.at(-1)?.state === 'current', 'running group with ready 200');
 const probeFailed = cloudChecklist({ hasEndpoint: true, probeError: 'Network request failed' });
 assert(!probeFailed.liveTitle.includes('Finding'), 'a probe error is not Finding an RTX 4090');
 const overridden = deploymentForEndpoint(LIVE_GATEWAY_URL, { organization: 'other', project: 'yume', group: 'yume', gpuName: 'RTX 4090', gpuClassId: '', hourlyUsd: 0.13, image: '' });
@@ -675,6 +676,8 @@ resetModelDefaults('Illustrious', 'Wai');
 assert(getGenerator().extraPrompt === 'shiny eyes' && getGenerator().hires, 'extra prompt survives a model preset');
 resetBuiltPrompt('Illustrious', 'Wai');
 assert(getGenerator().extraPrompt === '' && getGenerator().quality.includes('very aesthetic'), 'reset restores the auto-built prompt');
+const restore = modelsToRestore({ models: [{ versionId: 5, type: 'LORA', name: 'Ribbon' }, { versionId: 1337429, type: 'Checkpoint', name: 'Animagine XL 4.0' }], lastUsedVersionId: 5 }, [1337429]);
+assert(restore.length === 1 && restore[0]?.name === 'Ribbon' && modelPresence(5, [1337429], [5]) === 'restoring', 'restore skips the built-in checkpoint');
 assert(familyPreset('Pony').quality.startsWith('score_9'), 'pony uses score tags');
 assert(familyPreset('NoobAI', 'NoobAI XL v-pred').vPrediction && familyPreset('Illustrious').vPrediction === false, 'v-pred is detected from the name');
 assert(sentPositiveText(previewState).includes('masterpiece') && sentPositiveText(previewState).includes('1girl') && sentPositiveText(previewState).includes('shiny eyes') && sentPositiveText(previewState).includes('<lora:ribbon:0.8>'), 'final prompt matches the request');

@@ -157,6 +157,19 @@ export function applyCheckpoint(resource: InstalledResource, recommended?: Recom
     hiresUpscaler: preset.hiresUpscaler,
     vPrediction: preset.vPrediction,
   });
+  void import('@/src/lib/restoreModels').then(({ keepInstalled }) =>
+    keepInstalled(
+      {
+        versionId: resource.versionId,
+        type: resource.type,
+        name: resource.name,
+        filename: resource.filename,
+        baseModel: resource.baseModel,
+        triggers: resource.triggers,
+      },
+      resource.type === 'Checkpoint',
+    ),
+  );
 }
 
 export function resetModelDefaults(baseModel: string, name = '') {
@@ -194,6 +207,11 @@ export function addLora(lora: { name: string; weight: number; modelId?: number; 
     lora.versionId && item.versionId ? item.versionId === lora.versionId : item.name === lora.name;
   const others = state.loras.filter((item) => !same(item));
   patchGenerator({ loras: [...others, { name: lora.name, weight: lora.weight, modelId: lora.modelId, versionId: lora.versionId }], prompt, triggers: true });
+  if (lora.versionId) {
+    void import('@/src/lib/restoreModels').then(({ keepInstalled }) =>
+      keepInstalled({ versionId: lora.versionId!, type: 'LORA', name: lora.name, triggers: lora.triggers }),
+    );
+  }
 }
 
 export function rememberServerModels(records: InstalledResource[]) {
@@ -241,6 +259,7 @@ export function removeLocal(versionId: number) {
   const installed = state.installed.filter((item) => item.versionId !== versionId);
   const fallback = installed.find((item) => item.isDefault && item.type === 'Checkpoint') ?? installed.find((item) => item.type === 'Checkpoint');
   patchGenerator({ installed, checkpointId: fallback?.versionId ?? DEFAULT_CHECKPOINT.versionId });
+  void import('@/src/lib/restoreModels').then(({ dropKept }) => dropKept(versionId));
 }
 
 function persist() {
