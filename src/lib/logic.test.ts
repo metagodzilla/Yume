@@ -510,6 +510,7 @@ const offer = newerServerRelease(
   '1.5.2',
 );
 assert(offer?.ref === 'server-v1.5.4' && newerServerRelease([{ tag_name: 'server-v1.5.4', assets: [{ name: 'yume-server-code.sha256', browser_download_url: 'https://example.test/sha' }] }], '1.5.4') === null, 'server update skips app releases');
+assert(newerServerRelease([{ tag_name: 'server-v1.5.5', prerelease: true, assets: [{ name: 'yume-server-code.sha256', browser_download_url: 'https://example.test/sha' }] }, { tag_name: 'server-v1.5.4', assets: [{ name: 'yume-server-code.sha256', browser_download_url: 'https://example.test/live' }] }], '1.5.2')?.ref === 'server-v1.5.4', 'server update skips prerelease code');
 const updateCall = serverUpdateCall({ endpoint: 'https://cloud.example', adminToken: 'phone-token', gatewayKey: 'salad-key', ref: 'server-v1.5.4', sha256: 'abc' });
 assert(updateCall.url === 'https://cloud.example/admin/update' && updateCall.headers['X-Admin-Token'] === 'phone-token' && updateCall.body.includes('server-v1.5.4'), 'update call sends the admin token');
 assert(container.container.resources.cpu === 4 && container.container.resources.memory === 16384 && container.container.resources.storage_amount === 26843545600, 'deploy size');

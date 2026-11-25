@@ -41,12 +41,23 @@ def parse_sha_file(text: str) -> str:
     return token.lower()
 
 
+def is_live_server_release(item: dict[str, Any]) -> bool:
+    """latest is a full server-v release. Drafts and prereleases stay out unless named."""
+    if item.get("draft") or item.get("prerelease"):
+        return False
+    return str(item.get("tag_name") or "").startswith(TAG_PREFIX)
+
+
 def pick_release(releases: list[dict[str, Any]], ref: str) -> dict[str, Any] | None:
-    tagged = [item for item in releases if str(item.get("tag_name") or "").startswith(TAG_PREFIX)]
     wanted = (ref or "latest").strip()
     if wanted and wanted != "latest":
-        return next((item for item in tagged if item.get("tag_name") == wanted), None)
-    return tagged[0] if tagged else None
+        return next((item for item in releases if item.get("tag_name") == wanted), None)
+    live = [item for item in releases if is_live_server_release(item)]
+    return live[0] if live else None
+
+
+def _log(message: str) -> None:
+    print(f"yume runtime {message}", flush=True)
 
 
 def asset_url(release: dict[str, Any], name: str) -> str:
@@ -139,18 +150,26 @@ def apply_update(
 ) -> dict[str, str]:
     fetch = opener or http_opener
     repository = (repo or os.environ.get("YUME_GITHUB_REPO") or DEFAULT_REPO).strip()
-    listing = json.loads(fetch(f"https://api.github.com/repos/{repository}/releases?per_page=20").decode())
+    list_url = f"https://api.github.com/repos/{repository}/releases?per_page=20"
+    _log(f"fetch release list {list_url}")
+    listing = json.loads(fetch(list_url).decode())
     if not isinstance(listing, list):
         raise ValueError("GitHub did not return a release list.")
+    _log(f"fetched release list count={len(listing)}")
     release = pick_release(listing, ref)
     if not release:
-        raise ValueError(f"No server release matches {ref or 'latest'}.")
+        raise ValueError(f"No live server release matches {ref or 'latest'}. Name a server-v tag to use a prerelease.")
+    _log(f"chosen release {release.get('tag_name')}")
     archive_url = asset_url(release, CODE_ASSET)
     sum_url = asset_url(release, SUM_ASSET)
     if not archive_url or not sum_url:
         raise ValueError("That server release has no code archive or checksum.")
+    _log(f"fetch archive {archive_url}")
     archive = fetch(archive_url)
+    _log(f"fetched archive bytes={len(archive)}")
+    _log(f"fetch checksum {sum_url}")
     published = parse_sha_file(fetch(sum_url).decode())
+    _log(f"fetched checksum {published}")
     if sha256 and not same_secret(sha256.strip().lower(), published):
         raise ValueError("The requested SHA-256 does not match the published checksum.")
     pin = os.environ.get("YUME_SERVER_SHA256", "").strip().lower()
