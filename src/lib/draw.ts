@@ -33,30 +33,39 @@ export function namedLoras(state: GeneratorState, prompt: string): { name: strin
     .filter((lora) => lora.name || lora.versionId);
 }
 
+/** Positive tags. A saved Extra prompt from 1.4.9 is the same box. */
+export function positiveText(state: { positive?: string; extraPrompt?: string }): string {
+  const positive = (state.positive || '').trim();
+  const extra = (state.extraPrompt || '').trim();
+  if (!positive) return extra;
+  if (!extra || extra.toLowerCase() === positive.toLowerCase()) return positive;
+  return `${positive}, ${extra}`;
+}
+
 export function composeGenerationPrompt(state: GeneratorState, characterText = ''): string {
   const checkpoint = state.installed.find((item) => item.versionId === state.checkpointId);
   const loraTriggers = state.triggers
     ? state.loras
         .flatMap((lora) => {
+          const own = lora.triggers ?? [];
           const match = state.installed.find(
             (item) => (lora.versionId && item.versionId === lora.versionId) || item.filename === lora.name || item.name === lora.name,
           );
-          return match?.triggers ?? [];
+          return [...own, ...(match?.triggers ?? [])];
         })
         .filter(Boolean)
         .join(', ')
     : '';
   const style = state.studioStyle && state.studioStyle !== 'off' ? studioSuffix(state.studioStyle) : '';
-  const triggers = [
-    state.triggers ? (checkpoint?.triggers ?? []).join(', ') : '',
+  const afterStyle = [
     loraTriggers,
+    state.triggers ? (checkpoint?.triggers ?? []).join(', ') : '',
     characterText.trim(),
     embeddingTokens(state).join(', '),
   ];
-  const head = [state.prompt.trim(), style, ...triggers].filter(Boolean).join(', ');
-  const extra = (state.extraPrompt || '').trim();
+  const head = [state.prompt.trim(), positiveText(state), style, ...afterStyle].filter(Boolean).join(', ');
   const quality = (state.quality || '').trim();
-  return [head, extra, quality].filter(Boolean).join(', ');
+  return [head, quality].filter(Boolean).join(', ');
 }
 
 export function generationParams(state: GeneratorState, prompt: string, seed: number): GenerationParams {

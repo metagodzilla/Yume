@@ -26,10 +26,12 @@ import { baseFamily, baseLabel, defaultsForBase, familyPreset, settingsForCheckp
 import { modelsToRestore, modelPresence } from '@/src/lib/keptModels';
 import { friendlyLoraMessage, loraChoices, loraStem, missingSelectedLoras } from '@/src/lib/loraGate';
 import { meshPlan, PICTURE_SERVER_MESH_MESSAGE } from '@/src/lib/mesh';
+import { newerServerRelease, serverUpdateCall } from '@/src/lib/serverUpdate';
 import { CAST_ROUTE, castRouteOpensScreen } from '@/src/lib/routes';
 import { chooseSeeds } from '@/src/lib/seeds';
 import { redactValue } from '@/src/lib/reportText';
-import { buildSaladGenerateBody, composeGenerationPrompt, sentPositiveText } from '@/src/lib/draw';
+import { CREATE_PROMPT_FIELDS } from '@/src/lib/createFields';
+import { buildSaladGenerateBody, composeGenerationPrompt, positiveText, sentPositiveText } from '@/src/lib/draw';
 import { getGenerator, patchGenerator, resetBuiltPrompt, resetModelDefaults, resetQualityTags, type GeneratorState } from '@/src/lib/genstore';
 import { downloadButtons, downloadKind, downloadPercent, formatEta, formatSpeed, RECONNECTING } from '@/src/lib/downloads';
 import { installFailureMessage } from '@/src/lib/modelInstall';
@@ -489,7 +491,21 @@ assert(container.container.image === 'ghcr.io/metagodzilla/yume-server:latest', 
 assert(container.container.priority === 'low' && container.networking.port === 8080 && container.networking.auth === true, 'deploy gateway');
 assert(container.startup_probe.http.path === '/ready' && container.readiness_probe.http.path === '/ready' && container.liveness_probe.http.path === '/health', 'deploy probes');
 assert(container.container.environment_variables.HF_HOME === '/models' && container.container.environment_variables.YUME_MODEL_ID === 'cagliostrolab/animagine-xl-4.0', 'deploy model env');
-assert(container.container.environment_variables.YUME_MODEL_DIR === '/models' && !('CIVITAI_TOKEN' in container.container.environment_variables), 'model dir without civitai token');
+assert(container.container.environment_variables.YUME_MODEL_DIR === '/models' && !('CIVITAI_TOKEN' in container.container.environment_variables) && !('YUME_ADMIN_TOKEN' in container.container.environment_variables), 'model dir without civitai token');
+const withAdmin = buildYumeContainerGroup({ apiKey: 'salad-key', gpuClassId: 'gpu-4090', adminToken: 'phone-token' }) as {
+  container: { environment_variables: Record<string, string> };
+};
+assert(withAdmin.container.environment_variables.YUME_ADMIN_TOKEN === 'phone-token' && withAdmin.container.environment_variables.YUME_SERVER_REF === 'latest', 'new container can carry an update token');
+const offer = newerServerRelease(
+  [
+    { tag_name: 'v1.5.3' },
+    { tag_name: 'server-v1.5.4', assets: [{ name: 'yume-server-code.sha256', browser_download_url: 'https://example.test/sha' }] },
+  ],
+  '1.5.2',
+);
+assert(offer?.ref === 'server-v1.5.4' && newerServerRelease([{ tag_name: 'server-v1.5.4', assets: [{ name: 'yume-server-code.sha256', browser_download_url: 'https://example.test/sha' }] }], '1.5.4') === null, 'server update skips app releases');
+const updateCall = serverUpdateCall({ endpoint: 'https://cloud.example', adminToken: 'phone-token', gatewayKey: 'salad-key', ref: 'server-v1.5.4', sha256: 'abc' });
+assert(updateCall.url === 'https://cloud.example/admin/update' && updateCall.headers['X-Admin-Token'] === 'phone-token' && updateCall.body.includes('server-v1.5.4'), 'update call sends the admin token');
 assert(container.container.resources.cpu === 4 && container.container.resources.memory === 16384 && container.container.resources.storage_amount === 26843545600, 'deploy size');
 const gpus = choicesFromGpuClasses({
   items: [
@@ -661,6 +677,7 @@ const previewState = {
   contentFilter: 'sfw',
   quality: 'masterpiece, high score, great score, absurdres',
   qualityEdited: false,
+  positive: '',
   extraPrompt: 'shiny eyes',
   vPrediction: false,
   studioStyle: 'off',
@@ -677,11 +694,11 @@ const illustrious = familyPreset('Illustrious', 'Prefectious XL NSFW');
 assert(illustrious.cfg === 5 && illustrious.steps === 28 && illustrious.sampler === 'Euler a' && illustrious.quality.includes('very aesthetic') && !illustrious.quality.includes('high score') && illustrious.negative.includes('shiny skin'), 'illustrious preset drops animagine score tags');
 assert(familyPreset('Illustrious', 'Prefect XL').clipSkip === 1 && familyPreset('Illustrious', 'Prefect XL').hires && familyPreset('Illustrious', 'Prefect XL').hiresDenoise === 0.4 && familyPreset('Illustrious', 'Prefectious XL').clipSkip === 2, 'prefect clip skip and illustrious hires');
 assert(settingsForCheckpoint('SDXL 1.0', 'Photo', { cfg: 4, steps: 20, sampler: 'Euler' }).cfg === 4, 'civitai recommended settings override the family');
-patchGenerator({ extraPrompt: 'shiny eyes', prompt: 'girl' });
+patchGenerator({ positive: 'shiny eyes', prompt: 'girl' });
 resetModelDefaults('Illustrious', 'Wai');
-assert(getGenerator().extraPrompt === 'shiny eyes' && getGenerator().hires, 'extra prompt survives a model preset');
+assert(getGenerator().positive === 'shiny eyes' && getGenerator().hires, 'positive prompt survives a model preset');
 resetBuiltPrompt('Illustrious', 'Wai');
-assert(getGenerator().extraPrompt === '' && getGenerator().quality.includes('very aesthetic'), 'reset restores the auto-built prompt');
+assert(getGenerator().positive === '' && getGenerator().quality.includes('very aesthetic'), 'reset restores the auto-built prompt');
 patchGenerator({ quality: 'custom tags', qualityEdited: true });
 resetModelDefaults('Pony', 'Pony');
 assert(getGenerator().quality === 'custom tags', 'edited quality tags survive a preset change');
@@ -692,11 +709,25 @@ assert(missingSelectedLoras([{ name: 'MOMO.SAFETENSORS', versionId: 9 }], [{ ver
 assert(friendlyLoraMessage('LoRA not found on the server: momo. Put the file in /models/loras, /loras.').includes('not on the cloud yet'), 'lora error stays friendly');
 const restore = modelsToRestore({ models: [{ versionId: 5, type: 'LORA', name: 'Ribbon' }, { versionId: 1337429, type: 'Checkpoint', name: 'Animagine XL 4.0' }], lastUsedVersionId: 5 }, [1337429]);
 assert(restore.length === 1 && restore[0]?.name === 'Ribbon' && modelPresence(5, [1337429], [5]) === 'restoring', 'restore skips the built-in checkpoint');
-const studioState = { ...previewState, extraPrompt: '', studioStyle: 'anime' as const, prompt: 'girl in a skirt', quality: 'masterpiece, best quality, very aesthetic, absurdres', loras: [{ name: 'a', weight: 0.8 }, { name: 'b', weight: 0.8 }, { name: 'c', weight: 0.9 }] };
+const studioState = { ...previewState, extraPrompt: '', positive: '', studioStyle: 'anime' as const, prompt: 'girl in a skirt', quality: 'masterpiece, best quality, very aesthetic, absurdres', loras: [{ name: 'a', weight: 0.8 }, { name: 'b', weight: 0.8 }, { name: 'c', weight: 0.9 }] };
 const studioPrompt = composeGenerationPrompt(studioState);
 assert(studioPrompt.startsWith('girl in a skirt') && studioPrompt.indexOf(studioSuffix('anime')) < studioPrompt.indexOf('absurdres') && studioPrompt.endsWith('absurdres'), 'quality tags are last');
-const withExtra = composeGenerationPrompt({ ...studioState, extraPrompt: 'shiny eyes', studioStyle: 'off' });
-assert(withExtra.indexOf('shiny eyes') < withExtra.indexOf('absurdres') && !withExtra.startsWith('masterpiece'), 'extra prompt stays ahead of quality tags');
+const withPositive = composeGenerationPrompt({
+  ...studioState,
+  positive: 'shiny eyes',
+  extraPrompt: 'shiny eyes',
+  studioStyle: 'anime',
+  loras: [{ name: 'ribbon', weight: 0.8, triggers: ['ribbon hair'] }],
+});
+assert(
+  withPositive.startsWith('girl in a skirt, shiny eyes') &&
+    withPositive.indexOf('shiny eyes') < withPositive.indexOf(studioSuffix('anime')) &&
+    withPositive.indexOf(studioSuffix('anime')) < withPositive.indexOf('ribbon hair') &&
+    withPositive.endsWith('absurdres') &&
+    withPositive.indexOf('shiny eyes') === withPositive.lastIndexOf('shiny eyes'),
+  'sent order is prompt, positive, style, lora triggers, quality',
+);
+assert(positiveText({ extraPrompt: 'kept tags' }) === 'kept tags' && CREATE_PROMPT_FIELDS.join('|') === 'Prompt|Positive prompt|Negative prompt|Quality tags', 'positive box keeps a saved extra prompt');
 assert(scaleLoraStack(studioState.loras).every((item) => item.weight <= 0.68) && scaleLoraStack([{ name: 'a', weight: 0.8 }, { name: 'b', weight: 0.4 }])[0]?.weight === 0.8, 'three strong loras scale down');
 assert(ANIME_STUDIO_CHECKPOINT.versionId === 1408658 && ANIME_STUDIO_CHECKPOINT.steps === 26 && ANIME_STUDIO_CHECKPOINT.width === 896, 'anime studio checkpoint');
 assert(CAST_ROUTE === '/cast' && castRouteOpensScreen('/cast') && !castRouteOpensScreen('/(tabs)/cast'), 'cast is a real screen, not a hidden tab');

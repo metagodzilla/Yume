@@ -21,9 +21,11 @@ export type InstalledResource = {
 
 export type GeneratorState = {
   prompt: string;
+  positive: string;
   quality: string;
   qualityEdited: boolean;
-  extraPrompt: string;
+  /** @deprecated Merged into positive. Kept so a 1.4.9 save still loads. */
+  extraPrompt?: string;
   negative: string;
   sampler: string;
   steps: number;
@@ -85,6 +87,7 @@ export const studioResource = (): InstalledResource => ({
 
 export const initialGenerator = (): GeneratorState => ({
   prompt: '',
+  positive: '',
   quality: ANIME_STUDIO_CHECKPOINT.quality,
   qualityEdited: false,
   extraPrompt: '',
@@ -216,7 +219,7 @@ export function resetModelDefaults(baseModel: string, name = '') {
 
 export function resetBuiltPrompt(baseModel: string, name = '') {
   const preset = settingsForCheckpoint(baseModel, name);
-  patchGenerator({ quality: preset.quality, qualityEdited: false, qualityTags: true, extraPrompt: '' });
+  patchGenerator({ quality: preset.quality, qualityEdited: false, qualityTags: true, positive: '', extraPrompt: '' });
 }
 
 export function resetQualityTags(baseModel: string, name = '') {
@@ -313,7 +316,9 @@ export async function hydrateFromDisk() {
           ? 'all'
           : 'sfw';
     const fresh = initialGenerator();
-    state = { ...fresh, ...parsed, installed, contentFilter, nsfw: contentFilter !== 'sfw' };
+    const legacyExtra = typeof parsed.extraPrompt === 'string' ? parsed.extraPrompt : '';
+    const positive = typeof parsed.positive === 'string' && parsed.positive.trim() ? parsed.positive : legacyExtra;
+    state = { ...fresh, ...parsed, positive, extraPrompt: '', installed, contentFilter, nsfw: contentFilter !== 'sfw' };
     if (parsed.studioApplied !== STUDIO_APPLIED) {
       if (!state.installed.some((item) => item.versionId === ANIME_STUDIO_CHECKPOINT.versionId)) {
         state.installed = [studioResource(), ...state.installed.map((item) => ({ ...item, isDefault: false }))];

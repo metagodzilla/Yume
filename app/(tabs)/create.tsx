@@ -7,6 +7,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { CheckpointSheet } from '@/components/CheckpointSheet';
 import { LoraSheet } from '@/components/LoraSheet';
 import { Gallery } from '@/components/Gallery';
+import { CREATE_PROMPT_FIELDS } from '@/src/lib/createFields';
 import { characterClause } from '@/src/lib/prompt';
 import { composeGenerationPrompt, drawFrames, generationParams, samplerId, sentPositiveText } from '@/src/lib/draw';
 import { sendClientReport } from '@/src/lib/clientReport';
@@ -170,6 +171,53 @@ export default function GenerateScreen() {
             <Text style={styles.link}>Import</Text>
           </Pressable>
         </View>
+        <Text style={styles.label}>{CREATE_PROMPT_FIELDS[0]}</Text>
+        <TextInput
+          testID="gen-prompt"
+          value={gen.prompt}
+          onChangeText={(prompt) => patchGenerator({ prompt })}
+          placeholder="what to draw, for example a girl in a shrine in the rain"
+          placeholderTextColor={colors.faint}
+          multiline
+          style={styles.prompt}
+        />
+        <Text style={styles.label}>{CREATE_PROMPT_FIELDS[1]}</Text>
+        <TextInput
+          testID="gen-positive"
+          value={gen.positive}
+          onChangeText={(positive) => patchGenerator({ positive, extraPrompt: '' })}
+          placeholder="extra positive tags added to every generation"
+          placeholderTextColor={colors.faint}
+          multiline
+          style={styles.prompt}
+        />
+        <Text style={styles.hint}>Kept when you switch models. This is the old Extra prompt.</Text>
+        <Text style={styles.label}>{CREATE_PROMPT_FIELDS[2]}</Text>
+        <TextInput
+          testID="gen-negative"
+          value={gen.negative}
+          onChangeText={(negative) => patchGenerator({ negative })}
+          placeholder="lowres, bad hands"
+          placeholderTextColor={colors.faint}
+          multiline
+          style={styles.negative}
+        />
+        <View style={styles.row}>
+          <Text style={styles.label}>{CREATE_PROMPT_FIELDS[3]}</Text>
+          <Pressable testID="reset-quality-tags" onPress={() => resetQualityTags(checkpoint?.baseModel ?? '', checkpoint?.name ?? '')}>
+            <Text style={styles.link}>Reset</Text>
+          </Pressable>
+        </View>
+        <TextInput
+          testID="gen-quality"
+          value={gen.quality}
+          onChangeText={(quality) => patchGenerator({ quality, qualityEdited: true })}
+          placeholder="masterpiece, best quality"
+          placeholderTextColor={colors.faint}
+          multiline
+          style={styles.negative}
+        />
+        <Text style={styles.hint}>Always added at the end of the sent prompt. Editing them keeps your text when you switch models.</Text>
         <Pressable
           testID="gen-checkpoint"
           style={styles.checkpoint}
@@ -197,42 +245,6 @@ export default function GenerateScreen() {
             </Pressable>
           ))}
         </View>
-        <Text style={styles.label}>Prompt</Text>
-        <TextInput
-          testID="gen-prompt"
-          value={gen.prompt}
-          onChangeText={(prompt) => patchGenerator({ prompt })}
-          placeholder="1girl, shrine maiden, rain, looking at viewer"
-          placeholderTextColor={colors.faint}
-          multiline
-          style={styles.prompt}
-        />
-        <View style={styles.row}>
-          <Text style={styles.label}>Quality tags</Text>
-          <Pressable testID="reset-quality-tags" onPress={() => resetQualityTags(checkpoint?.baseModel ?? '', checkpoint?.name ?? '')}>
-            <Text style={styles.link}>Reset</Text>
-          </Pressable>
-        </View>
-        <TextInput
-          testID="gen-quality"
-          value={gen.quality}
-          onChangeText={(quality) => patchGenerator({ quality, qualityEdited: true })}
-          placeholder="masterpiece, best quality"
-          placeholderTextColor={colors.faint}
-          multiline
-          style={styles.negative}
-        />
-        <Text style={styles.hint}>These tags are added at the end of the sent prompt. Editing them keeps your text when you switch models.</Text>
-        <Text style={styles.label}>Extra prompt</Text>
-        <TextInput
-          testID="gen-extra"
-          value={gen.extraPrompt}
-          onChangeText={(extraPrompt) => patchGenerator({ extraPrompt })}
-          placeholder="tags or text added as-is, kept when you switch models"
-          placeholderTextColor={colors.faint}
-          multiline
-          style={styles.negative}
-        />
         <View style={styles.finalBox}>
           <View style={styles.row}>
             <Text style={styles.label}>Sent prompt</Text>
@@ -256,7 +268,7 @@ export default function GenerateScreen() {
           ) : null}
         </View>
         <Text style={styles.hint}>
-          (word:1.2) weights, [de-emphasis], {'<lora:name:0.8>'}, BREAK, and embedding names are kept. Quality tags and trigger words can be added in front.
+          Sent order: your prompt, positive tags, the style suffix, LoRA triggers, then quality tags.
         </Text>
         <View style={styles.row}>
           <Pressable onPress={() => patchGenerator({ qualityTags: !gen.qualityTags })}>
@@ -266,14 +278,6 @@ export default function GenerateScreen() {
             <Text style={styles.link}>{gen.triggers ? 'Triggers on' : 'Triggers off'}</Text>
           </Pressable>
         </View>
-        <Text style={styles.label}>Negative prompt</Text>
-        <TextInput
-          testID="gen-negative"
-          value={gen.negative}
-          onChangeText={(negative) => patchGenerator({ negative })}
-          multiline
-          style={styles.negative}
-        />
         <Text style={styles.label}>LoRAs</Text>
         <Pressable testID="gen-lora-add" onPress={() => setLoraSheet(true)}>
           <Text style={styles.link}>Add LoRA</Text>

@@ -57,6 +57,7 @@ export async function deployYumeGroup(input: {
   apiKey: string;
   organization: string;
   gpu: GpuChoice;
+  adminToken?: string;
   fetchImpl?: typeof fetch;
 }): Promise<CloudDeployment> {
   const deployment: CloudDeployment = {
@@ -74,7 +75,7 @@ export async function deployYumeGroup(input: {
       apiKey: input.apiKey,
       path: collection,
       method: 'POST',
-      body: buildYumeContainerGroup({ apiKey: input.apiKey, gpuClassId: input.gpu.id }),
+      body: buildYumeContainerGroup({ apiKey: input.apiKey, gpuClassId: input.gpu.id, adminToken: input.adminToken }),
       fetchImpl: input.fetchImpl,
     });
   } catch (error) {

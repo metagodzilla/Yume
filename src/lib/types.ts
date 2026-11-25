@@ -148,6 +148,7 @@ export type Settings = {
   setupComplete: boolean;
   idleStopMinutes: number;
   lowPower: boolean;
+  serverUpdateCheck: boolean;
 };
 
 export type Session = {
@@ -203,6 +204,7 @@ export const DEFAULT_SETTINGS: Settings = {
   setupComplete: false,
   idleStopMinutes: 0,
   lowPower: false,
+  serverUpdateCheck: true,
 };
 
 export const DEFAULT_SESSION: Session = {

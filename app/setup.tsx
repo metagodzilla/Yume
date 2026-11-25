@@ -21,7 +21,8 @@ import {
   type GpuChoice,
   type NamedResource,
 } from '@/src/lib/saladCloud';
-import { touchCloudActivity, writeCloudDeployment } from '@/src/lib/storage';
+import { mintAdminToken } from '@/src/lib/serverUpdate';
+import { touchCloudActivity, writeAdminToken, writeCloudDeployment } from '@/src/lib/storage';
 import { useStudio } from '@/src/studio';
 import { colors, font } from '@/src/theme';
 
@@ -44,6 +45,7 @@ export default function SetupScreen() {
   const shot = typeof params.shot === 'string' && isStep(params.shot) ? params.shot : '';
   const [step, setStep] = useState<Step>(shot || 'welcome');
   const [apiKey, setApiKey] = useState('');
+  const [adminToken, setAdminToken] = useState('');
   const [orgs, setOrgs] = useState<NamedResource[]>(shot === 'org' || shot === 'gpu' || shot === 'progress' ? SAMPLE_ORGS : []);
   const [organization, setOrganization] = useState(shot ? SAMPLE_ORGS[0].name : '');
   const [gpus, setGpus] = useState<GpuChoice[]>(shot === 'gpu' || shot === 'progress' ? SAMPLE_GPUS : []);
@@ -136,7 +138,9 @@ export default function SetupScreen() {
     const job = addJob('deploy', 'Salad server');
     reportJob(job.id, 0.1, 'Starting');
     try {
-      const deployment = await deployYumeGroup({ apiKey: key, organization, gpu });
+      const token = adminToken.trim() || mintAdminToken();
+      await writeAdminToken(token);
+      const deployment = await deployYumeGroup({ apiKey: key, organization, gpu, adminToken: token });
       await writeCloudDeployment(deployment);
       let gateway = '';
       for (let attempt = 0; attempt < 160; attempt += 1) {
@@ -216,6 +220,20 @@ export default function SetupScreen() {
               value={apiKey}
               onChangeText={setApiKey}
               placeholder="Salad API key"
+              placeholderTextColor={colors.faint}
+              autoCapitalize="none"
+              autoCorrect={false}
+              secureTextEntry
+              style={styles.input}
+            />
+            <Text style={styles.body}>
+              Server update token. Leave this blank and Yume makes one for a new container. If the Salad group already exists, add that token as YUME_ADMIN_TOKEN in the Salad portal. This wizard does not change a running group.
+            </Text>
+            <TextInput
+              testID="setup-admin-token"
+              value={adminToken}
+              onChangeText={setAdminToken}
+              placeholder="Optional server update token"
               placeholderTextColor={colors.faint}
               autoCapitalize="none"
               autoCorrect={false}

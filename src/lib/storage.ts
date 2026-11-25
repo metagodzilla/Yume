@@ -14,6 +14,7 @@ const API_KEY = 'yume.openai.apiKey';
 const CIVITAI_KEY = 'yume.civitai.apiToken';
 const SALAD_KEY = 'yume.salad.apiKey';
 const SALAD_ENDPOINT = 'yume.salad.endpoint';
+const ADMIN_TOKEN = 'yume.server.adminToken';
 const KEYS = {
   characters: 'yume.characters.v1',
   history: 'yume.history.v1',
@@ -250,6 +251,14 @@ export async function readSaladKey(): Promise<string | null> {
   if (!key) return null;
   if (raw && key !== raw) await writeSecure(SALAD_KEY, key);
   return key;
+}
+
+export async function readAdminToken(): Promise<string | null> {
+  return readSecure(ADMIN_TOKEN);
+}
+
+export async function writeAdminToken(value: string | null): Promise<void> {
+  await writeSecure(ADMIN_TOKEN, value);
 }
 
 export async function writeSaladKey(value: string | null): Promise<void> {

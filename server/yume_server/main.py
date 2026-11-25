@@ -12,8 +12,10 @@ import contextvars
 import json
 import logging
 import os
+import threading
 import traceback
 from contextlib import asynccontextmanager
+from pathlib import Path
 from typing import Any
 
 from fastapi import FastAPI, HTTPException, Request
@@ -34,6 +36,7 @@ from yume_server.jobs import resume as resume_job
 from yume_server.jobs import submit as submit_job
 from yume_server.startup import snapshot as startup_snapshot
 from yume_server.stats import collect as collect_stats
+from yume_server.version import version_payload
 
 state: dict[str, Any] = {"ready": False, "error": None}
 _PAYLOAD: contextvars.ContextVar[Any] = contextvars.ContextVar("yume_payload", default=None)
@@ -45,6 +48,11 @@ class LoraIn(BaseModel):
     versionId: int | None = None
     baseModel: str | None = None
     triggers: list[str] = []
+
+
+class UpdateIn(BaseModel):
+    ref: str = "latest"
+    sha256: str = ""
 
 
 class MeshIn(BaseModel):
@@ -212,6 +220,42 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+def schedule_reload() -> None:
+    """Exit 75 tells the supervisor to start the app again. The container stays up."""
+    if os.environ.get("YUME_SUPERVISOR") != "1":
+        return
+
+    def _exit() -> None:
+        os._exit(75)
+
+    threading.Timer(0.4, _exit).start()
+
+
+@app.get("/version")
+def version(request: Request) -> dict[str, Any]:
+    _check_key(request)
+    return version_payload()
+
+
+@app.post("/admin/update")
+def admin_update(body: UpdateIn, request: Request) -> dict[str, Any]:
+    from yume_runtime.codepack import apply_update, same_secret
+
+    expected = os.environ.get("YUME_ADMIN_TOKEN", "").strip()
+    if not expected:
+        raise HTTPException(status_code=503, detail="Set YUME_ADMIN_TOKEN on the container. The running Salad group is not changed from here.")
+    provided = request.headers.get("x-admin-token", "").strip()
+    if not same_secret(provided, expected):
+        raise HTTPException(status_code=401, detail="Admin token was rejected.")
+    root = Path(os.environ.get("YUME_RUNTIME_ROOT", "/opt/yume"))
+    try:
+        stamp = apply_update(body.ref or "latest", body.sha256, releases_dir=root / "releases", current_link=root / "app")
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    schedule_reload()
+    return {"ok": True, "reloading": os.environ.get("YUME_SUPERVISOR") == "1", "models": "kept on disk", **stamp}
 
 
 @app.get("/health")
