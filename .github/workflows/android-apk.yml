@@ -37,5 +37,5 @@ jobs:
           ANDROID_HOME: ${{ env.ANDROID_HOME }}
       - uses: actions/upload-artifact@v4
         with:
-          name: yume-1.5.10
-          path: dist/yume-1.5.10.apk
+          name: yume-1.5.11
+          path: dist/yume-1.5.11.apk

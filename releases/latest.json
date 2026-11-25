@@ -1,6 +1,6 @@
 {
-  "version": "1.5.10",
-  "versionCode": 25,
+  "version": "1.5.11",
+  "versionCode": 26,
   "apkUrl": "",
   "sha256": "",
   "notes": "Salad setup wizard. apkUrl stays empty until a release signed with the existing keystore is uploaded. The phone will not offer this update until both the address and checksum are filled in."
