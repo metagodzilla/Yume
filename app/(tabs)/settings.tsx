@@ -120,6 +120,9 @@ export default function SettingsScreen() {
           <Pressable onPress={() => router.push('/report')}>
             <Text style={styles.link}>Report a problem</Text>
           </Pressable>
+          <Pressable testID="open-taste-settings" onPress={() => router.push('/taste')}>
+            <Text style={styles.link}>My taste</Text>
+          </Pressable>
         </View>
 
         <View style={styles.card}>
@@ -135,6 +138,9 @@ export default function SettingsScreen() {
           </Pressable>
           <Pressable testID="low-power" onPress={() => void studio.updateSettings({ lowPower: !studio.settings.lowPower })}>
             <Text style={styles.link}>{studio.settings.lowPower ? 'Low-power mode on' : 'Low-power mode off'}</Text>
+          </Pressable>
+          <Pressable testID="auto-fix-stuck" onPress={() => void studio.updateSettings({ autoFixStuckCloud: studio.settings.autoFixStuckCloud === false })}>
+            <Text style={styles.link}>{studio.settings.autoFixStuckCloud === false ? 'Auto-fix stuck cloud off' : 'Auto-fix stuck cloud on'}</Text>
           </Pressable>
         </View>
 

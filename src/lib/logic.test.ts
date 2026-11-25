@@ -32,10 +32,13 @@ import { meshPlan, PICTURE_SERVER_MESH_MESSAGE } from '@/src/lib/mesh';
 import { newerServerRelease, serverUpdateCall } from '@/src/lib/serverUpdate';
 import { CAST_ROUTE, castRouteOpensScreen } from '@/src/lib/routes';
 import { chooseSeeds } from '@/src/lib/seeds';
-import { redactValue } from '@/src/lib/reportText';
+import { redactValue, reportDocument } from '@/src/lib/reportText';
 import { CREATE_PROMPT_FIELDS } from '@/src/lib/createFields';
 import { describeParts, describeToTags, isClothesTag, keepManualTags, namedPeople, settleSavedPrompts, supportTags } from '@/src/lib/positiveTags';
 import { defaultOutfitTags, pickCleanTriggerGroup, sentNegative } from '@/src/lib/draw';
+import { bodySizeFromHeight, referenceGenerateFields } from '@/src/lib/referencePicture';
+import { applyTaste, captureShot, castVote, emptyTaste, hideTasteItem, learnTaste, suggestedSettings } from '@/src/lib/taste';
+import { characterSheetTags, loraForCharacter, planTarget } from '@/src/lib/framePlan';
 import { buildSaladGenerateBody, composeGenerationPrompt, sentPositiveText } from '@/src/lib/draw';
 import { addLora, getGenerator, patchGenerator, resetBuiltPrompt, resetModelDefaults, resetQualityTags, type GeneratorState } from '@/src/lib/genstore';
 import { downloadButtons, downloadKind, downloadPercent, formatEta, formatSpeed, RECONNECTING } from '@/src/lib/downloads';
@@ -49,7 +52,9 @@ import { CLOUD_STOP_CHECK } from '@/src/lib/cloudRun';
 import { CLOUD_OFF_INSTALL, canUseAsDefault, cloudIsOff, installAction, installRequest, isServerInstalled } from '@/src/lib/installGate';
 import { dropTiles, filterTiles, galleryTiles, reusePatch } from '@/src/lib/gallery';
 import type { Generation } from '@/src/lib/types';
-import { pullPercent } from '@/src/lib/saladCloud';
+import { pullPercent, readSaladInstances, reallocateTarget } from '@/src/lib/saladCloud';
+import { emptyCloudWatch, observeCloud, STUCK_QUIET_MS } from '@/src/lib/stuckCloud';
+import { fileLine, filesForPhase, formatReadyIn, overallEtaSeconds, softwareDetail } from '@/src/lib/startupEta';
 import { areaCounts } from '@/src/lib/checkRows';
 import { classifyHeat, estimatePowerWatts, shouldKeepScreenAwake, throttleFor, throttleSteps } from '@/src/lib/phonePower';
 import { composeSheet, decodePng } from '@/src/lib/sheet';
@@ -441,6 +446,8 @@ assert(emptyCache.bad && emptyCache.retry && !emptyCache.label.includes('Up to d
 const rateLimit = decideReleaseCheck({ status: 429, release: null, localVersion: '1.4.5', localCode: 10 });
 assert(rateLimit.bad && !rateLimit.label.includes('Up to date'), 'rate limit is not up to date');
 assert(readInstalledVersionCode('10', 99) === 10 && readInstalledVersionCode('', 12) === 12, 'native versionCode wins when present');
+assert(pullPercent({ instances: [{ id: 'inst-1', machine_id: 'machine-9', state: 'downloading', pulling_progress: 0.37 }] }) === 37, 'pulling_progress is the real percent');
+assert(reallocateTarget(readSaladInstances({ instances: [{ id: 'inst-1', machine_id: 'machine-9', state: 'downloading' }] })[0]) === 'inst-1', 'reallocate uses the instance id');
 assert(pullPercent({ instances: [{ state: 'creating', details: 'Pulling, 37% complete' }] }) === 37, 'salad pull percent');
 assert(pullPercent({ state: 'running' }) === null, 'no fake pull percent');
 const modelStep = cloudChecklist({ hasEndpoint: true, healthStatus: 200, readyStatus: 503, healthReady: false, modelDone: 50, modelTotal: 100 });
@@ -594,6 +601,19 @@ const downloading = cloudChecklist({
 });
 assert(downloading.phase === 'starting' && downloading.steps[4]?.state === 'current' && downloading.steps[3]?.state === 'done', 'model download step');
 assert(downloading.liveTitle.toLowerCase().includes('downloading model'), 'model download title');
+const imagePull = cloudChecklist({ hasEndpoint: true, downloading: 1, readyStatus: 503, pullPercent: 37 });
+assert(imagePull.liveTitle === 'Downloading server software (Salad)' && imagePull.steps[2]?.state === 'current' && imagePull.steps[4]?.state === 'todo', 'image pull is not the model download');
+const slowPull = softwareDetail([{ at: 0, percent: 10 }, { at: 60_000, percent: 11 }], 11);
+assert(slowPull.line.includes('1.0%/min') && slowPull.line.includes('11%'), 'software line shows percent and rate');
+const stuckPull = observeCloud(emptyCloudWatch(), { now: 0, instanceState: 'downloading', pullingPercent: 10, updateTime: 't', readyStatus: 503, healthStatus: null, modelDone: null, startupMessage: '', active: true }, true);
+const stillStuck = observeCloud(stuckPull.watch, { now: STUCK_QUIET_MS, instanceState: 'downloading', pullingPercent: 10, updateTime: 't', readyStatus: 503, healthStatus: null, modelDone: null, startupMessage: '', active: true }, true);
+assert(stillStuck.kind === 'stuck' && stillStuck.autoMove, 'an unchanged pull is stuck and can auto-move');
+const movingPull = observeCloud(emptyCloudWatch(), { now: 0, instanceState: 'downloading', pullingPercent: 10, updateTime: 't', readyStatus: 503, healthStatus: null, modelDone: null, startupMessage: '', active: true }, true);
+const slowWatch = observeCloud(movingPull.watch, { now: 60_000, instanceState: 'downloading', pullingPercent: 11, updateTime: 't2', readyStatus: 503, healthStatus: null, modelDone: null, startupMessage: '', active: true }, true);
+assert(slowWatch.kind === 'slow' && !slowWatch.autoMove, 'a slow moving pull is not auto-moved');
+const weights = filesForPhase(5, [{ name: 'Tile ControlNet', type: 'ControlNet', versionId: null, bytesDone: 10, bytesTotal: 20, speed: 1024 * 1024, state: 'downloading', etaSeconds: 90 }, { name: 'WAI', type: 'Checkpoint', versionId: 1, bytesDone: 1, bytesTotal: 2, speed: 1, state: 'done', etaSeconds: null }]);
+assert(weights.length === 1 && weights[0]?.name === 'Tile ControlNet' && fileLine(weights[0]!).includes('MB') && fileLine({ ...weights[0]!, state: 'waiting' }) === 'waiting', 'each weight file has its own line');
+assert(formatReadyIn(overallEtaSeconds(2, 120, 0)).startsWith('Ready in ~'), 'overall estimate is a ready-in line');
 const moving = cloudChecklist({ hasEndpoint: true, healthStatus: 503, readyStatus: 503, readyDetail: 'Cloud has no internet - moving to a new machine', startupMessage: 'Cloud has no internet - moving to a new machine' });
 assert(moving.liveTitle === 'Cloud has no internet - moving to a new machine' && moving.pill === 'Moving', 'dead network tells the phone the machine is moving');
 const locked = cloudChecklist({ hasEndpoint: true, healthStatus: 403, readyStatus: 403 });
@@ -695,6 +715,14 @@ const previewState = {
   positiveAuto: true,
   clothes: '',
   clothesAuto: true,
+  referencePose: false,
+  referencePoseStrength: 0.85,
+  referenceFit: true,
+  referenceBody: 'average' as const,
+  referenceCopy: false,
+  referenceDenoise: 0.6,
+  referenceStyle: false,
+  referenceStyleStrength: 0.55,
   extraPrompt: 'shiny eyes',
   vPrediction: false,
   studioStyle: 'off',
@@ -804,6 +832,35 @@ assert(!characterClause(outfitCharacter).includes('school uniform'), 'identity c
 const outfitNegative = sentNegative(outfitState, outfitCharacter);
 assert(outfitNegative.includes('school uniform') && outfitNegative.includes('pleated skirt') && outfitNegative.includes('lowres') && !outfitNegative.includes('red bikini'), `old clothes move to negative: ${outfitNegative}`);
 assert(pickCleanTriggerGroup([['momo', 'school uniform', 'pleated skirt'], ['momo']]).join(',') === 'momo', 'lora trigger group without the outfit wins');
+assert(bodySizeFromHeight(150) === 'petite' && bodySizeFromHeight(164) === 'average' && bodySizeFromHeight(182) === 'tall', 'height picks a body size');
+const referenceFields = referenceGenerateFields({ pose: true, poseStrength: 0.85, fit: true, body: 'tall', copy: true, denoise: 0.6, style: true, styleStrength: 0.55, heightCm: 182 });
+assert(referenceFields.pose === true && referenceFields.copy_picture === true && referenceFields.style === true && referenceFields.pose_fit === true && referenceFields.strength === 0.6 && referenceFields.pose_body === 'tall', 'reference toggles travel with the generate request');
+const twoK = planTarget(832, 1216, '2k');
+const fourK = planTarget(832, 1216, '4k');
+assert(twoK.longEdge === 2048 && twoK.passes === 1 && fourK.longEdge >= 3840 && fourK.longEdge <= 4096 && planTarget(5000, 3000, '2k').passes === 0, '2K and 4K are long-edge targets');
+const liked = captureShot({ prompt: 'dramatic lighting, bloom', negative: '', checkpoint: 'WAI', checkpointId: 1, loras: [{ name: 'momo', weight: 0.8 }], sampler: 'Euler a', steps: 28, cfg: 5, width: 832, height: 1216 });
+const disliked = captureShot({ prompt: 'blurry, red dress', negative: '', checkpoint: 'WAI', checkpointId: 1, loras: [], sampler: 'Euler', steps: 20, cfg: 7, width: 832, height: 1216 });
+let taste = emptyTaste();
+taste = castVote(taste, { id: 'a:0', generationId: 'a', index: 0, vote: 'like', at: 1, shot: liked });
+taste = castVote(taste, { id: 'b:0', generationId: 'b', index: 0, vote: 'like', at: 2, shot: liked });
+taste = castVote(taste, { id: 'c:0', generationId: 'c', index: 0, vote: 'dislike', at: 3, shot: disliked });
+taste = castVote(taste, { id: 'd:0', generationId: 'd', index: 0, vote: 'dislike', at: 4, shot: disliked });
+const tasted = applyTaste({ enabled: true, prompt: '1girl', negative: '', blocked: ['1girl'], store: taste });
+assert(tasted.prompt.includes('(dramatic lighting:0.35)') && tasted.prompt.includes('(bloom:0.35)') && !tasted.prompt.includes('red dress'), 'taste adds style tags and skips clothes');
+assert(tasted.negative.includes('blurry') && !tasted.negative.includes('red dress'), 'disliked tags go to the negative except clothes');
+const tasteKept = applyTaste({ enabled: true, prompt: 'dramatic lighting', negative: '', blocked: ['dramatic lighting'], store: taste });
+assert(!tasteKept.prompt.includes('(dramatic lighting:0.35)'), 'an explicit prompt tag is not overridden');
+assert(!applyTaste({ enabled: false, prompt: '1girl', negative: '', blocked: [], store: taste }).prompt.includes('bloom'), 'taste stays off when the toggle is off');
+const suggestion = suggestedSettings(taste);
+assert(suggestion.sampler === 'Euler a' && suggestion.steps === 28, 'liked settings are suggested');
+const hidden = hideTasteItem(taste, 'tag:bloom');
+assert(!learnTaste(hidden).some((item) => item.key === 'tag:bloom'), 'removing a taste item keeps it from coming back');
+const momoTags = characterSheetTags({ hairColor: 'pink', eyeColor: 'blue', outfit: 'uniform', clothesPrompt: 'sailor collar' });
+assert(momoTags.includes('pink hair') && momoTags.includes('sailor collar'), 'cast tags travel with a character reference');
+assert(loraForCharacter('Momo', [{ name: 'Momo XL', filename: 'momo.safetensors', type: 'LORA' }])?.filename === 'momo.safetensors', 'a cast name finds her LoRA');
+const backed = exportBundle(defaultLibrary(), taste);
+const parsedTaste = parseBundle(backed);
+assert(parsedTaste.ok && parsedTaste.bundle.taste?.votes.length === 4, 'backup includes taste');
 assert(defaultOutfitTags(outfitCharacter, outfitState.loras).includes('pleated skirt'), 'default outfit is remembered from the character and the lora');
 const keptPositive = keepManualTags('detailed eyes, detailed face', 'detailed eyes, shiny eyes', 'detailed eyes', 'edited');
 hasTag(keptPositive, 'shiny eyes');
@@ -838,6 +895,27 @@ assert(downloadKind({ id: 'a', versionId: 1, state: 'done', bytesDone: 1, bytesT
 assert(downloadKind({ id: 'a', versionId: 1, state: 'done', bytesDone: 1, bytesTotal: 1, type: 'TextualInversion' }) === 'Embedding', 'embedding kind');
 assert(formatSpeed(1024 * 1024).includes('MB') && formatEta(90) === '1 min', 'speed and eta');
 assert(!JSON.stringify(redactValue({ apiKey: 'salad_cloud_user_secret', note: 'token=abc' })).includes('secret'), 'client report redacts secrets');
+const groupDump = {
+  container: {
+    environment_variables: {
+      YUME_ADMIN_TOKEN: 'adminkeyvalue1234',
+      YUME_API_KEY: 'salad_cloud_user_abcdefghijklmnopqrstuvwxyz',
+      YUME_CIVITAI_TOKEN: 'civitaikeyvalue1234',
+      HF_HOME: '/models',
+    },
+  },
+};
+const cleanedGroup = JSON.stringify(redactValue(groupDump, ['adminkeyvalue1234', 'civitaikeyvalue1234']));
+assert(cleanedGroup.includes('"YUME_ADMIN_TOKEN":"***"') && cleanedGroup.includes('"HF_HOME":"***"'), 'env names stay and values are hidden');
+assert(!cleanedGroup.includes('adminkeyvalue1234') && !cleanedGroup.includes('civitaikeyvalue1234') && !cleanedGroup.includes('abcdefghijklmnopqrstuvwxyz'), 'group export keeps no env values');
+const html503 = '<!DOCTYPE html><html><head><title>503 Service Unavailable</title></head><body>no instance ready</body></html>';
+const exported = reportDocument(
+  [{ endpoint: html503, status: 503, message: 'Cloud Group state failed', payload: groupDump }],
+  { note: 'saw adminkeyvalue1234 in a log' },
+  ['adminkeyvalue1234'],
+);
+assert(exported.includes('Salad gateway 503: no instance ready') && !exported.includes('<html') && !exported.includes('<!DOCTYPE'), 'html gateway pages become a short summary');
+assert(!exported.includes('adminkeyvalue1234') && !exported.includes('civitaikeyvalue1234') && !exported.includes('abcdefghijklmnopqrstuvwxyz'), 'the copied report has no secret values');
 assert(normalizeSaladKey('  salad_cloud_user_abc\r\n') === 'salad_cloud_user_abc', 'pasted key drops whitespace');
 assert(normalizeSaladKey('Salad-Api-Key: salad_cloud_user_abc') === 'salad_cloud_user_abc', 'pasted key drops a header label');
 const orgMiss = saladFailureMessage(404, 'https://api.salad.com/api/public/organizations');

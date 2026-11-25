@@ -6,13 +6,12 @@ import { ActivityIndicator, AppState, Platform, Pressable, StyleSheet, Text, Tex
 
 import { clientReportBody, fetchServerErrors, sendClientReport } from '@/src/lib/clientReport';
 import { rememberFault, reportDocument, type ServerFault } from '@/src/lib/reportText';
-import { changeContainerGroup, containerGroupUrl, liveContainerGroup, readContainerGroup, readContainerInstances } from '@/src/lib/cloudActions';
+import { changeContainerGroup, containerGroupUrl, liveContainerGroup, readContainerGroup, readContainerInstances, reallocateInstance } from '@/src/lib/cloudActions';
 import { beginCloudStart, beginCloudStop, cloudRunState, finishCloudStop, noteLiveSession, subscribeCloudRun } from '@/src/lib/cloudRun';
 import { capReached, checkLine, cloudChecklist, deploymentForEndpoint, formatCostLine, hostOf, LIVE_GATEWAY, resolveHourly, sessionUsd, type CheckLine, type ChecklistStep } from '@/src/lib/cloudSteps';
 import { DISK_RESET_NOTE, restoreSummary } from '@/src/lib/keptModels';
 import { fetchInstalls } from '@/src/lib/downloadClient';
 import { restoreMissingModels } from '@/src/lib/restoreModels';
-import { readCivitaiToken } from '@/src/lib/storage';
 import { confirmAction } from '@/src/lib/confirm';
 import { probe, type Probe } from '@/src/lib/connection';
 import { readPhone, type PhoneReading } from '@/src/lib/device';
@@ -20,11 +19,14 @@ import { thermalStatusName } from '@/src/lib/phonePower';
 import { counts } from '@/src/lib/queue';
 import { queueAction, useQueue } from '@/src/lib/queuestore';
 import { endpointDiffersFromLive, LIVE_GATEWAY_URL, normalizeEndpoint, redactSecrets } from '@/src/lib/salad';
-import { groupStatusOf, instanceCounts, normalizeSaladKey, pullPercent } from '@/src/lib/saladCloud';
+import { groupStatusOf, instanceCounts, normalizeSaladKey, pickActiveInstance, pullPercent, readSaladInstances, reallocateTarget } from '@/src/lib/saladCloud';
+import { emptyCloudWatch, noteCloudMove, observeCloud, type CloudWatchView } from '@/src/lib/stuckCloud';
+import { fileLine, filesForPhase, formatReadyIn, overallEtaSeconds, parseProgressFiles, phaseDetail, softwareDetail, type WeightFile } from '@/src/lib/startupEta';
 import { areaCounts, type CheckRow } from '@/src/lib/checkRows';
 import { runAppCheck, runCloudCheck } from '@/src/lib/selfTest';
-import { readCloudDeployment, readSaladKey, touchCloudActivity, writeCloudDeployment } from '@/src/lib/storage';
+import { loadFeatures, readAdminToken, readCivitaiToken, readCloudDeployment, readSaladKey, saveFeatures, touchCloudActivity, writeCloudDeployment } from '@/src/lib/storage';
 import { getThrottle } from '@/src/lib/thermalState';
+import { formatBytes, formatEta, formatSpeed } from '@/src/lib/downloads';
 import { emptyStats, money, type CloudStats } from '@/src/lib/usage';
 import { useStudio } from '@/src/studio';
 import { colors, font } from '@/src/theme';
@@ -77,6 +79,13 @@ export function StatusPanel({ preview = '' }: { preview?: string }) {
   const [now, setNow] = useState(Date.now());
   const stepSince = useRef(Date.now());
   const stepLabel = useRef('');
+  const watchRef = useRef(emptyCloudWatch());
+  const movingCloud = useRef(false);
+  const cloudHandle = useRef<{ key: string; deployment: ReturnType<typeof deploymentForEndpoint>; instanceId: string }>({ key: '', deployment: null, instanceId: '' });
+  const [files, setFiles] = useState<WeightFile[]>([]);
+  const [modelStats, setModelStats] = useState({ done: 0, total: 0, speed: 0, eta: null as number | null });
+  const [watchView, setWatchView] = useState<CloudWatchView | null>(null);
+  const [pullSamples, setPullSamples] = useState<{ at: number; percent: number }[]>([]);
   const cloudStart = useRef<number | null>(null);
   const capped = useRef(false);
   const tally = counts(queue);
@@ -96,6 +105,12 @@ export function StatusPanel({ preview = '' }: { preview?: string }) {
   const frozen = run.mode !== 'live';
   const shownSpent = frozen && run.frozenUsd != null ? run.frozenUsd : spent;
   const shownUpSec = frozen && run.frozenUpSec != null ? run.frozenUpSec : shownPhase === 'stopped' ? 0 : upSec;
+  const software = softwareDetail(pullSamples, pullSamples[pullSamples.length - 1]?.percent ?? null);
+  const modelLine = modelStats.total > 0 ? [formatBytes(modelStats.done) + (modelStats.total ? ` / ${formatBytes(modelStats.total)}` : ''), formatSpeed(modelStats.speed), formatEta(modelStats.eta)].filter(Boolean).join(' · ') : '';
+  const currentIndex = steps.findIndex((step) => step.state === 'current');
+  const restoreEta = files.filter((file) => !/checkpoint/i.test(file.type)).reduce((sum, file) => sum + (file.etaSeconds || 0), 0);
+  const currentEta = currentIndex === 2 ? software.etaSeconds : currentIndex === 4 ? modelStats.eta : currentIndex === 5 ? restoreEta : null;
+  const overallLabel = shownPhase === 'starting' ? formatReadyIn(overallEtaSeconds(currentIndex, currentEta, currentIndex === 5 ? 0 : restoreEta)) : '';
   const startEnabled = shownPhase === 'stopped' || pill === 'Failed';
   const stopEnabled = shownPhase === 'running' || shownPhase === 'starting';
   const wrongServer = endpointDiffersFromLive(studio.settings.saladEndpoint);
@@ -116,7 +131,10 @@ export function StatusPanel({ preview = '' }: { preview?: string }) {
       let priority = '';
       let groupGpu = deployment?.gpuName || '';
       let groupError = '';
+      let downloading = 0;
       let groupPull: number | null = null;
+      let activeState = '';
+      let updateTime: string | null = null;
       const groupUrl = deployment ? containerGroupUrl(deployment) : '';
       if (key && deployment) {
         try {
@@ -124,6 +142,7 @@ export function StatusPanel({ preview = '' }: { preview?: string }) {
           const status = groupStatusOf(group);
           groupStatus = status.status;
           allocating = status.allocating;
+          downloading = status.downloading;
           creating = status.creating;
           running = status.running;
           priority = status.priority;
@@ -135,16 +154,21 @@ export function StatusPanel({ preview = '' }: { preview?: string }) {
             }
           }
           let pull = pullPercent(group);
-          if (running === 0 && groupStatus !== 'stopped' && groupStatus !== 'succeeded') {
+          if (groupStatus !== 'stopped' && groupStatus !== 'succeeded') {
             try {
-              const instances = await readContainerInstances(key, deployment);
-              const extra = instanceCounts(instances);
+              const listed = await readContainerInstances(key, deployment);
+              const extra = instanceCounts(listed);
               allocating = Math.max(allocating, extra.allocating);
+              downloading = Math.max(downloading, extra.downloading);
               creating = Math.max(creating, extra.creating);
               running = Math.max(running, extra.running);
-              pull = pullPercent(instances) ?? pull;
+              pull = pullPercent(listed) ?? pull;
+              const active = pickActiveInstance(readSaladInstances(listed));
+              activeState = active?.state || '';
+              updateTime = active?.updateTime || null;
+              cloudHandle.current = { key, deployment, instanceId: reallocateTarget(active) };
             } catch {
-              // The group GET already has the counts when Salad returns them.
+              cloudHandle.current = { key, deployment, instanceId: '' };
             }
           }
           groupPull = pull;
@@ -162,7 +186,7 @@ export function StatusPanel({ preview = '' }: { preview?: string }) {
       const health = saved ? await probe(healthUrl, { headers }, 8000) : undefined;
       const ready = saved ? await probe(readyUrl, { headers }, 8000) : undefined;
       const startup = saved ? await probe(`${saved}/startup`, { headers }, 8000) : undefined;
-      const startupBody = startup?.body as { bytesDone?: number; bytesTotal?: number; message?: string } | undefined;
+      const startupBody = startup?.body as { bytesDone?: number; bytesTotal?: number; bytesPerSecond?: number; etaSeconds?: number | null; message?: string } | undefined;
       const probeError = [groupError, health?.error, ready?.error].filter(Boolean).join(' ');
       let restoreTotal = 0;
       let restorePercent: number | null = null;
@@ -186,6 +210,7 @@ export function StatusPanel({ preview = '' }: { preview?: string }) {
         hasEndpoint: Boolean(saved),
         groupStatus,
         allocating,
+        downloading,
         creating,
         running,
         healthStatus: health?.status,
@@ -204,6 +229,40 @@ export function StatusPanel({ preview = '' }: { preview?: string }) {
       setPhase(view.phase);
       setPill(view.pill);
       setLiveTitle(view.liveTitle);
+      const progress = saved ? await probe(`${saved}/progress`, { headers }, 8000) : undefined;
+      const listedFiles = parseProgressFiles(progress?.body);
+      setFiles(listedFiles);
+      const seen = listedFiles.map((item) => item.feature || '').filter(Boolean);
+      if (seen.length) {
+        const prior = await loadFeatures();
+        const next = [...new Set([...prior, ...seen])];
+        if (next.length !== prior.length) await saveFeatures(next);
+      }
+      setModelStats({
+        done: typeof startupBody?.bytesDone === 'number' ? startupBody.bytesDone : 0,
+        total: typeof startupBody?.bytesTotal === 'number' ? startupBody.bytesTotal : 0,
+        speed: typeof startupBody?.bytesPerSecond === 'number' ? startupBody.bytesPerSecond : 0,
+        eta: typeof startupBody?.etaSeconds === 'number' ? startupBody.etaSeconds : null,
+      });
+      const observed = observeCloud(
+        watchRef.current,
+        {
+          now: Date.now(),
+          instanceState: activeState || (downloading > 0 ? 'downloading' : creating > 0 ? 'creating' : running > 0 ? 'running' : allocating > 0 ? 'allocating' : ''),
+          pullingPercent: groupPull,
+          updateTime,
+          readyStatus: ready?.status ?? null,
+          healthStatus: health?.status ?? null,
+          modelDone: typeof startupBody?.bytesDone === 'number' ? startupBody.bytesDone : null,
+          startupMessage: typeof startupBody?.message === 'string' ? startupBody.message : '',
+          active: view.phase === 'starting',
+        },
+        studio.settings.autoFixStuckCloud !== false,
+      );
+      watchRef.current = observed.watch;
+      setWatchView(observed);
+      setPullSamples(observed.watch.samples);
+      if (observed.autoMove) void moveMachine(true, observed.banner);
       setSteps(view.steps);
       if (view.liveTitle !== stepLabel.current) {
         stepLabel.current = view.liveTitle;
@@ -242,7 +301,26 @@ export function StatusPanel({ preview = '' }: { preview?: string }) {
       setLiveTitle(message);
       if (report) setChecks([{ name: 'check', url: saved, pass: false, message }]);
     }
-  }, [studio.settings.saladEndpoint]);
+  }, [studio.settings.autoFixStuckCloud, studio.settings.saladEndpoint]);
+
+  async function moveMachine(auto: boolean, reason: string) {
+    if (movingCloud.current) return;
+    const handle = cloudHandle.current;
+    if (!handle.key || !handle.deployment || !handle.instanceId) return;
+    movingCloud.current = true;
+    watchRef.current = noteCloudMove(watchRef.current, Date.now(), auto);
+    try {
+      await reallocateInstance(handle.key, handle.deployment, handle.instanceId);
+      rememberFault({ time: Date.now(), source: 'cloud', message: `${auto ? 'Auto-move' : 'Move to a new machine'}: instance ${handle.instanceId} was ${reason || 'stuck'}.` });
+      setNote(auto ? 'Moving this cloud to a new machine.' : 'Asked Salad to move this cloud to a new machine.');
+    } catch (caught) {
+      const message = caught instanceof Error ? caught.message : 'Salad did not move the machine.';
+      rememberFault({ time: Date.now(), source: 'cloud', message: `Move failed for instance ${handle.instanceId}. ${message}` });
+      setNote(message);
+    } finally {
+      movingCloud.current = false;
+    }
+  }
 
   function onCheck() {
     setChecking(true);
@@ -299,7 +377,7 @@ export function StatusPanel({ preview = '' }: { preview?: string }) {
     useCallback(() => {
       if (preview === 'model') return undefined;
       void refresh();
-      const timer = setInterval(() => void refresh(), 10_000);
+      const timer = setInterval(() => void refresh(), 5_000);
       const sub = AppState.addEventListener('change', (state) => {
         if (state === 'active') void refresh();
       });
@@ -464,7 +542,20 @@ export function StatusPanel({ preview = '' }: { preview?: string }) {
             {openError === index ? <Text selectable style={styles.help}>{item.traceback || item.message}</Text> : null}
           </View>
         ))}
-        <Pressable testID="copy-report" onPress={() => void Clipboard.setStringAsync(reportDocument([...cloudRows, ...appRows].map((item) => ({ message: `${item.status.toUpperCase()} ${item.area} ${item.name}: ${item.message}`, endpoint: item.detail, status: item.http })), clientReportBody()))}>
+        <Pressable
+          testID="copy-report"
+          onPress={() => {
+            void (async () => {
+              const [salad, admin, civitai] = await Promise.all([readSaladKey(), readAdminToken(), readCivitaiToken()]);
+              const secrets = [salad, admin, civitai].filter((item): item is string => Boolean(item && item.trim().length >= 8));
+              const rows = [...cloudRows, ...appRows].map((item) => ({
+                message: `${item.status.toUpperCase()} ${item.area} ${item.name}: ${item.message}`,
+                endpoint: item.detail,
+                status: item.http,
+              }));
+              await Clipboard.setStringAsync(reportDocument(rows, clientReportBody(), secrets));
+            })();
+          }}>
           <Text style={styles.link}>Copy report</Text>
         </Pressable>
         {wrongServer ? (
@@ -476,24 +567,40 @@ export function StatusPanel({ preview = '' }: { preview?: string }) {
         <View testID="live-card" style={styles.live}>
           <Text style={styles.kicker}>LIVE</Text>
           <Text style={styles.liveTitle}>{liveTitle}</Text>
-          <Text style={styles.help}>Elapsed {clock(frozen || shownPhase === 'stopped' ? shownUpSec * 1000 : cloudStart.current ? now - cloudStart.current : now - stepSince.current)}</Text>
-          <ProgressBar percent={overall} />
           <Text style={styles.help}>{DISK_RESET_NOTE}</Text>
-          {restoreLines.map((line) => (
-            <Text key={line} style={styles.help}>{line}</Text>
-          ))}
-          {steps.map((step) => (
-            <View key={step.label} style={styles.step}>
-              <Text style={[styles.stepMark, step.state === 'done' && styles.done, step.state === 'current' && styles.current]}>
-                {step.state === 'done' ? '✓' : step.state === 'current' ? '●' : '○'}
-              </Text>
-              <View style={{ flex: 1, gap: 4 }}>
-                <Text style={[styles.stepLabel, step.state === 'current' && styles.current]}>{step.label}</Text>
-                <ProgressBar percent={step.state === 'todo' ? null : step.percent} idle={step.state === 'todo'} />
+          {steps.map((step, index) => {
+            const current = step.state === 'current';
+            const detail = current ? phaseDetail(index, { elapsedMs: now - stepSince.current, pullLine: software.line, modelLine, note: watchView?.banner || '' }) : '';
+            const phaseFiles = step.state === 'todo' ? [] : filesForPhase(index, files);
+            return (
+              <View key={step.label} style={styles.step}>
+                <Text style={[styles.stepMark, step.state === 'done' && styles.done, step.state === 'current' && styles.current]}>
+                  {step.state === 'done' ? '✓' : step.state === 'current' ? '●' : '○'}
+                </Text>
+                <View style={{ flex: 1, gap: 4 }}>
+                  <Text style={[styles.stepLabel, step.state === 'current' && styles.current]}>{step.label}</Text>
+                  <ProgressBar percent={step.state === 'todo' ? null : step.percent} idle={step.state === 'todo'} />
+                  {detail ? <Text style={[styles.detail, watchView?.kind === 'stuck' && styles.stuck]}>{detail}</Text> : null}
+                  {phaseFiles.map((file) => {
+                    const percent = file.bytesTotal > 0 ? Math.round((file.bytesDone / file.bytesTotal) * 100) : file.state === 'done' ? 100 : null;
+                    return (
+                      <View key={`${file.type}-${file.versionId ?? file.name}`} style={styles.file}>
+                        <Text style={styles.detail}>{file.state === 'done' ? '✓ ' : ''}{file.name} · {file.type}</Text>
+                        <ProgressBar percent={file.state === 'waiting' ? null : percent} idle={file.state === 'waiting'} />
+                        <Text style={styles.detail}>{fileLine(file)}</Text>
+                      </View>
+                    );
+                  })}
+                  {current && (watchView?.kind === 'stuck' || watchView?.kind === 'slow') ? (
+                    <Pressable testID="move-machine" onPress={() => void moveMachine(false, watchView.banner)}>
+                      <Text style={styles.link}>Move to new machine</Text>
+                    </Pressable>
+                  ) : null}
+                </View>
               </View>
-              <Text style={styles.stepTime}>{step.percent == null ? (step.state === 'current' ? '…' : '') : `${step.percent}%`}</Text>
-            </View>
-          ))}
+            );
+          })}
+          {overallLabel ? <Text testID="overall-eta" style={styles.detail}>{overallLabel}</Text> : null}
         </View>
         <View style={styles.row}>
           <Text testID="phone-temp" style={styles.chip}>Phone temp {temp}</Text>
@@ -668,7 +775,10 @@ const styles = StyleSheet.create({
   live: { backgroundColor: colors.ink, borderRadius: 16, padding: 12, gap: 6 },
   kicker: { color: colors.sakura, fontFamily: font.black, fontSize: 11, letterSpacing: 1 },
   liveTitle: { color: colors.text, fontFamily: font.black, fontSize: 16, lineHeight: 22 },
-  step: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+  step: { flexDirection: 'row', alignItems: 'flex-start', gap: 8 },
+  detail: { color: colors.faint, fontFamily: font.semibold, fontSize: 12, lineHeight: 16 },
+  stuck: { color: colors.danger },
+  file: { gap: 3, marginTop: 4 },
   track: { height: 6, borderRadius: 999, backgroundColor: colors.ink, overflow: 'hidden' },
   bar: { height: 6, backgroundColor: colors.sakura },
   indeterminate: { height: 6, width: '35%', backgroundColor: colors.gold },

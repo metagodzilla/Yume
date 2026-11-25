@@ -35,6 +35,16 @@ export type GeneratorState = {
   clothes: string;
   clothesAuto: boolean;
   autoClothes?: string;
+  referencePose: boolean;
+  referencePoseStrength: number;
+  referenceFit: boolean;
+  referenceBody: 'petite' | 'average' | 'tall';
+  referenceCopy: boolean;
+  referenceDenoise: number;
+  referenceStyle: boolean;
+  referenceStyleStrength: number;
+  /** When true, liked style tags are added lightly and disliked tags go to the negative. */
+  useTaste?: boolean;
   quality: string;
   qualityEdited: boolean;
   /** @deprecated Merged into positive. Kept so a 1.4.9 save still loads. */
@@ -109,6 +119,15 @@ export const initialGenerator = (): GeneratorState => ({
   clothes: '',
   clothesAuto: true,
   autoClothes: '',
+  referencePose: false,
+  referencePoseStrength: 0.85,
+  referenceFit: true,
+  referenceBody: 'average',
+  referenceCopy: false,
+  referenceDenoise: 0.6,
+  referenceStyle: false,
+  referenceStyleStrength: 0.55,
+  useTaste: true,
   quality: DEFAULT_CHECKPOINT.quality,
   qualityEdited: false,
   extraPrompt: '',

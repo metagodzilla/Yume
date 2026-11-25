@@ -11,7 +11,7 @@ export const LIVE_GATEWAY = {
 export const CHECKLIST = [
   'Creating container group',
   'Finding an RTX 4090',
-  'Downloading software',
+  'Downloading server software (Salad)',
   'Starting up',
   'Downloading model',
   'Restoring your models',
@@ -81,6 +81,7 @@ export function cloudChecklist(input: {
   hasEndpoint: boolean;
   groupStatus?: string;
   allocating?: number;
+  downloading?: number;
   creating?: number;
   running?: number;
   healthStatus?: number;
@@ -90,6 +91,7 @@ export function cloudChecklist(input: {
   startupMessage?: string;
   probeError?: string;
   pullPercent?: number | null;
+  pullEta?: string | null;
   modelDone?: number | null;
   modelTotal?: number | null;
   restoreTotal?: number;
@@ -101,7 +103,9 @@ export function cloudChecklist(input: {
   const modelWait =
     input.readyStatus === 503 ||
     input.healthReady === false ||
-    /download|loading|not ready/i.test(input.readyDetail || '');
+    /download|loading|not ready/i.test(`${input.readyDetail || ''} ${input.startupMessage || ''}`);
+  const modelEvidence = input.modelDone != null || /model|download|loading|not ready/i.test(`${input.readyDetail || ''} ${input.startupMessage || ''}`);
+  const softwareDownload = (input.downloading ?? 0) > 0 || (input.pullPercent != null && !healthUp);
   let index = 0;
   let phase: CloudPhase = 'starting';
   let pill = 'Starting...';
@@ -133,15 +137,15 @@ export function cloudChecklist(input: {
     const steps = paint(-1, input);
     return { phase: 'stopped', pill: 'Stopped', liveTitle: 'Cloud is stopped', steps, authBlocked, overall: null };
   }
-  if (modelWait && (healthUp || input.readyStatus === 503)) {
+  if (softwareDownload && !healthUp) {
+    index = 2;
+    liveTitle = 'Downloading server software (Salad)';
+  } else if (modelWait && healthUp && modelEvidence) {
     index = 4;
     liveTitle = 'Downloading model on cloud (first start can take ~15-25 min)';
-  } else if (healthUp || (input.running ?? 0) > 0 || input.groupStatus === 'running') {
+  } else if ((input.creating ?? 0) > 0 || healthUp || (input.running ?? 0) > 0 || input.groupStatus === 'running') {
     index = 3;
     liveTitle = 'Starting up';
-  } else if ((input.creating ?? 0) > 0) {
-    index = 2;
-    liveTitle = 'Downloading software';
   } else if ((input.allocating ?? 0) > 0 || input.groupStatus === 'deploying') {
     index = 1;
     liveTitle = 'Finding an RTX 4090';

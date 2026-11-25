@@ -67,6 +67,59 @@ class MeshIn(BaseModel):
     seed: int | None = None
 
 
+class UpscaleIn(BaseModel):
+    image: str = Field(min_length=1)
+    preset: str = "2k"
+    enhance: bool = False
+    detail: float = 0.35
+    repair: float = 0.45
+    prompt: str = ""
+    references: list[str] = []
+    character_tags: str = ""
+    loras: list[LoraIn] = []
+
+
+class MangaIn(BaseModel):
+    image: str = Field(min_length=1)
+    preset: str = "2k"
+    colorize: bool = False
+    redraw: float = 0.55
+    strength: float | None = None
+    prompt: str = ""
+    hints: str = ""
+    references: list[str] = []
+    character_tags: str = ""
+    clothes: str = ""
+    outfit: str = "clothes"
+    job: str = "redraw"
+    x: float | None = None
+    y: float | None = None
+    strokes: list[dict[str, Any]] = []
+    body: str = "average"
+    height_cm: float | None = None
+    bust_cm: float | None = None
+    hip_cm: float | None = None
+    loras: list[LoraIn] = []
+
+
+class SegmentIn(BaseModel):
+    image: str = Field(min_length=1)
+    x: float = 0.5
+    y: float = 0.4
+    strokes: list[dict[str, Any]] = []
+
+
+class PoseIn(BaseModel):
+    image: str = Field(min_length=1)
+    width: int = 832
+    height: int = 1216
+    fit: bool = True
+    body: str = "average"
+    height_cm: float | None = None
+    bust_cm: float | None = None
+    hip_cm: float | None = None
+
+
 class ThreeDIn(BaseModel):
     image: str = Field(min_length=1)
     views: list[dict[str, str]] = []
@@ -85,8 +138,18 @@ class GenerateIn(BaseModel):
     model: str | None = None
     loras: list[LoraIn] = []
     reference_image: str | None = None
-    strength: float = 0.45
+    strength: float = 0.6
     mode: str = "txt2img"
+    pose: bool = False
+    pose_strength: float = 0.85
+    pose_fit: bool = True
+    pose_body: str = "average"
+    pose_height_cm: float | None = None
+    pose_bust_cm: float | None = None
+    pose_hip_cm: float | None = None
+    copy_picture: bool = False
+    style: bool = False
+    style_strength: float = 0.55
     clip_skip: int = 2
     model_name: str | None = None
     model_hash: str | None = None
@@ -301,6 +364,13 @@ def startup() -> dict[str, Any]:
     return startup_snapshot()
 
 
+@app.get("/progress")
+def progress() -> dict[str, Any]:
+    """Per-file weight progress. Answers before /ready, with no secrets."""
+    body = startup_snapshot()
+    return {"files": body.get("files") or [], **body}
+
+
 @app.get("/ready")
 def ready() -> dict[str, str]:
     from yume_server.selfheal import SELF_HEAL_MESSAGE
@@ -421,6 +491,7 @@ class RestoreIn(BaseModel):
     versionIds: list[int] = []
     lastUsedVersionId: int | None = None
     models: list[RestoreModelIn] = []
+    features: list[str] = []
 
 
 class DefaultIn(BaseModel):
@@ -473,6 +544,10 @@ def restore(body: RestoreIn, request: Request) -> dict[str, Any]:
         for item in body.models
     }
     version_ids = list(body.versionIds) or [item.versionId for item in body.models]
+    if body.features:
+        from yume_server.features import restore_features
+
+        threading.Thread(target=restore_features, args=(body.features,), name="yume-features", daemon=True).start()
     return restore_models(version_ids, body.lastUsedVersionId, hints, token)
 
 
@@ -587,6 +662,76 @@ def choose_default(body: DefaultIn, request: Request) -> dict[str, Any]:
         return set_default(body.versionId)
     except FileNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.post("/reference/pose")
+def reference_pose(body: PoseIn, request: Request) -> dict[str, Any]:
+    _check_key(request)
+    import base64
+
+    from yume_server.reference import pose_preview
+
+    try:
+        raw = base64.b64decode(body.image, validate=False)
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail="The reference picture could not be read.") from exc
+    preview = pose_preview(
+        raw,
+        fit=body.fit,
+        size=body.body,
+        width=body.width,
+        height=body.height,
+        height_cm=body.height_cm,
+        bust_cm=body.bust_cm,
+        hip_cm=body.hip_cm,
+    )
+    return preview
+
+
+def _picture_job(kind: str, body: Any) -> dict[str, Any]:
+    import base64
+
+    from yume_server.generate import LoraInstalling
+    from yume_server.upscale import run_manga, run_upscale
+
+    try:
+        base64.b64decode(body.image, validate=False)
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail="That picture could not be read.") from exc
+    needs_model = kind == "manga" or bool(getattr(body, "enhance", False) or body.references or body.character_tags or body.loras)
+    if needs_model and not state["ready"]:
+        raise HTTPException(status_code=503, detail="Model is still loading.")
+    try:
+        return run_manga(body) if kind == "manga" else run_upscale(body)
+    except LoraInstalling as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+
+@app.post("/upscale")
+def upscale(body: UpscaleIn, request: Request) -> dict[str, Any]:
+    _check_key(request)
+    return _picture_job("upscale", body)
+
+
+@app.post("/manga")
+def manga(body: MangaIn, request: Request) -> dict[str, Any]:
+    _check_key(request)
+    return _picture_job("manga", body)
+
+
+@app.post("/manga/segment")
+def manga_segment(body: SegmentIn, request: Request) -> dict[str, Any]:
+    _check_key(request)
+    from yume_server.manga_edit import run_segment
+
+    try:
+        return run_segment(body)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 

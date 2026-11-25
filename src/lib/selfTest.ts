@@ -9,7 +9,8 @@ import { readPhone } from '@/src/lib/device';
 import { OFFLINE_MODEL, offlineBlockedReason } from '@/src/lib/offline';
 import { cancelJob, emptyQueue, enqueue, pauseJob, resumeJob } from '@/src/lib/queue';
 import { rememberFault } from '@/src/lib/reportText';
-import { deleteImageUri, persistPng, readCivitaiToken, readPng, readSaladKey } from '@/src/lib/storage';
+import { redactValue, summarizeHttpBody } from '@/src/lib/reportText';
+import { deleteImageUri, persistPng, readAdminToken, readCivitaiToken, readPng, readSaladKey } from '@/src/lib/storage';
 import { checkGithubRelease, decideReleaseCheck, parseGithubRelease, readInstalledVersionCode } from '@/src/lib/updates';
 import { APP_VERSION, APP_VERSION_CODE } from '@/src/lib/version';
 import { type CheckRow, type CheckStatus } from '@/src/lib/checkRows';
@@ -38,6 +39,8 @@ export function settingsLine(): string {
 export async function runCloudCheck(input: { endpoint: string; apiKey: string }): Promise<CheckRow[]> {
   const endpoint = normalizeEndpoint(input.endpoint);
   const key = normalizeSaladKey(input.apiKey);
+  const [adminToken, civitaiToken] = await Promise.all([readAdminToken(), readCivitaiToken()]);
+  const secrets = [key, adminToken, civitaiToken].filter((item): item is string => Boolean(item && item.trim().length >= 8));
   const rows: CheckRow[] = [];
   const deployment = liveContainerGroup();
   const groupUrl = containerGroupUrl(deployment);
@@ -48,7 +51,7 @@ export async function runCloudCheck(input: { endpoint: string; apiKey: string })
     headers['X-Api-Key'] = key;
   }
 
-  const group = await callJson(groupUrl, { headers });
+  const group = await callJson(groupUrl, { headers }, 15_000, secrets);
   if (!key) {
     rows.push(row('Cloud', 'Salad key', 'skip', group.ms, 'No Salad API key is saved.', { url: groupUrl }));
   } else if (group.status === 200) {
@@ -70,9 +73,9 @@ export async function runCloudCheck(input: { endpoint: string; apiKey: string })
     rows.push(row('Cloud', 'Group state', 'fail', group.ms, group.message || 'The container group could not be read.', { http: group.status, detail: group.detail, url: groupUrl }));
   }
 
-  const health = endpoint ? await callJson(`${endpoint}/health`, { headers }) : null;
-  const ready = endpoint ? await callJson(`${endpoint}/ready`, { headers }) : null;
-  const stats = endpoint ? await callJson(`${endpoint}/stats`, { headers }) : null;
+  const health = endpoint ? await callJson(`${endpoint}/health`, { headers }, 15_000, secrets) : null;
+  const ready = endpoint ? await callJson(`${endpoint}/ready`, { headers }, 15_000, secrets) : null;
+  const stats = endpoint ? await callJson(`${endpoint}/stats`, { headers }, 15_000, secrets) : null;
   rows.push(gatewayRow('Health', endpoint, health, '/health'));
   rows.push(gatewayRow('Ready', endpoint, ready, '/ready'));
   rows.push(gatewayRow('Stats', endpoint, stats, '/stats'));
@@ -90,6 +93,7 @@ export async function runCloudCheck(input: { endpoint: string; apiKey: string })
         body: JSON.stringify(TEST_GENERATE),
       },
       90_000,
+      secrets,
     );
     const image = firstImage(generated.json);
     if (generated.ok && image) {
@@ -109,7 +113,7 @@ export async function runCloudCheck(input: { endpoint: string; apiKey: string })
   if (!endpoint || !key) {
     rows.push(row('Cloud', 'Errors', 'skip', 0, 'No gateway URL or Salad key, so /errors was not called.'));
   } else {
-    const errors = await callJson(`${endpoint}/errors`, { headers });
+    const errors = await callJson(`${endpoint}/errors`, { headers }, 15_000, secrets);
     const latest = latestError(errors.json);
     if (errors.ok) {
       rows.push(row('Cloud', 'Errors', 'pass', errors.ms, latest || 'No server errors are stored.', { http: errors.status, detail: errors.detail, url: `${endpoint}/errors` }));
@@ -121,7 +125,7 @@ export async function runCloudCheck(input: { endpoint: string; apiKey: string })
   if (!endpoint || !key) {
     rows.push(row('Cloud', 'Install endpoint', 'skip', 0, 'No gateway URL or Salad key, so the install route was not called.'));
   } else {
-    const install = await callJson(`${endpoint}/models/install/self-test`, { headers });
+    const install = await callJson(`${endpoint}/models/install/self-test`, { headers }, 15_000, secrets);
     const reachable = install.status === 404 || install.status === 200;
     rows.push(
       row(
@@ -208,7 +212,7 @@ export async function runAppCheck(input: { endpoint: string }): Promise<CheckRow
   if (!token) {
     rows.push(row('Civitai', 'Civitai key', 'skip', 0, 'No Civitai API key is saved.'));
   } else {
-    const authed = await callJson('https://civitai.com/api/v1/models?limit=1', { headers: { Authorization: `Bearer ${token}` } });
+    const authed = await callJson('https://civitai.com/api/v1/models?limit=1', { headers: { Authorization: `Bearer ${token}` } }, 15_000, token.trim().length >= 8 ? [token.trim()] : []);
     const ok = authed.status === 200;
     rows.push(row('Civitai', 'Civitai key', ok ? 'pass' : 'fail', authed.ms, ok ? 'Civitai accepted the saved key.' : authed.status === 401 || authed.status === 403 ? 'Civitai rejected the saved key.' : authed.message, { http: authed.status, detail: authed.detail }));
   }
@@ -386,7 +390,7 @@ function gatewayRow(name: string, endpoint: string, result: Call | null, path: s
 
 type Call = { ok: boolean; status?: number; ms: number; message: string; detail?: string; json: unknown };
 
-async function callJson(url: string, init: RequestInit, timeoutMs = 15_000): Promise<Call> {
+async function callJson(url: string, init: RequestInit, timeoutMs = 15_000, secrets: string[] = []): Promise<Call> {
   const started = Date.now();
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
@@ -399,12 +403,17 @@ async function callJson(url: string, init: RequestInit, timeoutMs = 15_000): Pro
     } catch {
       json = null;
     }
+    const safeJson = redactValue(json, secrets);
     const friendly = friendlyGatewayMessage(response.status, text);
-    const message = friendly || messageOf(json) || text.replace(/\s+/g, ' ').trim().slice(0, 180) || `HTTP ${response.status}.`;
-    return { ok: response.ok, status: response.status, ms: Date.now() - started, message, detail: text.slice(0, 800), json };
+    const summarized = summarizeHttpBody(text, response.status);
+    const fallback = summarized === text ? summarized.replace(/\s+/g, ' ').trim().slice(0, 180) : summarized;
+    const message = String(redactValue(friendly || messageOf(safeJson) || fallback || `HTTP ${response.status}.`, secrets));
+    const detail = json && typeof json === 'object' ? JSON.stringify(safeJson).slice(0, 4000) : String(redactValue(summarized, secrets));
+    return { ok: response.ok, status: response.status, ms: Date.now() - started, message, detail, json: safeJson };
   } catch (error) {
     const aborted = error instanceof Error && error.name === 'AbortError';
-    return { ok: false, ms: Date.now() - started, message: aborted ? 'The request timed out.' : error instanceof Error ? error.message : 'Request failed.', json: null };
+    const message = aborted ? 'The request timed out.' : error instanceof Error ? error.message : 'Request failed.';
+    return { ok: false, ms: Date.now() - started, message: String(redactValue(message, secrets)), json: null };
   } finally {
     clearTimeout(timer);
   }

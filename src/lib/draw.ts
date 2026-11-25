@@ -9,6 +9,8 @@ import { classifyGatewayInput, generateUrl, saladErrorMessage } from '@/src/lib/
 import { expandSeeds } from '@/src/lib/seeds';
 import { normalizeSaladKey } from '@/src/lib/saladCloud';
 import { characterOutfitTags, isClothesTag } from '@/src/lib/positiveTags';
+import { characterClause } from '@/src/lib/prompt';
+import { applyTaste, currentTaste, tagsOf } from '@/src/lib/taste';
 import type { Character, SamplerId } from '@/src/lib/types';
 
 export function embeddingTokens(state: GeneratorState): string[] {
@@ -229,10 +231,31 @@ export type SaladGenerateBody = {
   hires_steps: number;
   mode: GeneratorState['mode'];
   strength: number;
+  pose: boolean;
+  pose_strength: number;
+  pose_fit: boolean;
+  pose_body: 'petite' | 'average' | 'tall';
+  pose_height_cm: number | null;
+  pose_bust_cm: number | null;
+  pose_hip_cm: number | null;
+  copy_picture: boolean;
+  style: boolean;
+  style_strength: number;
   reference_image: string | null;
   mask: string | null;
   prediction_type: 'epsilon' | 'v_prediction';
 };
+
+export function sentWithTaste(state: GeneratorState, prompt: string, character: Character | null = null): { prompt: string; negative: string } {
+  const blocked = [state.prompt, state.clothes || '', state.positive || '', state.extraPrompt || '', state.quality || '', character ? characterClause(character) : ''].flatMap((part) => tagsOf(part));
+  return applyTaste({
+    enabled: state.useTaste !== false,
+    prompt,
+    negative: sentNegative(state, character),
+    blocked,
+    store: currentTaste(),
+  });
+}
 
 export function buildSaladGenerateBody(
   state: GeneratorState,
@@ -242,10 +265,11 @@ export function buildSaladGenerateBody(
   maskPng?: Uint8Array | null,
   character: Character | null = null,
 ): SaladGenerateBody {
-  const params = generationParams(state, prompt, seed, character);
+  const tasted = sentWithTaste(state, prompt, character);
+  const params = generationParams(state, tasted.prompt, seed, character);
   return {
-    prompt,
-    negative_prompt: sentNegative(state),
+    prompt: tasted.prompt,
+    negative_prompt: tasted.negative,
     width: state.width,
     height: state.height,
     count: state.count,
@@ -270,8 +294,18 @@ export function buildSaladGenerateBody(
     hires_denoise: state.hiresDenoise,
     hires_upscaler: state.hiresUpscaler,
     hires_steps: state.hiresSteps,
-    mode: state.mode,
-    strength: state.denoise,
+    mode: state.referenceCopy ? 'img2img' : state.mode,
+    strength: state.referenceDenoise ?? 0.6,
+    pose: Boolean(state.referencePose) && Boolean(initPng),
+    pose_strength: state.referencePoseStrength ?? 0.85,
+    pose_fit: state.referenceFit !== false,
+    pose_body: state.referenceBody || 'average',
+    pose_height_cm: character?.measurements?.heightCm ?? null,
+    pose_bust_cm: character?.measurements?.bustCm ?? null,
+    pose_hip_cm: character?.measurements?.hipCm ?? null,
+    copy_picture: Boolean(state.referenceCopy) && Boolean(initPng),
+    style: Boolean(state.referenceStyle) && Boolean(initPng),
+    style_strength: state.referenceStyleStrength ?? 0.55,
     reference_image: initPng ? bytesToBase64(initPng) : null,
     mask: maskPng ? bytesToBase64(maskPng) : null,
     prediction_type: state.vPrediction ? 'v_prediction' : 'epsilon',
@@ -301,7 +335,10 @@ export async function drawFrames(input: {
   maskPng?: Uint8Array | null;
 }): Promise<{ pngs: Uint8Array[]; parameters: string; seeds: number[]; warning?: string }> {
   const seeds = input.seed < 0 ? expandSeeds(Math.floor(Math.random() * 2_147_483_647), input.state.count) : expandSeeds(input.seed, input.state.count);
-  const params = generationParams(input.state, input.prompt, seeds[0] ?? 0, input.character);
+  const tasted = sentWithTaste(input.state, input.prompt, input.character);
+  const params = generationParams(input.state, tasted.prompt, seeds[0] ?? 0, input.character);
+  params.negative = tasted.negative;
+  params.prompt = tasted.prompt;
   const parameters = formatParameters(params);
   if (input.provider !== 'salad') {
     const pngs = renderDemoFrames({
@@ -344,7 +381,7 @@ export async function drawFrames(input: {
         'X-Api-Key': apiKey,
         'Salad-Api-Key': apiKey,
       },
-      body: JSON.stringify(buildSaladGenerateBody(input.state, input.prompt, input.seed, input.initPng, input.maskPng, input.character)),
+      body: JSON.stringify(buildSaladGenerateBody(input.state, tasted.prompt, input.seed, input.initPng, input.maskPng, input.character)),
     });
   } catch (error) {
     const aborted = error instanceof Error && error.name === 'AbortError';

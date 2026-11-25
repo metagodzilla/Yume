@@ -143,16 +143,10 @@ def install_import_shims() -> None:
 
 
 def ensure_threed_deps() -> None:
-    missing = []
-    for name in ("einops", "omegaconf", "trimesh", "skimage", "imageio"):
-        try:
-            __import__(name)
-        except Exception:
-            missing.append(name)
-    if not missing:
-        return
-    _LOG.info("installing 3d packages %s", " ".join(_DEPS))
-    subprocess.check_call([sys.executable, "-m", "pip", "install", "--disable-pip-version-check", "--no-deps", *_DEPS])
+    from yume_server.features import ensure_feature
+
+    if not ensure_feature("triposr"):
+        raise RuntimeError("3D support is still installing. Try the model again in a moment.")
 
 
 def _code_dir() -> Path:

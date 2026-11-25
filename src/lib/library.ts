@@ -1,4 +1,5 @@
 import { STYLES, aspectById } from '@/src/lib/presets';
+import { isTasteStore, type TasteStore } from '@/src/lib/taste';
 import type {
   AspectId,
   Library,
@@ -180,7 +181,7 @@ export function cleanLoras(loras: LoraSpec[]): LoraSpec[] {
     .filter((lora) => lora.name.length > 0);
 }
 
-export type Bundle = { version: 1; styles: UserStyle[]; wildcards: Wildcard[]; templates: PromptTemplate[] };
+export type Bundle = { version: 1; styles: UserStyle[]; wildcards: Wildcard[]; templates: PromptTemplate[]; taste?: TasteStore };
 
 function isStyle(value: unknown): value is UserStyle {
   if (!value || typeof value !== 'object') return false;
@@ -188,12 +189,13 @@ function isStyle(value: unknown): value is UserStyle {
   return typeof style.id === 'string' && typeof style.name === 'string' && typeof style.prefix === 'string' && typeof style.suffix === 'string';
 }
 
-export function exportBundle(library: Library): string {
+export function exportBundle(library: Library, taste?: TasteStore | null): string {
   const bundle: Bundle = {
     version: 1,
     styles: sortStyles(library.styles),
     wildcards: library.wildcards,
     templates: library.templates,
+    ...(taste ? { taste } : {}),
   };
   return JSON.stringify(bundle, null, 2);
 }
@@ -218,6 +220,7 @@ export function parseBundle(raw: string): { ok: true; bundle: Bundle } | { ok: f
       styles: record.styles,
       wildcards: Array.isArray(record.wildcards) ? record.wildcards.filter((item) => item && typeof item.token === 'string') : [],
       templates: Array.isArray(record.templates) ? record.templates.filter((item) => item && typeof item.name === 'string' && typeof item.prompt === 'string') : [],
+      ...(isTasteStore((record as { taste?: unknown }).taste) ? { taste: (record as { taste: TasteStore }).taste } : {}),
     },
   };
 }

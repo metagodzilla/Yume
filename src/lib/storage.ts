@@ -23,6 +23,8 @@ const KEYS = {
   library: 'yume.library.v1',
   turnarounds: 'yume.turnarounds.v1',
   meshes: 'yume.meshes.v1',
+  taste: 'yume.taste.v1',
+  features: 'yume.features.v1',
 };
 
 let database: Promise<IDBDatabase> | null = null;
@@ -106,6 +108,30 @@ export async function saveHistory(history: Generation[]): Promise<void> {
   await setItem(KEYS.history, JSON.stringify(history));
 }
 
+export async function loadTaste(): Promise<string | null> {
+  return getItem(KEYS.taste);
+}
+
+export async function saveTaste(value: string): Promise<void> {
+  await setItem(KEYS.taste, value);
+}
+
+export async function loadFeatures(): Promise<string[]> {
+  const raw = await getItem(KEYS.features);
+  if (!raw) return [];
+  try {
+    const parsed = JSON.parse(raw) as unknown;
+    return Array.isArray(parsed) ? parsed.filter((item) => typeof item === 'string' && item.trim()) : [];
+  } catch {
+    return [];
+  }
+}
+
+export async function saveFeatures(names: string[]): Promise<void> {
+  const unique = [...new Set(names.map((item) => item.trim()).filter(Boolean))];
+  await setItem(KEYS.features, JSON.stringify(unique));
+}
+
 export async function loadSession(): Promise<Session> {
   const session = await loadJson<Partial<Session>>(KEYS.session, {});
   return {
@@ -159,6 +185,7 @@ export async function loadSettings(): Promise<Settings> {
     height: clampRange(settings.height, 512, 1536, 1216),
     seed: clampRange(settings.seed, 0, 2_147_483_647, 1),
     hourlyRateTouched: settings.hourlyRateTouched === true,
+    autoFixStuckCloud: settings.autoFixStuckCloud !== false,
   };
 }
 

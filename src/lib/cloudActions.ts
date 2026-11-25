@@ -97,6 +97,14 @@ export async function readContainerInstances(apiKey: string, deployment: CloudDe
   return saladRequest({ apiKey, path: `${groupPath(deployment)}/instances`, fetchImpl });
 }
 
+export function reallocateInstancePath(deployment: CloudDeployment, instanceId: string): string {
+  return `${groupPath(deployment)}/instances/${encodeURIComponent(instanceId)}/reallocate`;
+}
+
+export async function reallocateInstance(apiKey: string, deployment: CloudDeployment, instanceId: string, fetchImpl?: typeof fetch) {
+  return saladRequest({ apiKey, path: reallocateInstancePath(deployment, instanceId), method: 'POST', fetchImpl });
+}
+
 export function containerGroupUrl(deployment: CloudDeployment): string {
   return `${SALAD_API}${groupPath(deployment)}`;
 }

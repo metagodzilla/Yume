@@ -6,7 +6,7 @@ import { RETIRED_CHECKPOINTS } from '@/src/lib/defaultModel';
 import { forgetModel, modelsToRestore, rememberModel, type KeptLibrary, type KeptModel, emptyLibrary } from '@/src/lib/keptModels';
 import { startDownload } from '@/src/lib/downloadClient';
 import { normalizeSaladKey } from '@/src/lib/saladCloud';
-import { loadKeptModels, saveKeptModels } from '@/src/lib/storage';
+import { loadFeatures, loadKeptModels, saveFeatures, saveKeptModels } from '@/src/lib/storage';
 
 let restoringIds: number[] = [];
 const listeners = new Set<() => void>();
@@ -115,6 +115,7 @@ export async function restoreMissingModels(input: { endpoint: string; apiKey: st
       body: JSON.stringify({
         versionIds: missing.map((item) => item.versionId),
         lastUsedVersionId: library.lastUsedVersionId,
+        features: await loadFeatures(),
         models: missing.map((item) => ({
           versionId: item.versionId,
           type: item.type,

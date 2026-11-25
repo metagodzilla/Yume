@@ -33,5 +33,6 @@ export async function fetchServerErrors(endpoint: string, apiKey: string): Promi
   });
   if (!response.ok) throw new Error(`HTTP ${response.status} from ${endpoint}/errors`);
   const body = (await response.json()) as { errors?: ServerFault[] };
-  return Array.isArray(body.errors) ? body.errors : [];
+  const errors = Array.isArray(body.errors) ? body.errors : [];
+  return redactValue(errors, apiKey.length >= 8 ? [apiKey] : []) as ServerFault[];
 }

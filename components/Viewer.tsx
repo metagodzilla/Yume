@@ -5,6 +5,7 @@ import { useEffect, useRef, useState } from 'react';
 import { Modal, PanResponder, Pressable, StyleSheet, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
+import { TasteButtons } from '@/components/TasteButtons';
 import { metadataLines, reusePatch } from '@/src/lib/gallery';
 import { confirmAction } from '@/src/lib/confirm';
 import { patchGenerator } from '@/src/lib/genstore';
@@ -134,6 +135,7 @@ export function Viewer() {
           </View>
           {generation ? (
             <View style={styles.actions}>
+              <TasteButtons generation={generation} index={imageIndex} />
               <Action
                 icon={favorite ? 'heart' : 'heart-outline'}
                 label={favorite ? 'Favorited' : 'Favorite'}

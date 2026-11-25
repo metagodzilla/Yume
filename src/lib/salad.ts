@@ -1,4 +1,5 @@
 import { base64ToBytes, bytesToBase64 } from '@/src/lib/base64';
+import { summarizeHttpBody } from '@/src/lib/reportText';
 import { normalizeSaladKey } from '@/src/lib/saladCloud';
 import type { LoraSpec, SamplerId } from '@/src/lib/types';
 
@@ -167,6 +168,8 @@ export function saladErrorMessage(input: { aborted: boolean; status?: number; bo
 }
 
 function scrub(body: string): string {
+  const summarized = summarizeHttpBody(body);
+  if (summarized !== body) return summarized;
   const trimmed = redactSecrets(body.replace(/\s+/g, ' ').trim());
   try {
     const parsed = JSON.parse(body) as { detail?: unknown; message?: unknown };
