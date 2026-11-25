@@ -1,5 +1,6 @@
 import type { StudioStyleId } from '@/src/lib/animeStudio';
 import { baseFamily, type BaseFamily } from '@/src/lib/checkpoints';
+import { isChildTag } from '@/src/lib/measurements';
 import type { Character } from '@/src/lib/types';
 
 /** Longer everyday phrases first. Tags are emitted in the order the phrase appears. */
@@ -28,12 +29,26 @@ const PHRASES: [RegExp, string[]][] = [
   [/\bgolden eyes\b|\bgold eyes\b/i, ['yellow eyes']],
   [/\bpink eyes\b/i, ['pink eyes']],
   [/\bheterochromia\b|\bmismatched eyes\b/i, ['heterochromia']],
-  [/\b(two|2)\s+girls\b|\bgirls\b/i, ['2girls']],
-  [/\b(three|3)\s+girls\b/i, ['3girls']],
-  [/\b(two|2)\s+boys\b|\bboys\b/i, ['2boys']],
-  [/\b(a|the|one|1)\s+girl\b|\bgirl\b|\bwoman\b|\bmaiden\b|\blady\b/i, ['1girl', 'solo']],
-  [/\b(a|the|one|1)\s+boy\b|\bboy\b|\bman\b/i, ['1boy', 'solo']],
   [/\blooking at (the )?(viewer|camera|you)\b/i, ['looking at viewer']],
+  [/\bkiss(?:ing|es|ed)?\b/i, ['kiss']],
+  [/\b(?:touching|grabbing|groping|fondling|squeezing|caressing)(?:\s+(?:her|his|their|the|a))?\s+breasts?\b/i, ['breast grab']],
+  [/\bclose-?up\b/i, ['close-up']],
+  [/\bfull body\b/i, ['full body']],
+  [/\bupper body\b/i, ['upper body']],
+  [/\bportrait\b/i, ['portrait']],
+  [/\bfrom above\b/i, ['from above']],
+  [/\bfrom below\b/i, ['from below']],
+  [/\bfrom (the )?side\b|\bprofile\b/i, ['from side']],
+  [/\bcinematic lighting\b/i, ['cinematic lighting']],
+  [/\bsoft lighting\b/i, ['soft lighting']],
+  [/\bdramatic lighting\b/i, ['dramatic lighting']],
+  [/\bcherry blossoms?\b/i, ['cherry blossoms']],
+  [/\bwalking\b/i, ['walking']],
+  [/\bkneeling\b/i, ['kneeling']],
+  [/\bleaning\b/i, ['leaning']],
+  [/\bdancing\b/i, ['dancing']],
+  [/\bgrinning\b|\bgrin\b/i, ['grin']],
+  [/\bblush(?:ing)?\b/i, ['blush']],
   [/\bfrom behind\b/i, ['from behind']],
   [/\blooking back\b/i, ['looking back']],
   [/\bsitting\b/i, ['sitting']],
@@ -150,22 +165,286 @@ function pushUnique(tags: string[], seen: Set<string>, next: string[]) {
   }
 }
 
-/** Everyday sentence to Danbooru tags. Same words always produce the same tags. */
-export function describeToTags(text: string): string {
-  const hits: { index: number; tags: string[] }[] = [];
-  for (const [pattern, tags] of PHRASES) {
-    const flags = pattern.flags.includes('g') ? pattern.flags : `${pattern.flags}g`;
-    const expression = new RegExp(pattern.source, flags);
-    let match: RegExpExecArray | null;
-    while ((match = expression.exec(text))) {
-      hits.push({ index: match.index, tags });
-      if (match[0].length === 0) break;
-    }
+export type NamedPerson = {
+  name: string;
+  triggers?: string[];
+  tags?: string[];
+  /** Cast characters and character LoRAs are women unless this says boy. */
+  gender?: 'girl' | 'boy';
+};
+
+const STOP = new Set(
+  'a an the and with or of to in on at for from by her his their she he they them him it its this that into onto over under while then just very really who whom whose there here as if but so be being been have has had do does did can could would should will not no yes also too up down out off about around near beside during via per is are was were'.split(
+    ' ',
+  ),
+);
+
+const NOT_NAMES = new Set(
+  [...STOP, 'girl', 'girls', 'boy', 'boys', 'man', 'men', 'woman', 'women', 'lady', 'maiden', 'another', 'one', 'two', 'three', 'four', 'five', 'six', 'taking', 'take', 'takes', 'looking', 'sitting', 'standing', 'holding', 'wearing', 'kissing', 'kiss', 'touching', 'walking', 'running', 'smiling', 'smile', 'pink', 'red', 'blue', 'green', 'black', 'white', 'blonde', 'blond', 'brown', 'purple', 'silver', 'grey', 'gray', 'orange', 'yellow', 'crimson', 'golden', 'gold'],
+);
+
+const COLORS = 'red|blue|green|pink|black|white|blonde|blond|brown|purple|silver|grey|gray|orange|yellow|crimson|golden|gold';
+const COLOR_OBJECTS = 'hair|eyes|dress|dresses|skirt|shirt|jacket|hoodie|ribbon|scarf|hat|shoes|gloves|coat|cape|kimono|armor|armour|flower|sky|background|nails|lips|boots|pants|shorts|sweater|blouse|suit|tie|bow|wings|tail|horns';
+const COUNT_TAG = /^(?:[1-5]girls?|[1-5]boys?|6\+girls|6\+boys|solo|hetero)$/i;
+
+type Span = {
+  start: number;
+  end: number;
+  rank: number;
+  tags: string[];
+  girls?: number;
+  boys?: number;
+  nameKey?: string;
+  breast?: boolean;
+};
+
+export function characterPromptTags(character: Character): string[] {
+  return [
+    known(HAIR_COLOR, character.hairColor),
+    known(HAIR_STYLE, character.hairStyle),
+    known(EYE, character.eyeColor),
+    known(OUTFIT, character.outfit),
+    known(EXPRESSION, character.expression),
+    known(POSE, character.pose),
+    known(SETTING, character.setting),
+    known(LIGHT, character.lighting),
+    ...(character.bodyTags ?? []),
+  ].filter((tag) => tag && !isChildTag(tag));
+}
+
+export function namedPeople(input: {
+  characters?: Character[];
+  loras?: { name?: string; triggers?: string[]; type?: string }[];
+}): NamedPerson[] {
+  const people: NamedPerson[] = [];
+  for (const character of input.characters ?? []) {
+    const name = character.name.trim();
+    if (!name) continue;
+    people.push({ name, tags: characterPromptTags(character), gender: 'girl' });
   }
-  hits.sort((left, right) => left.index - right.index || left.tags[0].localeCompare(right.tags[0]));
+  for (const lora of input.loras ?? []) {
+    if (lora.type && !/lora/i.test(lora.type)) continue;
+    const name = (lora.name || '').replace(/\.safetensors$/i, '').trim();
+    if (!name) continue;
+    people.push({ name, triggers: lora.triggers, gender: /\b(boy|man|male)\b/i.test(name) ? 'boy' : 'girl' });
+  }
+  return people;
+}
+
+export function splitTagList(text: string): string[] {
+  return (text || '')
+    .split(',')
+    .map((tag) => tag.trim())
+    .filter(Boolean);
+}
+
+/** Keep tags the user added by hand. Tags from the previous auto-fill are replaced by the new description. */
+export function keepManualTags(generated: string, current: string, previousAuto = '', mode: 'auto' | 'edited' = 'auto'): string {
+  const next = splitTagList(generated);
+  const seen = new Set(next.map((tag) => tag.toLowerCase()));
+  const basisText = previousAuto.trim() ? previousAuto : mode === 'auto' ? current : '';
+  const basis = new Set(splitTagList(basisText).map((tag) => tag.toLowerCase()));
+  for (const tag of splitTagList(current)) {
+    const key = tag.toLowerCase();
+    if (seen.has(key) || basis.has(key) || isChildTag(tag)) continue;
+    seen.add(key);
+    next.push(tag);
+  }
+  return next.join(', ');
+}
+
+function nameMatches(word: string, name: string): boolean {
+  const left = word.toLowerCase();
+  const right = name.toLowerCase().replace(/\.safetensors$/i, '');
+  if (left === right) return true;
+  const head = right.split(/[-_\s]/)[0] ?? '';
+  return head.length >= 3 && head === left;
+}
+
+function countLabel(count: number, one: string, many: string): string | null {
+  if (count <= 0) return null;
+  if (count === 1) return one;
+  if (count >= 6) return `6+${many}`;
+  return `${count}${many}`;
+}
+
+function cleanChunk(raw: string): string {
+  const words = raw
+    .toLowerCase()
+    .replace(/[^a-z0-9+\-\s]/g, ' ')
+    .split(/\s+/)
+    .filter(Boolean);
+  while (words.length && STOP.has(words[0]!)) words.shift();
+  while (words.length && STOP.has(words[words.length - 1]!)) words.pop();
+  const phrase = words.join(' ').replace(/\s+/g, ' ').trim();
+  if (!phrase || STOP.has(phrase) || isChildTag(phrase)) return '';
+  return phrase;
+}
+
+function addPattern(found: Span[], text: string, pattern: RegExp, build: (match: RegExpExecArray) => Omit<Span, 'start' | 'end'>) {
+  const flags = pattern.flags.includes('g') ? pattern.flags : `${pattern.flags}g`;
+  const expression = new RegExp(pattern.source, flags);
+  let match: RegExpExecArray | null;
+  while ((match = expression.exec(text))) {
+    if (!match[0]) break;
+    found.push({ start: match.index, end: match.index + match[0].length, ...build(match) });
+  }
+}
+
+function acceptSpans(found: Span[]): Span[] {
+  found.sort((left, right) => right.end - right.start - (left.end - left.start) || left.rank - right.rank || left.start - right.start);
+  const taken: Span[] = [];
+  for (const span of found) {
+    if (taken.some((other) => span.start < other.end && other.start < span.end)) continue;
+    taken.push(span);
+  }
+  return taken.sort((left, right) => left.start - right.start || left.rank - right.rank);
+}
+
+/** Everyday sentence to Danbooru tags. Known phrases are mapped. Everything else is kept. */
+export function describeToTags(text: string, people: NamedPerson[] = []): string {
+  const source = text.replace(/\s+/g, ' ').trim();
+  if (!source) return '';
+  const found: Span[] = [];
+  const sortedPeople = [...people].sort((left, right) => right.name.length - left.name.length);
+  for (const person of sortedPeople) {
+    const token = person.name.trim();
+    if (token.length < 2) continue;
+    const head = token.split(/[-_\s(]+/)[0] ?? '';
+    if (head.length < 2) continue;
+    addPattern(found, source, new RegExp(`\\b${head.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`, 'i'), (match) => ({
+      rank: 0,
+      tags: [],
+      girls: person.gender === 'boy' ? 0 : 1,
+      boys: person.gender === 'boy' ? 1 : 0,
+      nameKey: match[0].toLowerCase(),
+    }));
+  }
+  const personRules: { pattern: RegExp; girls?: number; boys?: number; tags?: string[] }[] = [
+    { pattern: /\b(?:six|6)\s+(?:girls|women)\b/i, girls: 6 },
+    { pattern: /\b(?:five|5)\s+(?:girls|women)\b/i, girls: 5 },
+    { pattern: /\b(?:four|4)\s+(?:girls|women)\b/i, girls: 4 },
+    { pattern: /\b(?:three|3)\s+(?:girls|women)\b/i, girls: 3 },
+    { pattern: /\b(?:two|2)\s+(?:girls|women)\b/i, girls: 2 },
+    { pattern: /\bschoolgirls\b/i, girls: 2, tags: ['school uniform'] },
+    { pattern: /\b(?:girls|women)\b/i, girls: 2 },
+    { pattern: /\b(?:a|the|one|1|another)\s+(?:(?:young|little|small|teen)\s+)?(?:girl|woman|lady|maiden)\b/i, girls: 1 },
+    { pattern: /\bschool\s*girl\b/i, girls: 1, tags: ['school uniform'] },
+    { pattern: /\b(?:girl|woman|lady|maiden)\b/i, girls: 1 },
+    { pattern: /\b(?:six|6)\s+(?:boys|men)\b/i, boys: 6 },
+    { pattern: /\b(?:five|5)\s+(?:boys|men)\b/i, boys: 5 },
+    { pattern: /\b(?:four|4)\s+(?:boys|men)\b/i, boys: 4 },
+    { pattern: /\b(?:three|3)\s+(?:boys|men)\b/i, boys: 3 },
+    { pattern: /\b(?:two|2)\s+(?:boys|men)\b/i, boys: 2 },
+    { pattern: /\b(?:boys|men)\b/i, boys: 2 },
+    { pattern: /\b(?:a|the|one|1|another)\s+(?:boy|man)\b/i, boys: 1 },
+    { pattern: /\b(?:boy|man)\b/i, boys: 1 },
+  ];
+  for (const rule of personRules) {
+    addPattern(found, source, rule.pattern, () => ({ rank: 1, tags: rule.tags ?? [], girls: rule.girls, boys: rule.boys }));
+  }
+  for (const [pattern, tags] of PHRASES) {
+    addPattern(found, source, pattern, (match) => ({ rank: 2, tags, breast: /\bbreasts?\b/i.test(match[0]) }));
+  }
+  addPattern(found, source, /\briding (?:a |an |the )?[a-z0-9-]+\b/i, (match) => ({ rank: 2, tags: [cleanChunk(match[0]) || match[0].toLowerCase()] }));
+  addPattern(found, source, new RegExp(`\\b(${COLORS})\\s+(${COLOR_OBJECTS})\\b`, 'i'), (match) => {
+    const rawColor = match[1]!.toLowerCase();
+    const color = rawColor === 'blond' ? 'blonde' : rawColor === 'grey' ? 'gray' : rawColor;
+    const object = match[2]!.toLowerCase().replace(/dresses$/, 'dress').replace('armour', 'armor');
+    const eyes = object === 'eyes' && (color === 'gold' || color === 'golden') ? 'yellow' : color === 'crimson' && object === 'eyes' ? 'red' : color;
+    return { rank: 2, tags: [`${eyes} ${object}`] };
+  });
+  addPattern(found, source, /\b(?:she|her)\b/i, () => ({ rank: 3, tags: [], nameKey: 'pronoun-girl' }));
+  addPattern(found, source, /\b(?:he|him|his)\b/i, () => ({ rank: 3, tags: [], nameKey: 'pronoun-boy' }));
+
+  const spans = acceptSpans(found);
+  const covered = spans.map((span) => ({ start: span.start, end: span.end }));
+  const namePattern = /\b[A-Z][a-zA-Z'-]{1,}\b/g;
+  let nameMatch: RegExpExecArray | null;
+  while ((nameMatch = namePattern.exec(source))) {
+    const word = nameMatch[0];
+    if (NOT_NAMES.has(word.toLowerCase())) continue;
+    if (covered.some((span) => nameMatch!.index < span.end && span.start < nameMatch!.index + word.length)) continue;
+    spans.push({ start: nameMatch.index, end: nameMatch.index + word.length, rank: 0, tags: [word.toLowerCase()], girls: 1, nameKey: word.toLowerCase() });
+    covered.push({ start: nameMatch.index, end: nameMatch.index + word.length });
+  }
+  spans.sort((left, right) => left.start - right.start || left.rank - right.rank);
+
+  let girls = 0;
+  let boys = 0;
+  let firstPerson = Number.POSITIVE_INFINITY;
+  let breastAt = -1;
+  const seenNames = new Set<string>();
+  const hits: { index: number; rank: number; tags: string[] }[] = [];
+  for (const span of spans) {
+    if (span.nameKey === 'pronoun-girl') {
+      if (girls === 0) {
+        girls += 1;
+        firstPerson = Math.min(firstPerson, span.start);
+      }
+      continue;
+    }
+    if (span.nameKey === 'pronoun-boy') {
+      if (boys === 0) {
+        boys += 1;
+        firstPerson = Math.min(firstPerson, span.start);
+      }
+      continue;
+    }
+    if (span.nameKey && seenNames.has(span.nameKey)) {
+      hits.push({ index: span.start, rank: 2, tags: span.tags });
+      continue;
+    }
+    if (span.nameKey) seenNames.add(span.nameKey);
+    if (span.girls || span.boys) {
+      const matched = span.nameKey ? sortedPeople.filter((person) => nameMatches(span.nameKey!, person.name)) : [];
+      const triggerTags = matched.flatMap((person) => splitTagList((person.triggers ?? []).join(','))).filter((tag) => !COUNT_TAG.test(tag));
+      const extra = matched.flatMap((person) => person.tags ?? []);
+      const label = span.tags.length ? span.tags : triggerTags.length ? [] : span.nameKey ? [span.nameKey] : [];
+      const emitted = [...triggerTags, ...label, ...extra].filter((tag) => !COUNT_TAG.test(tag) && !isChildTag(tag));
+      if (emitted.length) hits.push({ index: span.start, rank: 0, tags: emitted });
+      girls += span.girls ?? (matched.some((person) => person.gender !== 'boy') ? 1 : 0);
+      boys += span.boys ?? (matched.length && matched.every((person) => person.gender === 'boy') ? 1 : 0);
+      if ((span.girls ?? 0) > 0 || (span.boys ?? 0) > 0 || matched.length) firstPerson = Math.min(firstPerson, span.start);
+    } else if (span.tags.length) {
+      hits.push({ index: span.start, rank: 2, tags: span.tags.filter((tag) => !isChildTag(tag)) });
+    }
+    if (span.breast) breastAt = span.start;
+  }
+
+  const masked = source.split('');
+  for (const span of spans) {
+    for (let index = span.start; index < span.end && index < masked.length; index += 1) masked[index] = '\n';
+  }
+  const maskedText = masked.join('');
+  const splitter = /,|\.(?=\s|$)|\band\b|\bwith\b|\bwhile\b|\bwearing\b|\bin\b|\bon\b|\bat\b|\bunder\b|\bover\b|\bbeside\b|\bnear\b|\bby\b/gi;
+  let cursor = 0;
+  let split: RegExpExecArray | null;
+  const chunks: { start: number; text: string }[] = [];
+  while ((split = splitter.exec(maskedText))) {
+    chunks.push({ start: cursor, text: maskedText.slice(cursor, split.index) });
+    cursor = split.index + split[0].length;
+  }
+  chunks.push({ start: cursor, text: maskedText.slice(cursor) });
+  for (const chunk of chunks) {
+    const phrase = cleanChunk(chunk.text);
+    if (phrase) hits.push({ index: chunk.start, rank: 4, tags: [phrase] });
+  }
+
+  const countTags = [countLabel(girls, '1girl', 'girls'), countLabel(boys, '1boy', 'boys')].filter((tag): tag is string => Boolean(tag));
+  if (girls + boys === 1) countTags.push('solo');
+  if (girls > 0 && boys > 0) countTags.push('hetero');
+  if (countTags.length && Number.isFinite(firstPerson)) hits.push({ index: firstPerson, rank: 1, tags: countTags });
+  if (breastAt >= 0 && girls > 0 && boys > 0) hits.push({ index: breastAt, rank: 3, tags: ["grabbing another's breast"] });
+
+  hits.sort((left, right) => left.index - right.index || left.rank - right.rank);
   const tags: string[] = [];
   const seen = new Set<string>();
   for (const hit of hits) pushUnique(tags, seen, hit.tags);
+  if (girls + boys > 1) {
+    const withoutSolo = tags.filter((tag) => tag.toLowerCase() !== 'solo');
+    return withoutSolo.join(', ');
+  }
   return tags.join(', ');
 }
 
@@ -175,11 +454,12 @@ export function supportTags(input: {
   baseModel?: string;
   style?: StudioStyleId | string;
   character?: Character | null;
+  people?: NamedPerson[];
 }): string {
-  const described = describeToTags(input.text);
+  const described = describeToTags(input.text, input.people);
   const seen = new Set(described.split(', ').map((tag) => tag.toLowerCase()).filter(Boolean));
   const tags: string[] = [];
-  const person = /\b(1girl|1boy|2girls|2boys|3girls)\b/.test(described);
+  const person = /\b(?:[1-5]girls?|[1-5]boys?|6\+girls|6\+boys)\b/.test(described);
   const character = input.character;
   if (character) {
     pushUnique(tags, seen, [
