@@ -351,16 +351,87 @@ def _use_clip_skip(pipe: Any, clip_skip: int) -> None:
         setattr(pipe, attr, _ClipSkipEncoder(encoder, skip))
 
 
-def _find_lora(filename: str) -> str | None:
-    names = [filename]
-    if not filename.endswith(".safetensors"):
-        names.append(filename + ".safetensors")
-    for root in lora_directories():
-        for name in names:
-            path = os.path.join(root, name)
-            if os.path.exists(path):
+class LoraInstalling(RuntimeError):
+    """The LoRA download has started and /generate should be retried."""
+
+
+def lora_stem(name: str) -> str:
+    base = os.path.basename(str(name or "")).strip().lower()
+    for ext in (".safetensors", ".pt", ".ckpt", ".bin"):
+        if base.endswith(ext):
+            return base[: -len(ext)]
+    return base
+
+
+def friendly_lora_error(message: str) -> str:
+    if "lora not found" in message.lower():
+        return "That LoRA is not on the cloud yet. Install it from Civitai, then try again."
+    return message
+
+
+def _is_lora_record(item: dict[str, Any]) -> bool:
+    kind = str(item.get("type") or "").lower().replace(" ", "").replace("_", "")
+    return kind in {"lora", "locon", "dora", "lycoris"}
+
+
+def resolve_lora_path(lora: Any) -> str | None:
+    from yume_server.catalog import list_models
+
+    models = list_models()
+    version = getattr(lora, "versionId", None)
+    if version:
+        match = next((item for item in models if int(item.get("versionId") or 0) == int(version)), None)
+        path = str((match or {}).get("path") or "")
+        if path and os.path.exists(path):
+            return path
+    stem = lora_stem(getattr(lora, "name", "") or "")
+    if not stem:
+        return None
+    for item in models:
+        if not _is_lora_record(item):
+            continue
+        if stem in {lora_stem(item.get("filename") or ""), lora_stem(item.get("name") or "")}:
+            path = str(item.get("path") or "")
+            if path and os.path.exists(path):
                 return path
+    for root in lora_directories():
+        if not os.path.isdir(root):
+            continue
+        for entry in os.listdir(root):
+            if lora_stem(entry) == stem:
+                return os.path.join(root, entry)
     return None
+
+
+def prepare_loras(body: Any, token: str | None) -> None:
+    """Install a missing LoRA by version id, or say it is still installing."""
+    from yume_server.catalog import install_progress, start_install
+
+    for lora in getattr(body, "loras", None) or []:
+        if resolve_lora_path(lora):
+            continue
+        version = getattr(lora, "versionId", None)
+        label = str(getattr(lora, "name", "") or "").strip() or (f"version {version}" if version else "LoRA")
+        if not version:
+            if mock_mode():
+                continue
+            raise FileNotFoundError(f"LoRA not found on the server: {label}.")
+        filename = label if "." in os.path.basename(label) else f"{label}.safetensors"
+        hint = {
+            "type": "LORA",
+            "name": label,
+            "filename": filename,
+            "baseModel": getattr(lora, "baseModel", None) or "",
+            "triggers": list(getattr(lora, "triggers", None) or []),
+        }
+        job = start_install(int(version), token, {key: value for key, value in hint.items() if value})
+        if job.get("state") != "done":
+            try:
+                job = install_progress(job["id"])
+            except KeyError:
+                pass
+        if job.get("state") != "done":
+            raise LoraInstalling(f"installing {label}")
 
 
 def _apply_loras(pipe: Any, loras: list[Any]) -> list[str]:
@@ -369,13 +440,12 @@ def _apply_loras(pipe: Any, loras: list[Any]) -> list[str]:
     names: list[str] = []
     weights: list[float] = []
     for index, lora in enumerate(loras):
-        filename = str(getattr(lora, "name", "") or "").strip()
+        filename = str(getattr(lora, "name", "") or "").strip() or str(getattr(lora, "versionId", "") or "")
         if not filename:
             continue
-        path = _find_lora(filename)
+        path = resolve_lora_path(lora)
         if path is None:
-            roots = ", ".join(lora_directories())
-            raise FileNotFoundError(f"LoRA not found on the server: {filename}. Put the file in {roots}.")
+            raise FileNotFoundError(f"LoRA not found on the server: {filename}.")
         adapter = f"lora_{index}"
         pipe.load_lora_weights(path, adapter_name=adapter)
         names.append(adapter)
