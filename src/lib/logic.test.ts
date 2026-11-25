@@ -23,7 +23,7 @@ import { encodePng } from '@/src/lib/png';
 import { produceImages, resolveSeeds } from '@/src/lib/produce';
 import { renderDemoFrames } from '@/src/lib/render';
 import { describeUpdateError, downloadLabel } from '@/src/lib/apkInstall';
-import { baseFamily, baseLabel, defaultsForBase, familyPreset, settingsForCheckpoint, modelCardPress, routeLeavesCreate } from '@/src/lib/checkpoints';
+import { baseFamily, baseLabel, defaultsForBase, familyPreset, illustriousOffer, settingsForCheckpoint, modelCardPress, routeLeavesCreate } from '@/src/lib/checkpoints';
 import { modelsToRestore, modelPresence } from '@/src/lib/keptModels';
 import { friendlyLoraMessage, loraChoices, loraStem, missingSelectedLoras } from '@/src/lib/loraGate';
 import { meshPlan, PICTURE_SERVER_MESH_MESSAGE } from '@/src/lib/mesh';
@@ -34,7 +34,7 @@ import { redactValue } from '@/src/lib/reportText';
 import { CREATE_PROMPT_FIELDS } from '@/src/lib/createFields';
 import { describeToTags, settleSavedPrompts, supportTags } from '@/src/lib/positiveTags';
 import { buildSaladGenerateBody, composeGenerationPrompt, sentPositiveText } from '@/src/lib/draw';
-import { getGenerator, patchGenerator, resetBuiltPrompt, resetModelDefaults, resetQualityTags, type GeneratorState } from '@/src/lib/genstore';
+import { addLora, getGenerator, patchGenerator, resetBuiltPrompt, resetModelDefaults, resetQualityTags, type GeneratorState } from '@/src/lib/genstore';
 import { downloadButtons, downloadKind, downloadPercent, formatEta, formatSpeed, RECONNECTING } from '@/src/lib/downloads';
 import { installFailureMessage } from '@/src/lib/modelInstall';
 import { buildSaladBody, classifyGatewayInput, friendlyGatewayMessage, generateUrl, LIVE_GATEWAY_URL, migrateKeyStoredAsUrl, normalizeEndpoint, redactSecrets, saladErrorMessage } from '@/src/lib/salad';
@@ -730,12 +730,20 @@ const withPositive = composeGenerationPrompt({
   loras: [{ name: 'ribbon', weight: 0.8, triggers: ['ribbon hair'] }],
 });
 assert(
-  withPositive.startsWith('girl in a skirt, shiny eyes, wet clothes') &&
+  withPositive.startsWith('girl in a skirt, ribbon hair, shiny eyes, wet clothes') &&
+    withPositive.indexOf('ribbon hair') < withPositive.indexOf('shiny eyes') &&
     withPositive.indexOf('wet clothes') < withPositive.indexOf(studioSuffix('anime')) &&
-    withPositive.indexOf(studioSuffix('anime')) < withPositive.indexOf('ribbon hair') &&
     withPositive.endsWith('absurdres'),
-  'sent order is prompt, positive, extra, style, lora triggers, quality',
+  'sent order is prompt, lora triggers, positive, extra, style, quality',
 );
+patchGenerator({ prompt: 'girl, manga', positive: '', extraPrompt: '', quality: 'absurdres', studioStyle: 'off', loras: [{ name: 'ink', weight: 0.8, triggers: ['monochrome, ribbon hair', 'alt sparkle'], baseModel: 'Illustrious' }], triggers: true });
+const added = getGenerator();
+assert(added.prompt === 'girl, manga', 'adding a lora does not write triggers into the prompt');
+addLora({ name: 'extra', weight: 0.5, triggers: ['should not land in prompt'] });
+assert(getGenerator().prompt === 'girl, manga', 'addLora leaves the prompt box alone');
+const triggered = composeGenerationPrompt(added);
+assert(triggered.startsWith('girl, manga, ribbon hair') && !triggered.toLowerCase().includes('monochrome') && triggered.endsWith('absurdres'), 'first trigger group is used and blocklisted lora tags are dropped');
+assert(illustriousOffer('SDXL 1.0', 'Illustrious', []) === 'install' && illustriousOffer('SDXL 1.0', 'Illustrious', [{ type: 'Checkpoint', baseModel: 'Illustrious' }]) === 'switch', 'illustrious lora offers a matching checkpoint');
 const selfie = describeToTags('a girl with pink hair taking a selfie in her room');
 assert(selfie === '1girl, solo, pink hair, selfie, holding phone, bedroom, indoors', 'describe becomes danbooru tags');
 assert(supportTags({ text: 'a girl with pink hair taking a selfie in her room', baseModel: 'SDXL 1.0', style: 'anime' }).includes('detailed eyes') && !supportTags({ text: 'a girl with pink hair taking a selfie in her room', baseModel: 'SDXL 1.0', style: 'anime' }).includes('1girl'), 'positive adds detail tags only');

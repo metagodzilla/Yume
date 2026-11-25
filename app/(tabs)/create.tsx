@@ -12,14 +12,17 @@ import { characterClause } from '@/src/lib/prompt';
 import { composeGenerationPrompt, drawFrames, generationParams, samplerId, sentPositiveText } from '@/src/lib/draw';
 import { sendClientReport } from '@/src/lib/clientReport';
 import { rememberFault } from '@/src/lib/reportText';
-import { baseFamily, baseLabel, modelCardPress } from '@/src/lib/checkpoints';
+import { applyCheckpoint, installLocal, patchGenerator, resetBuiltPrompt, resetModelDefaults, resetQualityTags, useGenerator } from '@/src/lib/genstore';
+import { WAI_ILLUSTRIOUS, baseFamily, baseLabel, illustriousOffer, loraBaseWarning, modelCardPress } from '@/src/lib/checkpoints';
+import { triggerGroups } from '@/src/lib/draw';
+import { runModelInstall } from '@/src/lib/modelInstall';
 import { describeToTags, supportTags } from '@/src/lib/positiveTags';
 import { STUDIO_SIZES, STUDIO_STYLES } from '@/src/lib/animeStudio';
 import { SAMPLERS, sizesFor } from '@/src/lib/defaultModel';
 import { extractLoras } from '@/src/lib/a1111';
 import { loraPage } from '@/src/lib/civitai';
 import { openLink } from '@/src/lib/openLink';
-import { getGenerator, patchGenerator, resetBuiltPrompt, resetModelDefaults, resetQualityTags, useGenerator } from '@/src/lib/genstore';
+import { getGenerator } from '@/src/lib/genstore';
 import { DISK_RESET_NOTE, modelPresence } from '@/src/lib/keptModels';
 import { restoreMissingModels, useRestoringIds } from '@/src/lib/restoreModels';
 import { ensureSelectedLoras } from '@/src/lib/ensureLoras';
@@ -101,6 +104,41 @@ export default function GenerateScreen() {
   useEffect(() => {
     void import('@/src/lib/genstore').then(({ hydrateFromDisk }) => hydrateFromDisk());
   }, []);
+
+  async function useWaiIllustrious(offer: 'switch' | 'install') {
+    const installed = gen.installed.find((item) => item.type === 'Checkpoint' && baseFamily(item.baseModel) === 'Illustrious');
+    if (offer === 'switch' && installed) {
+      applyCheckpoint(installed);
+      setStatus(`Using ${installed.name}.`);
+      return;
+    }
+    setError(null);
+    setStatus('Downloading WAI-Illustrious-SDXL…');
+    try {
+      const key = await readSaladKey();
+      const token = await readCivitaiToken().catch(() => null);
+      const endpoint = normalizeEndpoint(studio.settings.saladEndpoint);
+      if (!endpoint || !key) throw new Error('Connect the cloud before installing WAI-Illustrious-SDXL.');
+      await runModelInstall({
+        endpoint,
+        apiKey: key,
+        civitaiToken: token,
+        versionId: WAI_ILLUSTRIOUS.versionId,
+        type: 'Checkpoint',
+        name: WAI_ILLUSTRIOUS.name,
+        filename: WAI_ILLUSTRIOUS.filename,
+        baseModel: WAI_ILLUSTRIOUS.baseModel,
+        onProgress: (label) => setStatus(label),
+      });
+      const record = { ...WAI_ILLUSTRIOUS, hash: '', sha256: '', triggers: [], isDefault: true };
+      installLocal(record);
+      applyCheckpoint(record);
+      setStatus('Using WAI-Illustrious-SDXL.');
+    } catch (caught) {
+      setStatus(null);
+      setError(caught instanceof Error ? caught.message : 'Could not install WAI-Illustrious-SDXL.');
+    }
+  }
 
   async function generate() {
     if (busy) return;
@@ -366,7 +404,7 @@ export default function GenerateScreen() {
           ) : null}
         </View>
         <Text style={styles.hint}>
-          Sent order: your prompt, positive tags, extra text, the style suffix, LoRA triggers, then quality tags.
+          Sent order: your prompt, LoRA triggers, positive tags, extra text, the style suffix, then quality tags.
         </Text>
         <View style={styles.row}>
           <Pressable onPress={() => patchGenerator({ qualityTags: !gen.qualityTags })}>
@@ -384,12 +422,33 @@ export default function GenerateScreen() {
         <View style={styles.row}>
           {gen.loras.map((lora) => {
             const page = loraPage(lora);
+            const groups = triggerGroups(lora.triggers);
+            const offer = illustriousOffer(checkpoint?.baseModel ?? '', lora.baseModel ?? '', gen.installed);
             return (
               <View key={`${lora.name}-${lora.versionId ?? lora.weight}`} style={styles.chipButton}>
                 <Pressable onPress={() => openLink(page.url)}>
                   <Text style={styles.chipText}>{page.label === 'Search on Civitai' ? `Search ${lora.name}` : lora.name}</Text>
                 </Pressable>
                 <Text style={styles.chipText}>{lora.weight}</Text>
+                {groups.slice(1).map((group, index) => (
+                  <Pressable
+                    key={group[0]}
+                    onPress={() =>
+                      patchGenerator({
+                        loras: gen.loras.map((item) => (item === lora ? { ...item, triggerGroup: index + 1 } : item)),
+                      })
+                    }>
+                    <Text style={styles.chipText}>{lora.triggerGroup === index + 1 ? group[0] : `Also ${group[0]}`}</Text>
+                  </Pressable>
+                ))}
+                {offer ? (
+                  <Pressable testID="use-wai-illustrious" onPress={() => void useWaiIllustrious(offer)}>
+                    <Text style={styles.chipText}>{offer === 'switch' ? 'Switch to Illustrious' : 'Install WAI-Illustrious'}</Text>
+                  </Pressable>
+                ) : null}
+                {loraBaseWarning(checkpoint?.baseModel ?? '', lora.baseModel ?? '') ? (
+                  <Text style={styles.chipText}>{loraBaseWarning(checkpoint?.baseModel ?? '', lora.baseModel ?? '')}</Text>
+                ) : null}
                 <Pressable onPress={() => patchGenerator({ loras: gen.loras.filter((item) => item !== lora) })}>
                   <Text style={styles.chipText}>×</Text>
                 </Pressable>

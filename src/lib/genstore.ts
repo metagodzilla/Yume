@@ -45,7 +45,7 @@ export type GeneratorState = {
   qualityTags: boolean;
   triggers: boolean;
   checkpointId: number;
-  loras: { name: string; weight: number; modelId?: number; versionId?: number; baseModel?: string; triggers?: string[] }[];
+  loras: { name: string; weight: number; modelId?: number; versionId?: number; baseModel?: string; triggers?: string[]; triggerGroup?: number }[];
   contentFilter: ContentFilter;
   embeddings: string;
   vae: string;
@@ -237,16 +237,11 @@ export function resetQualityTags(baseModel: string, name = '') {
 }
 
 export function addLora(lora: { name: string; weight: number; modelId?: number; versionId?: number; triggers?: string[]; baseModel?: string }) {
-  const triggers = (lora.triggers ?? []).map((item) => item.trim()).filter(Boolean);
-  const existing = state.prompt.trim();
-  const missing = triggers.filter((item) => !existing.toLowerCase().includes(item.toLowerCase()));
-  const prompt = missing.length ? [existing, missing.join(', ')].filter(Boolean).join(', ') : state.prompt;
   const same = (item: GeneratorState['loras'][number]) =>
     lora.versionId && item.versionId ? item.versionId === lora.versionId : item.name === lora.name;
   const others = state.loras.filter((item) => !same(item));
   patchGenerator({
-    loras: [...others, { name: lora.name, weight: lora.weight, modelId: lora.modelId, versionId: lora.versionId, baseModel: lora.baseModel, triggers: lora.triggers }],
-    prompt,
+    loras: [...others, { name: lora.name, weight: lora.weight, modelId: lora.modelId, versionId: lora.versionId, baseModel: lora.baseModel, triggers: lora.triggers, triggerGroup: 0 }],
     triggers: true,
   });
   if (lora.versionId) {

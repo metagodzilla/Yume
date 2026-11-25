@@ -218,6 +218,22 @@ export function recommendedFromMeta(meta: Record<string, unknown> | null | undef
   };
 }
 
+export const WAI_ILLUSTRIOUS = {
+  modelId: 827184,
+  versionId: 2883731,
+  name: 'WAI-illustrious-SDXL',
+  version: 'v17.0',
+  type: 'Checkpoint' as const,
+  baseModel: 'Illustrious',
+  filename: 'WAI-Nsfw-Illustrious-17.safetensors',
+};
+
+export function illustriousOffer(checkpointBase: string, loraBase: string, installed: { type?: string; baseModel?: string }[]): '' | 'switch' | 'install' {
+  if (baseFamily(loraBase) !== 'Illustrious' || baseFamily(checkpointBase) === 'Illustrious') return '';
+  const have = installed.some((item) => (item.type ?? 'Checkpoint') === 'Checkpoint' && baseFamily(item.baseModel ?? '') === 'Illustrious');
+  return have ? 'switch' : 'install';
+}
+
 export function loraBaseWarning(checkpointBase: string, loraBase: string): string {
   if (!loraBase.trim()) return '';
   if (baseFamily(checkpointBase) === baseFamily(loraBase)) return '';
