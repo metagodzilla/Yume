@@ -1,6 +1,7 @@
 import { useSyncExternalStore } from 'react';
 
 import type { CatalogCheckpoint } from '@/src/lib/checkpoints';
+import { ANIME_STUDIO_CHECKPOINT } from '@/src/lib/animeStudio';
 import { BUILTIN_CHECKPOINT, forgetModel, modelsToRestore, rememberModel, type KeptLibrary, type KeptModel, emptyLibrary } from '@/src/lib/keptModels';
 import { startDownload } from '@/src/lib/downloadClient';
 import { normalizeSaladKey } from '@/src/lib/saladCloud';
@@ -31,12 +32,35 @@ function publishRestoring(ids: number[]) {
 
 export async function readKeptLibrary(): Promise<KeptLibrary> {
   const raw = await loadKeptModels();
-  if (!raw) return emptyLibrary();
+  if (!raw) {
+    return rememberModel(emptyLibrary(), {
+      versionId: ANIME_STUDIO_CHECKPOINT.versionId,
+      type: 'Checkpoint',
+      name: ANIME_STUDIO_CHECKPOINT.name,
+      filename: ANIME_STUDIO_CHECKPOINT.filename,
+      baseModel: ANIME_STUDIO_CHECKPOINT.baseModel,
+    });
+  }
   try {
     const parsed = JSON.parse(raw) as KeptLibrary;
-    return { models: Array.isArray(parsed.models) ? parsed.models : [], lastUsedVersionId: parsed.lastUsedVersionId ?? null };
+    return rememberModel(
+      { models: Array.isArray(parsed.models) ? parsed.models : [], lastUsedVersionId: parsed.lastUsedVersionId ?? null },
+      {
+        versionId: ANIME_STUDIO_CHECKPOINT.versionId,
+        type: 'Checkpoint',
+        name: ANIME_STUDIO_CHECKPOINT.name,
+        filename: ANIME_STUDIO_CHECKPOINT.filename,
+        baseModel: ANIME_STUDIO_CHECKPOINT.baseModel,
+      },
+    );
   } catch {
-    return emptyLibrary();
+    return rememberModel(emptyLibrary(), {
+      versionId: ANIME_STUDIO_CHECKPOINT.versionId,
+      type: 'Checkpoint',
+      name: ANIME_STUDIO_CHECKPOINT.name,
+      filename: ANIME_STUDIO_CHECKPOINT.filename,
+      baseModel: ANIME_STUDIO_CHECKPOINT.baseModel,
+    });
   }
 }
 

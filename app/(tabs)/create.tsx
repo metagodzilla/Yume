@@ -12,6 +12,7 @@ import { composeGenerationPrompt, drawFrames, generationParams, samplerId, sentP
 import { sendClientReport } from '@/src/lib/clientReport';
 import { rememberFault } from '@/src/lib/reportText';
 import { baseLabel, modelCardPress } from '@/src/lib/checkpoints';
+import { STUDIO_SIZES, STUDIO_STYLES } from '@/src/lib/animeStudio';
 import { SAMPLERS, sizesFor } from '@/src/lib/defaultModel';
 import { extractLoras } from '@/src/lib/a1111';
 import { loraPage } from '@/src/lib/civitai';
@@ -184,6 +185,18 @@ export default function GenerateScreen() {
           </View>
         </Pressable>
         <CheckpointSheet visible={picker} onClose={() => setPicker(false)} />
+        <Text style={styles.label}>Anime Studio</Text>
+        <View style={styles.row}>
+          {STUDIO_STYLES.map((style) => (
+            <Pressable
+              key={style.id}
+              testID={`studio-${style.id}`}
+              onPress={() => patchGenerator({ studioStyle: gen.studioStyle === style.id ? 'off' : style.id })}
+              style={[styles.chipButton, gen.studioStyle === style.id && styles.chipOn]}>
+              <Text style={styles.chipText}>{style.label}</Text>
+            </Pressable>
+          ))}
+        </View>
         <Text style={styles.label}>Prompt</Text>
         <TextInput
           testID="gen-prompt"
@@ -313,6 +326,18 @@ export default function GenerateScreen() {
             <Text style={styles.link}>{gen.seedRandom ? 'Seed unlocked' : 'Seed locked'}</Text>
           </Pressable>
         </View>
+        {gen.studioStyle !== 'off' ? (
+          <View style={styles.row}>
+            {STUDIO_SIZES.map((size) => (
+              <Pressable
+                key={size.label}
+                onPress={() => patchGenerator({ width: size.width, height: size.height })}
+                style={[styles.chipButton, gen.width === size.width && gen.height === size.height && styles.chipOn]}>
+                <Text style={styles.chipText}>{size.label}</Text>
+              </Pressable>
+            ))}
+          </View>
+        ) : null}
         <Text style={styles.label}>Size · {checkpoint?.baseModel}</Text>
         <View style={styles.row}>
           {sizesFor(checkpoint?.baseModel ?? 'SDXL 1.0').map((size) => (

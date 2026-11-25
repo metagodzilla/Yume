@@ -1,5 +1,6 @@
 import { extractLoras, formatParameters, parseParameters, plainPrompt } from '@/src/lib/a1111';
 import { bytesToBase64, base64ToBytes } from '@/src/lib/base64';
+import { ANIME_STUDIO_CHECKPOINT, scaleLoraStack, studioSuffix } from '@/src/lib/animeStudio';
 import { DEFAULT_CHECKPOINT } from '@/src/lib/defaultModel';
 import { embedParameters, readParameters } from '@/src/lib/pngmeta';
 import { composePreview } from '@/src/lib/compose';
@@ -659,6 +660,7 @@ const previewState = {
   quality: 'masterpiece, high score, great score, absurdres',
   extraPrompt: 'shiny eyes',
   vPrediction: false,
+  studioStyle: 'off',
   installed: [{ versionId: 1337429, modelId: 1, name: 'Animagine XL 4.0', version: 'v4', type: 'Checkpoint', baseModel: 'SDXL 1.0', filename: 'animagine-xl-4.0.safetensors', hash: '1d5b43ff75', sha256: '', triggers: [], isDefault: true }],
 } as GeneratorState;
 const previewBody = buildSaladGenerateBody(previewState, composeGenerationPrompt(previewState), 1);
@@ -682,6 +684,11 @@ assert(missingSelectedLoras([{ name: 'MOMO.SAFETENSORS', versionId: 9 }], [{ ver
 assert(friendlyLoraMessage('LoRA not found on the server: momo. Put the file in /models/loras, /loras.').includes('not on the cloud yet'), 'lora error stays friendly');
 const restore = modelsToRestore({ models: [{ versionId: 5, type: 'LORA', name: 'Ribbon' }, { versionId: 1337429, type: 'Checkpoint', name: 'Animagine XL 4.0' }], lastUsedVersionId: 5 }, [1337429]);
 assert(restore.length === 1 && restore[0]?.name === 'Ribbon' && modelPresence(5, [1337429], [5]) === 'restoring', 'restore skips the built-in checkpoint');
+const studioState = { ...previewState, extraPrompt: '', studioStyle: 'anime' as const, prompt: 'girl in a skirt', quality: 'masterpiece, best quality, very aesthetic, absurdres', loras: [{ name: 'a', weight: 0.8 }, { name: 'b', weight: 0.8 }, { name: 'c', weight: 0.9 }] };
+const studioPrompt = composeGenerationPrompt(studioState);
+assert(studioPrompt.startsWith('girl in a skirt') && studioPrompt.indexOf('girl in a skirt') < studioPrompt.indexOf(studioSuffix('anime')) && studioPrompt.endsWith('absurdres'), 'anime studio prompt order');
+assert(scaleLoraStack(studioState.loras).every((item) => item.weight <= 0.68) && scaleLoraStack([{ name: 'a', weight: 0.8 }, { name: 'b', weight: 0.4 }])[0]?.weight === 0.8, 'three strong loras scale down');
+assert(ANIME_STUDIO_CHECKPOINT.versionId === 1408658 && ANIME_STUDIO_CHECKPOINT.steps === 26 && ANIME_STUDIO_CHECKPOINT.width === 896, 'anime studio checkpoint');
 assert(familyPreset('Pony').quality.startsWith('score_9'), 'pony uses score tags');
 assert(familyPreset('NoobAI', 'NoobAI XL v-pred').vPrediction && familyPreset('Illustrious').vPrediction === false, 'v-pred is detected from the name');
 assert(sentPositiveText(previewState).includes('masterpiece') && sentPositiveText(previewState).includes('1girl') && sentPositiveText(previewState).includes('shiny eyes') && sentPositiveText(previewState).includes('<lora:ribbon:0.8>'), 'final prompt matches the request');

@@ -1,5 +1,6 @@
 import { extractLoras, formatParameters, plainPrompt, type GenerationParams } from '@/src/lib/a1111';
 import { bytesToBase64, base64ToBytes } from '@/src/lib/base64';
+import { scaleLoraStack, studioSuffix } from '@/src/lib/animeStudio';
 import { familyPreset } from '@/src/lib/checkpoints';
 import { DEFAULT_CHECKPOINT } from '@/src/lib/defaultModel';
 import type { GeneratorState } from '@/src/lib/genstore';
@@ -48,14 +49,16 @@ export function composeGenerationPrompt(state: GeneratorState, characterText = '
     : '';
   const preset = familyPreset(checkpoint?.baseModel ?? '', checkpoint?.name ?? '');
   const quality = state.qualityTags ? (state.quality == null ? preset.quality : state.quality.trim()) : '';
-  const bits = [
-    quality,
+  const style = state.studioStyle && state.studioStyle !== 'off' ? studioSuffix(state.studioStyle) : '';
+  const triggers = [
     state.triggers ? (checkpoint?.triggers ?? []).join(', ') : '',
     loraTriggers,
     characterText.trim(),
     embeddingTokens(state).join(', '),
-    state.prompt.trim(),
   ];
+  const bits = style
+    ? [state.prompt.trim(), style, ...triggers, quality]
+    : [quality, ...triggers, state.prompt.trim()];
   const auto = bits.filter(Boolean).join(', ');
   const extra = (state.extraPrompt || '').trim();
   if (!extra) return auto;
@@ -147,7 +150,13 @@ export function buildSaladGenerateBody(
     model_name: params.model,
     model_hash: params.modelHash,
     clip_skip: state.clipSkip,
-    loras: namedLoras(state, prompt).map((lora) => ({ name: lora.name, weight: lora.weight })),
+    loras: scaleLoraStack(namedLoras(state, prompt)).map((lora) => ({
+      name: lora.name,
+      weight: lora.weight,
+      ...(lora.versionId ? { versionId: lora.versionId } : {}),
+      ...(lora.baseModel ? { baseModel: lora.baseModel } : {}),
+      ...(lora.triggers?.length ? { triggers: lora.triggers } : {}),
+    })),
     embeddings: embeddingTokens(state),
     vae: state.vae || null,
     hires_scale: state.hires ? state.hiresScale : null,
