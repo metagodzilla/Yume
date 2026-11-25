@@ -53,7 +53,9 @@ import { CLOUD_OFF_INSTALL, canUseAsDefault, cloudIsOff, installAction, installR
 import { dropTiles, filterTiles, galleryTiles, reusePatch } from '@/src/lib/gallery';
 import type { Generation } from '@/src/lib/types';
 import { pullPercent, readSaladInstances, reallocateTarget } from '@/src/lib/saladCloud';
-import { emptyCloudWatch, observeCloud, STUCK_QUIET_MS } from '@/src/lib/stuckCloud';
+import { logQueryBody, progressFromLogs, readLogEntries } from '@/src/lib/saladLogs';
+import { emptyCloudWatch, observeCloud, STUCK_QUIET_MS, STUCK_STATE_MS } from '@/src/lib/stuckCloud';
+import { DEFAULT_SETTINGS } from '@/src/lib/types';
 import { fileLine, filesForPhase, formatReadyIn, overallEtaSeconds, softwareDetail } from '@/src/lib/startupEta';
 import { cloudIsWaiting, phoneDropNote, shouldUsePhone } from '@/src/lib/phoneFallback';
 import { areaCounts } from '@/src/lib/checkRows';
@@ -636,6 +638,38 @@ assert(stillStuck.kind === 'stuck' && stillStuck.autoMove, 'an unchanged pull is
 const movingPull = observeCloud(emptyCloudWatch(), { now: 0, instanceState: 'downloading', pullingPercent: 10, updateTime: 't', readyStatus: 503, healthStatus: null, modelDone: null, startupMessage: '', active: true }, true);
 const slowWatch = observeCloud(movingPull.watch, { now: 60_000, instanceState: 'downloading', pullingPercent: 11, updateTime: 't2', readyStatus: 503, healthStatus: null, modelDone: null, startupMessage: '', active: true }, true);
 assert(slowWatch.kind === 'slow' && !slowWatch.autoMove, 'a slow moving pull is not auto-moved');
+const probeBlind = { now: 0, instanceState: 'running', pullingPercent: 100, updateTime: 't', readyStatus: 503, healthStatus: 503, modelDone: null, startupMessage: '', active: true };
+const loadedQuiet = observeCloud(observeCloud(emptyCloudWatch(), probeBlind, true).watch, { ...probeBlind, now: STUCK_QUIET_MS }, true);
+assert(loadedQuiet.kind !== 'stuck' || loadedQuiet.autoMove, 'a running instance with no logs is the only running auto-move');
+assert(loadedQuiet.kind === 'stuck' && loadedQuiet.autoMove, 'running with no logs and no health for 10 min can auto-move');
+const logged = observeCloud(observeCloud(emptyCloudWatch(), { ...probeBlind, logAt: 0 }, true).watch, { ...probeBlind, now: STUCK_QUIET_MS - 1, logAt: STUCK_QUIET_MS - 1 }, true);
+assert(logged.kind === 'ok' && !logged.autoMove, 'a fresh server log is progress while the gateway is 503');
+const healthy = observeCloud(observeCloud(emptyCloudWatch(), { ...probeBlind, healthStatus: 200 }, true).watch, { ...probeBlind, now: STUCK_STATE_MS, healthStatus: 200 }, true);
+assert(healthy.kind === 'ok' && !healthy.autoMove, 'health 200 is progress even when Salad ready stays false');
+const creating = observeCloud(observeCloud(emptyCloudWatch(), { ...probeBlind, instanceState: 'creating', pullingPercent: null }, true).watch, { ...probeBlind, now: STUCK_QUIET_MS, instanceState: 'creating', pullingPercent: null }, true);
+assert(!creating.autoMove, 'creating does not auto-move');
+assert(DEFAULT_SETTINGS.autoFixStuckCloud === false, 'auto-fix stays off until it is turned on');
+const loggedBytes = progressFromLogs(readLogEntries({
+  items: [
+    { time: '2026-11-25T19:27:00Z', text_log: 'checkpoint download WAI-illustrious-SDXL 2000000000/6946000000 bytes (29%) 12.50 MB/s' },
+    { time: '2026-11-25T19:22:19Z', text_log: 'Uvicorn running on http://0.0.0.0:8080' },
+  ],
+}));
+assert(loggedBytes.bytesDone === 2_000_000_000 && loggedBytes.bytesTotal === 6_946_000_000 && loggedBytes.name === 'WAI-illustrious-SDXL' && (loggedBytes.bytesPerSecond ?? 0) > 1_000_000 && loggedBytes.logAt != null, 'Salad logs carry the WAI byte bar');
+assert(logQueryBody({ group: 'yume-server', instanceId: 'inst-1', start: '2026-11-25T19:00:00Z', end: '2026-11-25T19:30:00Z' }).query.includes('instance_id = "inst-1"'), 'log query is scoped to the instance');
+const fromLogs = cloudChecklist({
+  hasEndpoint: true,
+  instanceState: 'running',
+  running: 1,
+  pullPercent: 100,
+  healthStatus: 503,
+  readyStatus: 503,
+  modelDone: loggedBytes.bytesDone,
+  modelTotal: loggedBytes.bytesTotal,
+  modelFromLogs: true,
+  startupMessage: loggedBytes.message,
+});
+assert(fromLogs.steps[4]?.state === 'current' && fromLogs.steps[4]?.percent === 29 && fromLogs.steps[2]?.state === 'done', 'a closed gateway still shows the logged model bar');
 const weights = filesForPhase(5, [{ name: 'Tile ControlNet', type: 'ControlNet', versionId: null, bytesDone: 10, bytesTotal: 20, speed: 1024 * 1024, state: 'downloading', etaSeconds: 90 }, { name: 'WAI', type: 'Checkpoint', versionId: 1, bytesDone: 1, bytesTotal: 2, speed: 1, state: 'done', etaSeconds: null }]);
 assert(weights.length === 1 && weights[0]?.name === 'Tile ControlNet' && fileLine(weights[0]!).includes('MB') && fileLine({ ...weights[0]!, state: 'waiting' }) === 'waiting', 'each weight file has its own line');
 assert(formatReadyIn(overallEtaSeconds(2, 120, 0)).startsWith('Ready in ~'), 'overall estimate is a ready-in line');

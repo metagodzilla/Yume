@@ -164,8 +164,10 @@ export type Settings = {
   idleStopMinutes: number;
   lowPower: boolean;
   serverUpdateCheck: boolean;
-  /** Move a Salad machine that stops making progress. On unless turned off. */
+  /** Move a Salad machine that stops making progress. Off until turned on. */
   autoFixStuckCloud?: boolean;
+  /** The person chose the auto-fix setting. Older installs stay off. */
+  autoFixStuckChosen?: boolean;
   /** Draw on the phone while Salad is still starting. On unless turned off. */
   autoPhoneWhileCloud?: boolean;
 };
@@ -224,7 +226,8 @@ export const DEFAULT_SETTINGS: Settings = {
   idleStopMinutes: 0,
   lowPower: false,
   serverUpdateCheck: true,
-  autoFixStuckCloud: true,
+  autoFixStuckCloud: false,
+  autoFixStuckChosen: false,
   autoPhoneWhileCloud: true,
 };
 

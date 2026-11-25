@@ -6,7 +6,7 @@ import { ActivityIndicator, AppState, Platform, Pressable, StyleSheet, Text, Tex
 
 import { clientReportBody, fetchServerErrors, sendClientReport } from '@/src/lib/clientReport';
 import { rememberFault, reportDocument, type ServerFault } from '@/src/lib/reportText';
-import { changeContainerGroup, containerGroupUrl, liveContainerGroup, readContainerGroup, readContainerInstances, reallocateInstance } from '@/src/lib/cloudActions';
+import { changeContainerGroup, containerGroupUrl, liveContainerGroup, queryContainerLogs, readContainerGroup, readContainerInstances, reallocateInstance } from '@/src/lib/cloudActions';
 import { beginCloudStart, beginCloudStop, cloudRunState, finishCloudStop, noteLiveSession, subscribeCloudRun } from '@/src/lib/cloudRun';
 import { capReached, checkLine, cloudChecklist, deploymentForEndpoint, formatCostLine, hostOf, LIVE_GATEWAY, resolveHourly, sessionUsd, type CheckLine, type ChecklistStep } from '@/src/lib/cloudSteps';
 import { DISK_RESET_NOTE, restoreSummary } from '@/src/lib/keptModels';
@@ -23,6 +23,7 @@ import { groupStatusOf, instanceCounts, normalizeSaladKey, pickActiveInstance, p
 import { setCloudGate, useCloudGate } from '@/src/lib/cloudGate';
 import { requestPhoneGenerate } from '@/src/lib/cloudRedo';
 import { cloudIsWaiting } from '@/src/lib/phoneFallback';
+import { progressFromLogs, readLogEntries, type LogProgress } from '@/src/lib/saladLogs';
 import { emptyCloudWatch, noteCloudMove, observeCloud, type CloudWatchView } from '@/src/lib/stuckCloud';
 import { fileLine, filesForPhase, formatReadyIn, overallEtaSeconds, parseProgressFiles, phaseDetail, softwareDetail, type WeightFile } from '@/src/lib/startupEta';
 import { areaCounts, type CheckRow } from '@/src/lib/checkRows';
@@ -91,6 +92,7 @@ export function StatusPanel({ preview = '' }: { preview?: string }) {
   const [watchView, setWatchView] = useState<CloudWatchView | null>(null);
   const [pullSamples, setPullSamples] = useState<{ at: number; percent: number }[]>([]);
   const cloudStart = useRef<number | null>(null);
+  const logCache = useRef<{ at: number; progress: LogProgress | null }>({ at: 0, progress: null });
   const capped = useRef(false);
   const tally = counts(queue);
   const job = queue.jobs.find((item) => item.status === 'running' || item.status === 'paused' || item.status === 'waiting');
@@ -191,6 +193,36 @@ export function StatusPanel({ preview = '' }: { preview?: string }) {
       const ready = saved ? await probe(readyUrl, { headers }, 8000) : undefined;
       const startup = saved ? await probe(`${saved}/startup`, { headers }, 8000) : undefined;
       const startupBody = startup?.body as { bytesDone?: number; bytesTotal?: number; bytesPerSecond?: number; etaSeconds?: number | null; message?: string } | undefined;
+      const gatewayClosed = health?.status !== 200;
+      let logProgress = logCache.current.progress;
+      if (key && deployment && gatewayClosed && (activeState === 'running' || running > 0)) {
+        if (Date.now() - logCache.current.at > 20_000) {
+          try {
+            const end = new Date();
+            const start = new Date(end.getTime() - 15 * 60 * 1000);
+            const payload = await queryContainerLogs({
+              apiKey: key,
+              organization: deployment.organization,
+              group: deployment.group,
+              instanceId: cloudHandle.current.instanceId,
+              start: start.toISOString(),
+              end: end.toISOString(),
+            });
+            logProgress = progressFromLogs(readLogEntries(payload));
+          } catch {
+            logProgress = logCache.current.progress;
+          }
+          logCache.current = { at: Date.now(), progress: logProgress };
+        }
+      } else if (!gatewayClosed) {
+        logCache.current = { at: 0, progress: null };
+        logProgress = null;
+      }
+      const startupDone = typeof startupBody?.bytesDone === 'number' ? startupBody.bytesDone : null;
+      const startupTotal = typeof startupBody?.bytesTotal === 'number' ? startupBody.bytesTotal : null;
+      const modelDone = startupDone != null && startupDone > 0 ? startupDone : logProgress?.bytesDone ?? startupDone;
+      const modelTotal = startupTotal != null && startupTotal > 0 ? startupTotal : logProgress?.bytesTotal ?? startupTotal;
+      const modelFromLogs = (startupDone == null || startupDone <= 0) && logProgress?.bytesTotal != null && logProgress.bytesTotal > 0;
       const probeError = [groupError, health?.error, ready?.error].filter(Boolean).join(' ');
       let restoreTotal = 0;
       let restorePercent: number | null = null;
@@ -221,12 +253,13 @@ export function StatusPanel({ preview = '' }: { preview?: string }) {
         readyStatus: ready?.status,
         healthReady: health?.body?.ready,
         readyDetail: textOf(ready) || textOf(health),
-        startupMessage: typeof startupBody?.message === 'string' ? startupBody.message : '',
+        startupMessage: (typeof startupBody?.message === 'string' && startupBody.message) || logProgress?.message || '',
         probeError: probeError || undefined,
         pullPercent: groupPull,
         instanceState: activeState,
-        modelDone: typeof startupBody?.bytesDone === 'number' ? startupBody.bytesDone : null,
-        modelTotal: typeof startupBody?.bytesTotal === 'number' ? startupBody.bytesTotal : null,
+        modelDone,
+        modelTotal,
+        modelFromLogs,
         restoreTotal,
         restorePercent,
       });
@@ -236,6 +269,20 @@ export function StatusPanel({ preview = '' }: { preview?: string }) {
       setLiveTitle(view.liveTitle);
       const progress = saved ? await probe(`${saved}/progress`, { headers }, 8000) : undefined;
       const listedFiles = parseProgressFiles(progress?.body);
+      if (!listedFiles.length && logProgress?.bytesTotal) {
+        const speed = logProgress.bytesPerSecond ?? 0;
+        const done = logProgress.bytesDone ?? 0;
+        listedFiles.push({
+          name: logProgress.name || 'Checkpoint',
+          type: 'Checkpoint',
+          versionId: null,
+          bytesDone: done,
+          bytesTotal: logProgress.bytesTotal,
+          speed,
+          state: done >= logProgress.bytesTotal ? 'done' : 'downloading',
+          etaSeconds: speed > 0 && logProgress.bytesTotal > done ? Math.round((logProgress.bytesTotal - done) / speed) : null,
+        });
+      }
       setFiles(listedFiles);
       const seen = listedFiles.map((item) => item.feature || '').filter(Boolean);
       if (seen.length) {
@@ -244,10 +291,15 @@ export function StatusPanel({ preview = '' }: { preview?: string }) {
         if (next.length !== prior.length) await saveFeatures(next);
       }
       setModelStats({
-        done: typeof startupBody?.bytesDone === 'number' ? startupBody.bytesDone : 0,
-        total: typeof startupBody?.bytesTotal === 'number' ? startupBody.bytesTotal : 0,
-        speed: typeof startupBody?.bytesPerSecond === 'number' ? startupBody.bytesPerSecond : 0,
-        eta: typeof startupBody?.etaSeconds === 'number' ? startupBody.etaSeconds : null,
+        done: modelDone ?? 0,
+        total: modelTotal ?? 0,
+        speed: typeof startupBody?.bytesPerSecond === 'number' && startupBody.bytesPerSecond > 0 ? startupBody.bytesPerSecond : logProgress?.bytesPerSecond ?? 0,
+        eta:
+          typeof startupBody?.etaSeconds === 'number'
+            ? startupBody.etaSeconds
+            : logProgress?.bytesPerSecond && logProgress.bytesTotal && (logProgress.bytesDone ?? 0) < logProgress.bytesTotal
+              ? Math.round((logProgress.bytesTotal - (logProgress.bytesDone ?? 0)) / logProgress.bytesPerSecond)
+              : null,
       });
       const observed = observeCloud(
         watchRef.current,
@@ -258,11 +310,12 @@ export function StatusPanel({ preview = '' }: { preview?: string }) {
           updateTime,
           readyStatus: ready?.status ?? null,
           healthStatus: health?.status ?? null,
-          modelDone: typeof startupBody?.bytesDone === 'number' ? startupBody.bytesDone : null,
-          startupMessage: typeof startupBody?.message === 'string' ? startupBody.message : '',
+          modelDone,
+          startupMessage: (typeof startupBody?.message === 'string' && startupBody.message) || logProgress?.message || '',
+          logAt: logProgress?.logAt ?? null,
           active: view.phase === 'starting',
         },
-        studio.settings.autoFixStuckCloud !== false,
+        studio.settings.autoFixStuckCloud === true,
       );
       watchRef.current = observed.watch;
       setWatchView(observed);
@@ -312,6 +365,14 @@ export function StatusPanel({ preview = '' }: { preview?: string }) {
 
   async function moveMachine(auto: boolean, reason: string) {
     if (movingCloud.current) return;
+    if (!auto) {
+      const ok = await confirmAction(
+        'Move to a new machine?',
+        'Salad will leave this machine and start over. A server that is still starting has to download again.',
+        'Move',
+      );
+      if (!ok) return;
+    }
     const handle = cloudHandle.current;
     if (!handle.key || !handle.deployment || !handle.instanceId) return;
     movingCloud.current = true;

@@ -96,6 +96,8 @@ export function cloudChecklist(input: {
   instanceState?: string;
   modelDone?: number | null;
   modelTotal?: number | null;
+  /** Bytes came from Salad container logs while the gateway was still closed. */
+  modelFromLogs?: boolean;
   restoreTotal?: number;
   restorePercent?: number | null;
 }): { phase: CloudPhase; pill: string; liveTitle: string; steps: ChecklistStep[]; authBlocked: boolean; overall: number | null } {
@@ -107,6 +109,7 @@ export function cloudChecklist(input: {
     input.healthReady === false ||
     /download|loading|not ready/i.test(`${input.readyDetail || ''} ${input.startupMessage || ''}`);
   const modelEvidence = input.modelDone != null || /model|download|loading|not ready/i.test(`${input.readyDetail || ''} ${input.startupMessage || ''}`);
+  const loggedModel = Boolean(input.modelFromLogs) && (input.modelTotal ?? 0) > 0 && input.modelDone != null;
   const pullSettled = imagePullSettled(input);
   const softwareDownload = !pullSettled && ((input.downloading ?? 0) > 0 || (input.pullPercent != null && !healthUp));
   let index = 0;
@@ -143,7 +146,7 @@ export function cloudChecklist(input: {
   if (softwareDownload && !healthUp) {
     index = 2;
     liveTitle = 'Downloading server software (Salad)';
-  } else if (modelWait && healthUp && modelEvidence) {
+  } else if ((modelWait && healthUp && modelEvidence) || (((input.instanceState || '').toLowerCase() === 'running' || (input.running ?? 0) > 0 || pullSettled) && loggedModel)) {
     index = 4;
     liveTitle = 'Downloading model on cloud (first start can take ~15-25 min)';
   } else if (pullSettled || (input.creating ?? 0) > 0 || healthUp || (input.running ?? 0) > 0 || input.groupStatus === 'running' || (input.instanceState || '').toLowerCase() === 'running') {

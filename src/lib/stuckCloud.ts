@@ -15,6 +15,8 @@ export type CloudSample = {
   modelDone: number | null;
   startupMessage: string;
   active: boolean;
+  /** Newest Salad container log time. Null means this sample did not see one. */
+  logAt?: number | null;
 };
 
 export type CloudWatch = {
@@ -28,6 +30,8 @@ export type CloudWatch = {
   samples: { at: number; percent: number }[];
   autoMoves: number;
   movedFor: string;
+  lastLogAt: number | null;
+  modelDone: number | null;
 };
 
 export type CloudWatchView = {
@@ -50,6 +54,8 @@ export function emptyCloudWatch(): CloudWatch {
     samples: [],
     autoMoves: 0,
     movedFor: '',
+    lastLogAt: null,
+    modelDone: null,
   };
 }
 
@@ -77,7 +83,7 @@ export function pullRate(samples: { at: number; percent: number }[]): { perMinut
 export function observeCloud(watch: CloudWatch, sample: CloudSample, autoFix: boolean): CloudWatchView {
   if (!sample.active) {
     return {
-      watch: { ...watch, startedAt: null, state: '', signature: '', samples: [], movedFor: '' },
+      watch: { ...watch, startedAt: null, state: '', signature: '', samples: [], movedFor: '', lastLogAt: null, modelDone: null },
       kind: 'ok',
       autoMove: false,
       eta: null,
@@ -85,7 +91,8 @@ export function observeCloud(watch: CloudWatch, sample: CloudSample, autoFix: bo
     };
   }
   const state = sample.instanceState || 'unknown';
-  const signature = [state, sample.pullingPercent ?? '', sample.updateTime ?? '', sample.readyStatus ?? '', sample.modelDone ?? '', sample.startupMessage].join('|');
+  const lastLogAt = sample.logAt != null ? sample.logAt : watch.lastLogAt;
+  const signature = [state, sample.pullingPercent ?? '', sample.updateTime ?? '', sample.readyStatus ?? '', sample.healthStatus ?? '', sample.modelDone ?? '', lastLogAt ?? '', sample.startupMessage].join('|');
   const next: CloudWatch = {
     ...watch,
     startedAt: watch.startedAt ?? sample.now,
@@ -96,29 +103,36 @@ export function observeCloud(watch: CloudWatch, sample: CloudSample, autoFix: bo
     signature,
     signatureSince: signature === watch.signature && watch.signature !== '' ? watch.signatureSince : sample.now,
     samples: sample.pullingPercent == null ? watch.samples : [...watch.samples, { at: sample.now, percent: sample.pullingPercent }].slice(-8),
+    lastLogAt,
+    modelDone: sample.modelDone,
   };
   const rate = pullRate(next.samples);
   const eta = rate && Number.isFinite(rate.etaMs) ? formatPullEta(rate.etaMs) : null;
-  const quiet = sample.now - next.signatureSince;
   const pullQuiet = sample.now - next.pullSince;
-  const stateQuiet = sample.now - next.stateSince;
-  const notReady = sample.readyStatus !== 200;
-  const gatewayDown = sample.readyStatus === 503 || (sample.healthStatus != null && sample.healthStatus !== 200 && sample.healthStatus !== 403);
+  const healthUp = sample.healthStatus === 200;
+  const unreachable = sample.healthStatus == null || (sample.healthStatus !== 200 && sample.healthStatus !== 403);
+  const logsQuiet = lastLogAt == null || sample.now - lastLogAt >= STUCK_QUIET_MS;
   const downloading = state.includes('download') || state.includes('pull');
-  const creating = state.includes('creat');
-  const running = state.includes('run');
+  const running = state === 'running' || (state.includes('run') && !downloading);
   let kind: CloudWatchView['kind'] = 'ok';
-  if (downloading && sample.pullingPercent != null && pullQuiet >= STUCK_QUIET_MS) kind = 'stuck';
-  else if (downloading && rate && rate.perMinute > 0 && rate.perMinute <= SLOW_PERCENT_PER_MIN) kind = 'slow';
-  else if ((creating || (running && notReady && gatewayDown)) && quiet >= STUCK_QUIET_MS) kind = 'stuck';
-  else if (notReady && stateQuiet >= STUCK_STATE_MS) kind = 'stuck';
-  const episode = `${state}|${next.pullSince}|${next.signatureSince}`;
+  let reason: 'pull' | 'logs' | '' = '';
+  if (downloading && sample.pullingPercent != null && pullQuiet >= STUCK_QUIET_MS) {
+    kind = 'stuck';
+    reason = 'pull';
+  } else if (downloading && rate && rate.perMinute > 0 && rate.perMinute <= SLOW_PERCENT_PER_MIN) kind = 'slow';
+  else if (running && !healthUp && unreachable && logsQuiet && sample.now - next.stateSince >= STUCK_QUIET_MS) {
+    kind = 'stuck';
+    reason = 'logs';
+  }
+  const episode = `${state}|${reason}|${next.pullSince}|${lastLogAt ?? ''}`;
   const autoMove = kind === 'stuck' && autoFix && next.autoMoves < MAX_AUTO_MOVES && next.movedFor !== episode;
   const banner =
     kind === 'stuck'
       ? next.autoMoves >= MAX_AUTO_MOVES
         ? 'Stuck on a bad Salad machine. Automatic moves are paused for this session.'
-        : 'Stuck on a bad Salad machine. Nothing has moved for 10 minutes.'
+        : reason === 'logs'
+          ? 'Stuck on a bad Salad machine. No server logs for 10 minutes, and the server is not answering.'
+          : 'Stuck on a bad Salad machine. The image download has not moved for 10 minutes.'
       : kind === 'slow'
         ? 'Slow machine. The server software is still downloading. You can move to a new machine.'
         : '';
