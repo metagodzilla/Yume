@@ -116,11 +116,13 @@ def loaded_model_name() -> str:
     return "Animagine XL 4.0"
 
 
-def needs_fixed_vae(base_model: str) -> bool:
-    text = (base_model or "").lower()
-    if "flux" in text or "sd 1" in text or "sd1" in text:
+def needs_fixed_vae(base_model: str, filename: str = "") -> bool:
+    blob = f"{base_model} {filename}".lower()
+    if "animagine-xl-4.0-opt" in blob or "4.0 opt" in blob:
         return False
-    return any(token in text for token in ("sdxl", "illustrious", "pony", "noob", "xl"))
+    if "flux" in blob or "sd 1" in blob or "sd1" in blob:
+        return False
+    return any(token in blob for token in ("sdxl", "illustrious", "pony", "noob", "xl"))
 
 
 def hires_plan(body: Any) -> dict[str, Any] | None:
@@ -158,25 +160,25 @@ def lora_directories() -> list[str]:
 
 
 def boot_checkpoint() -> dict[str, Any]:
-    """The catalog default, or Animagine when that file is not on disk."""
-    from yume_server.catalog import ensure_default, list_models
+    """The catalog default, or Animagine Opt when that file is not on disk."""
+    from yume_server.catalog import ensure_opt_default, list_models
 
-    ensure_default()
+    ensure_opt_default()
     models = [item for item in list_models() if (item.get("type") or "Checkpoint") == "Checkpoint"]
     chosen = next((item for item in models if item.get("isDefault")), None) or next(
         (item for item in models if item.get("versionId") == DEFAULT_VERSION),
         None,
     )
     if chosen is None:
-        return ensure_default()
+        return ensure_opt_default()
     version = int(chosen.get("versionId") or 0)
     path = str(chosen.get("path") or "")
     diffusers = chosen.get("source") == "diffusers" or (version == DEFAULT_VERSION and not path)
-    if diffusers or (path and os.path.exists(path) and os.path.getsize(path) > 1_000_000):
+    if diffusers or (path and os.path.exists(path) and os.path.getsize(path) > 1_000_000) or version == 1408658:
         return chosen
     if path and not mock_mode():
-        _LOG.warning("default checkpoint %s is not on disk; loading Animagine", chosen.get("name"))
-    return ensure_default()
+        _LOG.warning("default checkpoint %s is not on disk; loading Animagine Opt", chosen.get("name"))
+    return ensure_opt_default()
 
 
 def cache_dir() -> str:
@@ -240,6 +242,16 @@ def start_model() -> None:
         ensure_anime_upscaler()
         name = str(record.get("name") or "Animagine XL 4.0")
         path = str(record.get("path") or "")
+        if version == 1408658:
+            from yume_server.catalog import materialize_opt
+
+            mark("downloading", "Downloading Animagine Opt")
+            record = materialize_opt()
+            mark("loading", "Loading Animagine XL 4.0 Opt")
+            _load_single_file(record)
+            note_loaded(version)
+            mark("ready", "Ready", done=1, total=1)
+            return
         diffusers = record.get("source") == "diffusers" or (version == DEFAULT_VERSION and not path)
         if diffusers:
             mark("downloading", "Downloading model")
@@ -773,7 +785,7 @@ def _load_single_file(record: dict[str, Any]) -> None:
     else:
         from diffusers import StableDiffusionXLPipeline
 
-        vae = _fixed_vae(dtype) if needs_fixed_vae(base) else None
+        vae = _fixed_vae(dtype) if needs_fixed_vae(base, os.path.basename(path)) else None
         kwargs: dict[str, Any] = {"torch_dtype": dtype}
         if vae is not None:
             kwargs["vae"] = vae

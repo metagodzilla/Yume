@@ -16,7 +16,9 @@ from typing import Any, Callable
 from yume_server.downloads import DownloadCancelled, DownloadPaused, download_resumable, resource_root
 
 DEFAULT_VERSION = 1337429
+OPT_VERSION = 1408658
 HF_ANIMAGINE_URL = "https://huggingface.co/cagliostrolab/animagine-xl-4.0/resolve/main/animagine-xl-4.0.safetensors"
+HF_OPT_URL = "https://huggingface.co/cagliostrolab/animagine-xl-4.0/resolve/main/animagine-xl-4.0-opt.safetensors"
 
 
 class CivitaiAuthError(RuntimeError):
@@ -40,7 +42,7 @@ DEFAULT_RECORD: dict[str, Any] = {
     "hash": "1d5b43ff75",
     "sha256": "1D5B43FF75B6AB598502D4C779D2FBFA3DCECA51C60C3B609640A60772333916",
     "triggers": [],
-    "isDefault": True,
+    "isDefault": False,
     "recommended": {
         "sampler": "Euler a",
         "steps": 25,
@@ -84,6 +86,24 @@ def list_models() -> list[dict[str, Any]]:
     return list(load_catalog()["models"])
 
 
+OPT_RECORD: dict[str, Any] = {
+    "versionId": OPT_VERSION,
+    "modelId": 1188071,
+    "name": "Animagine XL 4.0 Opt",
+    "version": "opt",
+    "type": "Checkpoint",
+    "baseModel": "SDXL 1.0",
+    "filename": "animagine-xl-4.0-opt.safetensors",
+    "hash": "",
+    "sha256": "",
+    "triggers": [],
+    "isDefault": True,
+    "source": "huggingface",
+    "downloadUrl": HF_OPT_URL,
+    "recommended": {"sampler": "Euler a", "steps": 26, "cfg": 6, "clipSkip": 2, "width": 896, "height": 1152},
+}
+
+
 def ensure_default() -> dict[str, Any]:
     """Register Animagine without downloading the single-file checkpoint.
 
@@ -102,6 +122,39 @@ def ensure_default() -> dict[str, Any]:
     return record
 
 
+def ensure_opt_default() -> dict[str, Any]:
+    """Register the Anime Studio checkpoint and make it the default the first time it appears."""
+    ensure_default()
+    data = load_catalog()
+    opt = next((item for item in data["models"] if item.get("versionId") == OPT_VERSION), None)
+    if opt:
+        return opt
+    for item in data["models"]:
+        if (item.get("type") or "Checkpoint") == "Checkpoint":
+            item["isDefault"] = False
+    record = dict(OPT_RECORD)
+    data["models"].insert(0, record)
+    save_catalog(data)
+    return record
+
+
+def materialize_opt() -> dict[str, Any]:
+    """Download the Anime Studio single-file checkpoint. Its own VAE stays in the file."""
+    record = dict(ensure_opt_default())
+    path = os.path.join(model_dir(), record["filename"])
+    record["path"] = path
+    record["source"] = "huggingface"
+    mock = os.environ.get("YUME_MOCK", "").strip() in {"1", "true", "yes"}
+    if not mock and not (os.path.exists(path) and os.path.getsize(path) > 1_000_000):
+        _materialize(record, None)
+    elif mock and not os.path.exists(path):
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "wb") as handle:
+            handle.write(b"yume-opt")
+    _store_record(record)
+    return record
+
+
 def civitai_token(explicit: str | None) -> str | None:
     value = (explicit or os.environ.get("CIVITAI_TOKEN") or "").strip()
     return value or None
@@ -112,6 +165,8 @@ def download_plan(record: dict[str, Any], token: str | None) -> tuple[str, dict[
     headers = {"User-Agent": "yume"}
     if record.get("versionId") == DEFAULT_VERSION:
         return HF_ANIMAGINE_URL, headers
+    if record.get("versionId") == OPT_VERSION:
+        return HF_OPT_URL, headers
     resolved = civitai_token(token)
     if not resolved:
         raise CivitaiAuthError(
@@ -343,6 +398,12 @@ def _run_install(job_id: str, version_id: int, token: str | None, hint: dict[str
         if version_id == DEFAULT_VERSION:
             record = ensure_default()
             _set_install(job_id, state="done", record=record, error="", type="Checkpoint", name=record.get("name") or "")
+            return
+        if version_id == OPT_VERSION:
+            record = materialize_opt()
+            size = os.path.getsize(record["path"]) if record.get("path") and os.path.exists(record["path"]) else 0
+            _set_install(job_id, state="done", record=record, error="", type="Checkpoint", name=record.get("name") or "", bytesDone=size, bytesTotal=size)
+            _maybe_load_restored(OPT_VERSION, "Checkpoint")
             return
         with _INSTALL_LOCK:
             existing = (_INSTALLS.get(job_id) or {}).get("record")
