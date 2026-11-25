@@ -15,6 +15,7 @@ import { readCloudReady } from '@/src/lib/cloudReady';
 import { confirmAction } from '@/src/lib/confirm';
 import { CLOUD_OFF_INSTALL, canUseAsDefault, installAction, isServerInstalled, needsCloudStart } from '@/src/lib/installGate';
 import { startDownload } from '@/src/lib/downloadClient';
+import { ensureSelectedLoras } from '@/src/lib/ensureLoras';
 import { queueInstall } from '@/src/lib/queuestore';
 import { sendClientReport } from '@/src/lib/clientReport';
 import { rememberFault } from '@/src/lib/reportText';
@@ -186,13 +187,30 @@ export default function ModelScreen() {
             {model.type === 'LORA' || model.type === 'LoCon' ? (
               <Pressable
                 onPress={() =>
-                  addLora({
-                    name: loraFileName(version, model.name),
-                    weight: 0.8,
-                    modelId: model.id,
-                    versionId: version.id,
-                    triggers: version.trainedWords,
-                  })
+                  void (async () => {
+                    const picked = {
+                      name: loraFileName(version, model.name),
+                      weight: 0.8,
+                      modelId: model.id,
+                      versionId: version.id,
+                      triggers: version.trainedWords,
+                      baseModel: version.baseModel,
+                    };
+                    addLora(picked);
+                    if (studio.settings.provider !== 'salad') return;
+                    const endpoint = normalizeEndpoint(studio.settings.saladEndpoint);
+                    const key = await readSaladKey();
+                    const token = await readCivitaiToken().catch(() => null);
+                    if (!endpoint || !key) return;
+                    setStatus('Downloading LoRA 0%');
+                    await ensureSelectedLoras({
+                      loras: [picked],
+                      endpoint,
+                      apiKey: key,
+                      civitaiToken: token,
+                      onProgress: setStatus,
+                    });
+                  })()
                 }>
                 <Text style={styles.link}>Use this LoRA</Text>
               </Pressable>

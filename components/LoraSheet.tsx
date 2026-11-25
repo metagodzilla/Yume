@@ -2,9 +2,11 @@ import { router } from 'expo-router';
 import { useEffect, useState } from 'react';
 import { Modal, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 
-import { fetchCatalog } from '@/src/lib/checkpointUse';
+import { fetchResources } from '@/src/lib/checkpointUse';
 import { loraBaseWarning, toInstalled, type CatalogCheckpoint } from '@/src/lib/checkpoints';
 import { addLora, useGenerator } from '@/src/lib/genstore';
+import { loraChoices } from '@/src/lib/loraGate';
+import { readKeptLibrary } from '@/src/lib/restoreModels';
 import { normalizeEndpoint } from '@/src/lib/salad';
 import { readSaladKey } from '@/src/lib/storage';
 import { useStudio } from '@/src/studio';
@@ -37,15 +39,17 @@ export function LoraSheet({ visible, onClose }: { visible: boolean; onClose: () 
       const endpoint = normalizeEndpoint(studio.settings.saladEndpoint);
       const key = await readSaladKey();
       if (!endpoint || !key) {
-        if (!cancelled) setRows(local);
+        if (!cancelled) setRows([]);
         return;
       }
       try {
-        const catalog = await fetchCatalog(endpoint, key);
-        if (!cancelled) setRows(catalog.models.filter(isLora));
+        const [catalog, kept] = await Promise.all([fetchResources(endpoint, key), readKeptLibrary()]);
+        if (cancelled) return;
+        const choices = loraChoices(catalog.models, kept.models);
+        setRows(choices.map((item) => ({ ...item, type: 'LORA', hash: '', sha256: '', isDefault: false })));
       } catch (caught) {
         if (!cancelled) {
-          setRows(local);
+          setRows([]);
           setError(caught instanceof Error ? caught.message : 'The LoRA list could not be read.');
         }
       }
@@ -91,6 +95,7 @@ export function LoraSheet({ visible, onClose }: { visible: boolean; onClose: () 
                     <Text style={styles.name}>{item.name}</Text>
                     <Text style={styles.meta}>
                       {item.baseModel || 'unknown base'}
+                      {'restoring' in item && item.restoring ? ' · restoring' : ''}
                       {item.triggers?.length ? ` · ${item.triggers.join(', ')}` : ''}
                     </Text>
                     {warning ? <Text style={styles.warn}>{warning}</Text> : null}

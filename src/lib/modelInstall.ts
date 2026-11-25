@@ -46,6 +46,8 @@ export async function runModelInstall(input: {
   type?: string;
   name?: string;
   filename?: string;
+  baseModel?: string;
+  triggers?: string[];
   onProgress: (label: string, fraction: number) => void;
   signal?: { cancelled?: boolean };
 }): Promise<InstallJob> {
@@ -75,6 +77,8 @@ export async function runModelInstall(input: {
           ...(input.type ? { type: input.type } : {}),
           ...(input.name ? { name: input.name } : {}),
           ...(input.filename ? { filename: input.filename } : {}),
+          ...(input.baseModel ? { baseModel: input.baseModel } : {}),
+          ...(input.triggers?.length ? { triggers: input.triggers } : {}),
         }),
       });
     } catch {

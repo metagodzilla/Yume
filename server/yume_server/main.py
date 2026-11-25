@@ -25,7 +25,7 @@ from pydantic import BaseModel, Field
 from yume_mesh.generate import generate_mesh
 from yume_server.catalog import cancel_install, delete_version, ensure_default, ensure_jobs_loaded, install_progress, list_installs, list_models, pause_install, restore_models, resume_install, set_default, start_install
 from yume_server.errors import add_client_report, list_errors, record_error, sanitize
-from yume_server.generate import A1111_SAMPLERS, SCHEDULERS, generate_images, loaded_model_name, loaded_version, mark_default_loaded, mock_mode, release_loaded, start_model, start_use, use_progress
+from yume_server.generate import A1111_SAMPLERS, LoraInstalling, SCHEDULERS, friendly_lora_error, generate_images, loaded_model_name, loaded_version, mark_default_loaded, mock_mode, prepare_loras, release_loaded, start_model, start_use, use_progress
 from yume_server.jobs import cancel as cancel_job
 from yume_server.jobs import get as get_job
 from yume_server.jobs import pause as pause_job
@@ -40,8 +40,11 @@ _PAYLOAD: contextvars.ContextVar[Any] = contextvars.ContextVar("yume_payload", d
 
 
 class LoraIn(BaseModel):
-    name: str
+    name: str = ""
     weight: float = 0.8
+    versionId: int | None = None
+    baseModel: str | None = None
+    triggers: list[str] = []
 
 
 class MeshIn(BaseModel):
@@ -113,7 +116,7 @@ def _validate(body: GenerateIn) -> None:
     if not 1 <= body.clip_skip <= 4:
         raise HTTPException(status_code=400, detail="Clip skip must be from 1 to 4.")
     for lora in body.loras:
-        if not lora.name.strip():
+        if not lora.name.strip() and not lora.versionId:
             raise HTTPException(status_code=400, detail="A LoRA is missing its name.")
         if not 0 <= lora.weight <= 2:
             raise HTTPException(status_code=400, detail="LoRA weight must be from 0 to 2.")
@@ -524,10 +527,14 @@ def generate(body: GenerateIn, request: Request) -> dict[str, Any]:
     if not state["ready"]:
         raise HTTPException(status_code=503, detail="Model is still loading.")
     _validate(body)
+    token = request.headers.get("x-civitai-token", "").strip() or None
     try:
+        prepare_loras(body, token)
         images, seeds, model, consistency, switched = generate_images(body)
+    except LoraInstalling as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     except FileNotFoundError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+        raise HTTPException(status_code=400, detail=friendly_lora_error(str(exc))) from exc
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except RuntimeError as exc:

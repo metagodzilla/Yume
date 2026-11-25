@@ -14,12 +14,23 @@ export function embeddingTokens(state: GeneratorState): string[] {
   return state.embeddings.split(',').map((item) => item.trim()).filter(Boolean);
 }
 
-export function namedLoras(state: GeneratorState, prompt: string): { name: string; weight: number }[] {
+export function namedLoras(state: GeneratorState, prompt: string): { name: string; weight: number; versionId?: number; baseModel?: string; triggers?: string[] }[] {
   const extracted = extractLoras(prompt);
   const combined = [...state.loras, ...extracted.loras.filter((tag) => !state.loras.some((item) => item.name === tag.name))];
   return combined
-    .map((lora) => ({ name: lora.name.trim(), weight: Number(lora.weight) || 0 }))
-    .filter((lora) => lora.name);
+    .map((lora) => {
+      const versionId = 'versionId' in lora && typeof lora.versionId === 'number' ? lora.versionId : undefined;
+      const baseModel = 'baseModel' in lora && typeof lora.baseModel === 'string' ? lora.baseModel : undefined;
+      const triggers = 'triggers' in lora && Array.isArray(lora.triggers) ? lora.triggers.filter((item) => typeof item === 'string') : undefined;
+      return {
+        name: lora.name.trim(),
+        weight: Number(lora.weight) || 0,
+        ...(versionId ? { versionId } : {}),
+        ...(baseModel ? { baseModel } : {}),
+        ...(triggers?.length ? { triggers } : {}),
+      };
+    })
+    .filter((lora) => lora.name || lora.versionId);
 }
 
 export function composeGenerationPrompt(state: GeneratorState, characterText = ''): string {
@@ -100,7 +111,7 @@ export type SaladGenerateBody = {
   model_name: string;
   model_hash: string;
   clip_skip: number;
-  loras: { name: string; weight: number }[];
+  loras: { name: string; weight: number; versionId?: number; baseModel?: string; triggers?: string[] }[];
   embeddings: string[];
   vae: string | null;
   hires_scale: number | null;

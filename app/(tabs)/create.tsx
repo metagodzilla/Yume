@@ -19,6 +19,8 @@ import { openLink } from '@/src/lib/openLink';
 import { patchGenerator, resetBuiltPrompt, resetModelDefaults, useGenerator } from '@/src/lib/genstore';
 import { DISK_RESET_NOTE, modelPresence } from '@/src/lib/keptModels';
 import { restoreMissingModels, useRestoringIds } from '@/src/lib/restoreModels';
+import { ensureSelectedLoras } from '@/src/lib/ensureLoras';
+import { friendlyLoraMessage } from '@/src/lib/loraGate';
 import { endpointDiffersFromLive, LIVE_GATEWAY_URL, normalizeEndpoint } from '@/src/lib/salad';
 import { chooseSeeds } from '@/src/lib/seeds';
 import { persistPng, readApiKey, readCivitaiToken, readSaladKey } from '@/src/lib/storage';
@@ -75,6 +77,19 @@ export default function GenerateScreen() {
       const chosen = chooseSeeds({ locked: !gen.seedRandom, seedText: gen.seed, count: gen.count });
       const seed = chosen.requestSeed;
       const [saladKey] = await Promise.all([readSaladKey(), readApiKey()]);
+      if (studio.settings.provider === 'salad') {
+        const endpoint = normalizeEndpoint(studio.settings.saladEndpoint);
+        const token = await readCivitaiToken().catch(() => null);
+        if (endpoint && saladKey) {
+          await ensureSelectedLoras({
+            loras: gen.loras,
+            endpoint,
+            apiKey: saladKey,
+            civitaiToken: token,
+            onProgress: (label) => setStatus(label),
+          });
+        }
+      }
       const result = await drawFrames({
         state: gen,
         prompt,
@@ -131,7 +146,7 @@ export default function GenerateScreen() {
       setLastSeeds(used);
       setStatus(`${result.warning ? `${result.warning} ` : ''}Seed ${used.join(', ')}.`);
     } catch (caught) {
-      const message = caught instanceof Error ? caught.message : 'The image could not be drawn.';
+      const message = friendlyLoraMessage(caught instanceof Error ? caught.message : 'The image could not be drawn.');
       setError(message);
       const endpoint = normalizeEndpoint(studio.settings.saladEndpoint);
       rememberFault({ time: Date.now(), source: 'generate', message, endpoint });

@@ -185,6 +185,41 @@ def test_install_jobs_persist_across_restarts(tmp_path, monkeypatch) -> None:
     assert restored["state"] == "paused" and restored["bytesDone"] == 5 and restored["type"] == "TextualInversion"
 
 
+def test_generate_installs_a_missing_lora_by_version(client: TestClient, tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("YUME_LORA_DIR", str(tmp_path / "loras"))
+    headers = {"Authorization": "Bearer test-key", "X-Civitai-Token": "civitai-token"}
+    payload = {
+        "prompt": "girl",
+        "width": 512,
+        "height": 512,
+        "steps": 1,
+        "loras": [{"name": "MOMO.SAFETENSORS", "weight": 0.7, "versionId": 7701, "baseModel": "Illustrious", "triggers": ["momo"]}],
+    }
+    first = client.post("/generate", headers=headers, json=payload)
+    if first.status_code == 409:
+        assert "installing" in first.json()["detail"].lower()
+        job = client.get("/models/installs", headers=headers).json()["jobs"][0]
+        for _ in range(40):
+            job = client.get(f"/models/install/{job['id']}", headers=headers).json()
+            if job["state"] in {"done", "error"}:
+                break
+        assert job["state"] == "done", job
+        second = client.post("/generate", headers=headers, json={"prompt": "girl", "width": 512, "height": 512, "steps": 1, "loras": [{"name": "momo", "weight": 0.7, "versionId": 7701}]})
+        assert second.status_code == 200, second.text
+    else:
+        assert first.status_code == 200, first.text
+    listed = client.get("/models", headers=headers).json()["models"]
+    lora = next(item for item in listed if item["versionId"] == 7701)
+    assert lora["type"] == "LORA"
+    assert lora["baseModel"] == "Illustrious"
+    assert "momo" in lora["triggers"]
+    assert lora.get("path") and os.path.exists(lora["path"])
+    from yume_server.downloads import lora_root
+
+    monkeypatch.setenv("YUME_LORA_DIR", "/loras")
+    assert lora_root() == "/models/loras"
+
+
 def test_restore_redownloads_a_missing_checkpoint(client: TestClient) -> None:
     headers = {"Authorization": "Bearer test-key", "X-Civitai-Token": "civitai-token"}
     version_id = 5015

@@ -148,6 +148,12 @@ export function saladErrorMessage(input: { aborted: boolean; status?: number; bo
   if (status === 404) {
     return `HTTP 404.${where} That address has no /generate path. Use the gateway URL with no extra path.`;
   }
+  if (status === 409 && /installing/i.test(detail)) {
+    return 'Downloading that LoRA. It will be ready in a moment.';
+  }
+  if (/lora not found on the server/i.test(detail)) {
+    return 'That LoRA is not on the cloud yet. Yume will download it before drawing.';
+  }
   if (status === 408 || status === 502 || status === 503 || status === 504) {
     return `HTTP ${status}.${where} ${detail || 'The node is not ready yet.'}`;
   }
