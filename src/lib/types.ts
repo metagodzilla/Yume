@@ -129,6 +129,8 @@ export type Generation = {
   warning?: string;
   durationMs?: number;
   favoriteIndexes?: number[];
+  /** Settings stored with a like or dislike. Stays on this phone. */
+  shot?: import('@/src/lib/taste').ImageShot;
 };
 
 export type Settings = {

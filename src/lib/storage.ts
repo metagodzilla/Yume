@@ -23,6 +23,7 @@ const KEYS = {
   library: 'yume.library.v1',
   turnarounds: 'yume.turnarounds.v1',
   meshes: 'yume.meshes.v1',
+  taste: 'yume.taste.v1',
 };
 
 let database: Promise<IDBDatabase> | null = null;
@@ -104,6 +105,14 @@ export async function loadHistory(): Promise<Generation[]> {
 
 export async function saveHistory(history: Generation[]): Promise<void> {
   await setItem(KEYS.history, JSON.stringify(history));
+}
+
+export async function loadTaste(): Promise<string | null> {
+  return getItem(KEYS.taste);
+}
+
+export async function saveTaste(value: string): Promise<void> {
+  await setItem(KEYS.taste, value);
 }
 
 export async function loadSession(): Promise<Session> {

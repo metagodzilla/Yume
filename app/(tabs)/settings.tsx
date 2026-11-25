@@ -120,6 +120,9 @@ export default function SettingsScreen() {
           <Pressable onPress={() => router.push('/report')}>
             <Text style={styles.link}>Report a problem</Text>
           </Pressable>
+          <Pressable testID="open-taste-settings" onPress={() => router.push('/taste')}>
+            <Text style={styles.link}>My taste</Text>
+          </Pressable>
         </View>
 
         <View style={styles.card}>

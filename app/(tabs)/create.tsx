@@ -10,7 +10,7 @@ import { LoraSheet } from '@/components/LoraSheet';
 import { Gallery } from '@/components/Gallery';
 import { CREATE_PROMPT_FIELDS } from '@/src/lib/createFields';
 import { characterClause } from '@/src/lib/prompt';
-import { composeGenerationPrompt, drawFrames, generationParams, samplerId, sentPositiveText } from '@/src/lib/draw';
+import { composeGenerationPrompt, drawFrames, generationParams, samplerId, sentPositiveText, sentWithTaste } from '@/src/lib/draw';
 import { sendClientReport } from '@/src/lib/clientReport';
 import { rememberFault } from '@/src/lib/reportText';
 import { applyCheckpoint, installLocal, patchGenerator, resetBuiltPrompt, resetModelDefaults, resetQualityTags, useGenerator } from '@/src/lib/genstore';
@@ -35,6 +35,8 @@ import { persistPng, readApiKey, readCivitaiToken, readPng, readSaladKey } from 
 import { pickLocalImages } from '@/src/lib/fromImage';
 import { bytesToBase64 } from '@/src/lib/base64';
 import { bodySizeFromHeight, type BodySize } from '@/src/lib/referencePicture';
+import { captureShot, suggestedSettings } from '@/src/lib/taste';
+import { useTasteProfile } from '@/src/lib/tasteStore';
 import { uid } from '@/src/lib/id';
 import { useStudio } from '@/src/studio';
 import { colors, font } from '@/src/theme';
@@ -276,14 +278,39 @@ export default function GenerateScreen() {
       for (let index = 0; index < result.pngs.length; index += 1) {
         imageUris.push(await persistPng(`${id}-${index}.png`, result.pngs[index]));
       }
-      const params = generationParams(gen, prompt, seed);
+      const tasted = sentWithTaste(gen, prompt, character);
+      const params = generationParams(gen, tasted.prompt, seed);
       const record: Generation = {
         id,
         createdAt: Date.now(),
         userPrompt: gen.prompt,
         enhancedPrompt: prompt,
-        finalPrompt: prompt,
-        negative: sentNegative(gen, character),
+        finalPrompt: tasted.prompt,
+        negative: tasted.negative,
+        shot: captureShot({
+          prompt: gen.prompt,
+          clothes: gen.clothes,
+          positive: gen.positive,
+          extra: gen.extraPrompt,
+          quality: gen.quality,
+          negative: sentNegative(gen, character),
+          checkpoint: params.model,
+          checkpointId: gen.checkpointId,
+          loras: gen.loras,
+          sampler: gen.sampler,
+          steps: gen.steps,
+          cfg: gen.cfg,
+          width: gen.width,
+          height: gen.height,
+          referencePose: gen.referencePose,
+          referencePoseStrength: gen.referencePoseStrength,
+          referenceFit: gen.referenceFit,
+          referenceBody: gen.referenceBody,
+          referenceCopy: gen.referenceCopy,
+          referenceDenoise: gen.referenceDenoise,
+          referenceStyle: gen.referenceStyle,
+          referenceStyleStrength: gen.referenceStyleStrength,
+        }),
         styleId: 'watercolor',
         styleName: params.model,
         aspectId: gen.height >= gen.width ? 'wallpaper' : 'landscape',
@@ -760,6 +787,7 @@ export default function GenerateScreen() {
         </Pressable>
         {gen.referenceStyle ? <Strength testID="style-strength" value={gen.referenceStyleStrength ?? 0.55} onChange={(referenceStyleStrength) => patchGenerator({ referenceStyleStrength })} /> : null}
         <Text style={styles.hint}>Pose, the whole picture, and art style can be on together. Clothes, the character, and the LoRAs still apply. The skeleton is the pose after it is fitted.</Text>
+        <TasteRow />
         <Pressable testID="gen-generate" style={styles.go} disabled={busy} onPress={() => void generate()}>
           <Text style={styles.goText}>{busy ? 'Drawing…' : `Generate ${gen.count}`}</Text>
         </Pressable>
@@ -797,6 +825,36 @@ export default function GenerateScreen() {
         ) : null}
       </ScrollView>
     </SafeAreaView>
+  );
+}
+
+function TasteRow() {
+  const gen = useGenerator();
+  const taste = useTasteProfile();
+  const suggested = suggestedSettings(taste);
+  const note = [suggested.sampler, suggested.steps ? `${suggested.steps} steps` : '', suggested.cfg ? `CFG ${suggested.cfg}` : ''].filter(Boolean).join(' · ');
+  return (
+    <View style={styles.stack}>
+      <Pressable testID="use-taste" onPress={() => patchGenerator({ useTaste: gen.useTaste === false })}>
+        <Text style={styles.link}>{gen.useTaste === false ? 'Use my taste off' : 'Use my taste on'}</Text>
+      </Pressable>
+      <Pressable testID="open-taste" onPress={() => router.push('/taste')}>
+        <Text style={styles.link}>My taste</Text>
+      </Pressable>
+      {note ? (
+        <Pressable
+          testID="apply-taste-settings"
+          onPress={() =>
+            patchGenerator({
+              ...(suggested.sampler ? { sampler: suggested.sampler } : {}),
+              ...(suggested.steps ? { steps: suggested.steps } : {}),
+              ...(suggested.cfg ? { cfg: suggested.cfg } : {}),
+            })
+          }>
+          <Text style={styles.hint}>Liked settings: {note}. Apply</Text>
+        </Pressable>
+      ) : null}
+    </View>
   );
 }
 

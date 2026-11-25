@@ -9,6 +9,8 @@ import { classifyGatewayInput, generateUrl, saladErrorMessage } from '@/src/lib/
 import { expandSeeds } from '@/src/lib/seeds';
 import { normalizeSaladKey } from '@/src/lib/saladCloud';
 import { characterOutfitTags, isClothesTag } from '@/src/lib/positiveTags';
+import { characterClause } from '@/src/lib/prompt';
+import { applyTaste, currentTaste, tagsOf } from '@/src/lib/taste';
 import type { Character, SamplerId } from '@/src/lib/types';
 
 export function embeddingTokens(state: GeneratorState): string[] {
@@ -244,6 +246,17 @@ export type SaladGenerateBody = {
   prediction_type: 'epsilon' | 'v_prediction';
 };
 
+export function sentWithTaste(state: GeneratorState, prompt: string, character: Character | null = null): { prompt: string; negative: string } {
+  const blocked = [state.prompt, state.clothes || '', state.positive || '', state.extraPrompt || '', state.quality || '', character ? characterClause(character) : ''].flatMap((part) => tagsOf(part));
+  return applyTaste({
+    enabled: state.useTaste !== false,
+    prompt,
+    negative: sentNegative(state, character),
+    blocked,
+    store: currentTaste(),
+  });
+}
+
 export function buildSaladGenerateBody(
   state: GeneratorState,
   prompt: string,
@@ -252,10 +265,11 @@ export function buildSaladGenerateBody(
   maskPng?: Uint8Array | null,
   character: Character | null = null,
 ): SaladGenerateBody {
-  const params = generationParams(state, prompt, seed, character);
+  const tasted = sentWithTaste(state, prompt, character);
+  const params = generationParams(state, tasted.prompt, seed, character);
   return {
-    prompt,
-    negative_prompt: sentNegative(state),
+    prompt: tasted.prompt,
+    negative_prompt: tasted.negative,
     width: state.width,
     height: state.height,
     count: state.count,
@@ -321,7 +335,10 @@ export async function drawFrames(input: {
   maskPng?: Uint8Array | null;
 }): Promise<{ pngs: Uint8Array[]; parameters: string; seeds: number[]; warning?: string }> {
   const seeds = input.seed < 0 ? expandSeeds(Math.floor(Math.random() * 2_147_483_647), input.state.count) : expandSeeds(input.seed, input.state.count);
-  const params = generationParams(input.state, input.prompt, seeds[0] ?? 0, input.character);
+  const tasted = sentWithTaste(input.state, input.prompt, input.character);
+  const params = generationParams(input.state, tasted.prompt, seeds[0] ?? 0, input.character);
+  params.negative = tasted.negative;
+  params.prompt = tasted.prompt;
   const parameters = formatParameters(params);
   if (input.provider !== 'salad') {
     const pngs = renderDemoFrames({
@@ -364,7 +381,7 @@ export async function drawFrames(input: {
         'X-Api-Key': apiKey,
         'Salad-Api-Key': apiKey,
       },
-      body: JSON.stringify(buildSaladGenerateBody(input.state, input.prompt, input.seed, input.initPng, input.maskPng, input.character)),
+      body: JSON.stringify(buildSaladGenerateBody(input.state, tasted.prompt, input.seed, input.initPng, input.maskPng, input.character)),
     });
   } catch (error) {
     const aborted = error instanceof Error && error.name === 'AbortError';

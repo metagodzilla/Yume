@@ -67,6 +67,48 @@ class MeshIn(BaseModel):
     seed: int | None = None
 
 
+class UpscaleIn(BaseModel):
+    image: str = Field(min_length=1)
+    preset: str = "2k"
+    enhance: bool = False
+    detail: float = 0.35
+    repair: float = 0.45
+    prompt: str = ""
+    references: list[str] = []
+    character_tags: str = ""
+    loras: list[LoraIn] = []
+
+
+class MangaIn(BaseModel):
+    image: str = Field(min_length=1)
+    preset: str = "2k"
+    colorize: bool = False
+    redraw: float = 0.55
+    strength: float | None = None
+    prompt: str = ""
+    hints: str = ""
+    references: list[str] = []
+    character_tags: str = ""
+    clothes: str = ""
+    outfit: str = "clothes"
+    job: str = "redraw"
+    x: float | None = None
+    y: float | None = None
+    strokes: list[dict[str, Any]] = []
+    body: str = "average"
+    height_cm: float | None = None
+    bust_cm: float | None = None
+    hip_cm: float | None = None
+    loras: list[LoraIn] = []
+
+
+class SegmentIn(BaseModel):
+    image: str = Field(min_length=1)
+    x: float = 0.5
+    y: float = 0.4
+    strokes: list[dict[str, Any]] = []
+
+
 class PoseIn(BaseModel):
     image: str = Field(min_length=1)
     width: int = 832
@@ -634,6 +676,52 @@ def reference_pose(body: PoseIn, request: Request) -> dict[str, Any]:
         hip_cm=body.hip_cm,
     )
     return preview
+
+
+def _picture_job(kind: str, body: Any) -> dict[str, Any]:
+    import base64
+
+    from yume_server.generate import LoraInstalling
+    from yume_server.upscale import run_manga, run_upscale
+
+    try:
+        base64.b64decode(body.image, validate=False)
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail="That picture could not be read.") from exc
+    needs_model = kind == "manga" or bool(getattr(body, "enhance", False) or body.references or body.character_tags or body.loras)
+    if needs_model and not state["ready"]:
+        raise HTTPException(status_code=503, detail="Model is still loading.")
+    try:
+        return run_manga(body) if kind == "manga" else run_upscale(body)
+    except LoraInstalling as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+
+@app.post("/upscale")
+def upscale(body: UpscaleIn, request: Request) -> dict[str, Any]:
+    _check_key(request)
+    return _picture_job("upscale", body)
+
+
+@app.post("/manga")
+def manga(body: MangaIn, request: Request) -> dict[str, Any]:
+    _check_key(request)
+    return _picture_job("manga", body)
+
+
+@app.post("/manga/segment")
+def manga_segment(body: SegmentIn, request: Request) -> dict[str, Any]:
+    _check_key(request)
+    from yume_server.manga_edit import run_segment
+
+    try:
+        return run_segment(body)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @app.post("/generate")

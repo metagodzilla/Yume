@@ -84,6 +84,12 @@ def _safe_download() -> None:
         ensure_reference_weights()
     except Exception:
         _LOG.exception("reference weights could not be downloaded yet")
+    try:
+        from yume_server.upscale import ensure_upscale_weights
+
+        ensure_upscale_weights()
+    except Exception:
+        _LOG.exception("upscale weights could not be downloaded yet")
 
 
 def _measure(value: Any) -> float | None:

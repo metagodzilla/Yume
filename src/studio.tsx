@@ -31,6 +31,7 @@ import { produceImages } from '@/src/lib/produce';
 import { classifyGatewayInput, migrateKeyStoredAsUrl } from '@/src/lib/salad';
 import { normalizeSaladKey } from '@/src/lib/saladCloud';
 import { exportBundle } from '@/src/lib/library';
+import { getTaste, importTaste } from '@/src/lib/tasteStore';
 import { throttleSteps } from '@/src/lib/phonePower';
 import { getThrottle } from '@/src/lib/thermalState';
 import {
@@ -658,12 +659,13 @@ export function StudioProvider({ children }: { children: ReactNode }) {
         setPreviewDirty(false);
         if (template.negative) patchSettings({ negative: template.negative, tuneLocked: true });
       },
-      exportLibrary: () => exportBundle(library),
+      exportLibrary: () => exportBundle(library, getTaste()),
       importLibrary: async (raw, mode) => {
         const parsed = parseBundle(raw);
         if (!parsed.ok) return parsed.error;
         const next = mode === 'replace' ? replaceLibrary(parsed.bundle) : mergeLibrary(library, parsed.bundle);
         await rememberLibrary(next);
+        if (parsed.bundle.taste) importTaste(parsed.bundle.taste, mode);
         return mode === 'replace' ? 'Replaced your styles, snippets, and templates.' : 'Merged that file into the library.';
       },
       hasKey,

@@ -162,6 +162,38 @@ def fit_canvas(points: Pose, width: int, height: int, margin: float = 0.08) -> P
     return fitted
 
 
+def point_box(points: Pose) -> tuple[float, float, float, float] | None:
+    present = [point for point in points if point is not None]
+    if not present:
+        return None
+    min_x = min(point[0] for point in present)
+    max_x = max(point[0] for point in present)
+    min_y = min(point[1] for point in present)
+    max_y = max(point[1] for point in present)
+    return min_x, min_y, max(1.0, max_x - min_x), max(1.0, max_y - min_y)
+
+
+def retarget_anchored(points: Pose, size: str, *, height_cm: float | None = None, bust_cm: float | None = None, hip_cm: float | None = None) -> Pose:
+    """Same proportions as retarget, but the figure stays on the original person instead of filling the page."""
+    fitted = retarget(points, size, 512, 768, fit=True, height_cm=height_cm, bust_cm=bust_cm, hip_cm=hip_cm)
+    source = point_box(points)
+    target = point_box(fitted)
+    if source is None or target is None:
+        return fitted
+    scales = proportion_scale(size, height_cm, bust_cm, hip_cm)
+    want_w = source[2] * ((scales["shoulder"] + scales["torso"]) / 2)
+    want_h = source[3] * scales["leg"]
+    cx = source[0] + source[2] / 2
+    cy = source[1] + source[3] / 2
+    placed: Pose = []
+    for point in fitted:
+        if point is None:
+            placed.append(None)
+            continue
+        placed.append((cx + (point[0] - (target[0] + target[2] / 2)) * (want_w / target[2]), cy + (point[1] - (target[1] + target[3] / 2)) * (want_h / target[3])))
+    return placed
+
+
 def bone_length(points: Pose, parent: int, child: int) -> float:
     start, end = points[parent], points[child]
     if start is None or end is None:

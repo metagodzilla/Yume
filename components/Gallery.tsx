@@ -3,6 +3,7 @@ import { router } from 'expo-router';
 import { useMemo, useState } from 'react';
 import { FlatList, Pressable, ScrollView, StyleSheet, Text, TextInput, useWindowDimensions, View } from 'react-native';
 
+import { TasteButtons } from '@/components/TasteButtons';
 import { filterTiles, galleryTiles, type GalleryTile } from '@/src/lib/gallery';
 import { saveImageToLibrary } from '@/src/lib/media';
 import { useStudio } from '@/src/studio';
@@ -28,11 +29,17 @@ function Strip({ tiles }: { tiles: GalleryTile[] }) {
         </Pressable>
       </View>
       <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.strip}>
-        {shown.map((tile) => (
-          <Pressable key={tile.key} onPress={() => openTile(studio, tiles, tile)}>
-            <Image source={{ uri: tile.uri }} style={styles.stripThumb} contentFit="cover" recyclingKey={tile.key} cachePolicy="memory-disk" />
-          </Pressable>
-        ))}
+        {shown.map((tile) => {
+          const generation = studio.history.find((item) => item.id === tile.generationId);
+          return (
+            <View key={tile.key}>
+              <Pressable onPress={() => openTile(studio, tiles, tile)}>
+                <Image source={{ uri: tile.uri }} style={styles.stripThumb} contentFit="cover" recyclingKey={tile.key} cachePolicy="memory-disk" />
+              </Pressable>
+              {generation ? <TasteButtons generation={generation} index={tile.index} compact /> : null}
+            </View>
+          );
+        })}
       </ScrollView>
     </View>
   );
@@ -114,18 +121,22 @@ function Grid({ tiles }: { tiles: GalleryTile[] }) {
         columnWrapperStyle={styles.columns}
         renderItem={({ item }) => {
           const on = selected.includes(item.key);
+          const generation = studio.history.find((entry) => entry.id === item.generationId);
           return (
-            <Pressable
-              onLongPress={() => {
-                setSelecting(true);
-                toggle(item.key);
-              }}
-              onPress={() => (selecting ? toggle(item.key) : openTile(studio, visible, item))}
-              style={{ width: cell, height: cell }}>
-              <Image source={{ uri: item.uri }} style={styles.thumb} contentFit="cover" recyclingKey={item.key} cachePolicy="memory-disk" />
-              {item.favorite ? <Text style={styles.star}>★</Text> : null}
-              {selecting ? <View style={[styles.mark, on && styles.markOn]} /> : null}
-            </Pressable>
+            <View style={{ width: cell }}>
+              <Pressable
+                onLongPress={() => {
+                  setSelecting(true);
+                  toggle(item.key);
+                }}
+                onPress={() => (selecting ? toggle(item.key) : openTile(studio, visible, item))}
+                style={{ width: cell, height: cell }}>
+                <Image source={{ uri: item.uri }} style={styles.thumb} contentFit="cover" recyclingKey={item.key} cachePolicy="memory-disk" />
+                {item.favorite ? <Text style={styles.star}>★</Text> : null}
+                {selecting ? <View style={[styles.mark, on && styles.markOn]} /> : null}
+              </Pressable>
+              {generation ? <TasteButtons generation={generation} index={item.index} compact /> : null}
+            </View>
           );
         }}
       />

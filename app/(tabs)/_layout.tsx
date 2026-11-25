@@ -26,6 +26,8 @@ export default function TabLayout() {
           tabBarIcon: ({ size }) => <Ionicons name="add-circle" color={colors.accent} size={size + 8} />,
         }}
       />
+      <Tabs.Screen name="upscale" options={{ title: 'Upscale', tabBarIcon: ({ color, size }) => <Ionicons name="expand" color={iconColor(color)} size={size} /> }} />
+      <Tabs.Screen name="manga" options={{ title: 'Manga', tabBarIcon: ({ color, size }) => <Ionicons name="book" color={iconColor(color)} size={size} /> }} />
       <Tabs.Screen name="queue" options={{ title: 'Queue', tabBarIcon: ({ color, size }) => <Ionicons name="time" color={iconColor(color)} size={size} /> }} />
       <Tabs.Screen name="shelf" options={{ title: 'Library', tabBarIcon: ({ color, size }) => <Ionicons name="library" color={iconColor(color)} size={size} /> }} />
       <Tabs.Screen name="models" options={{ href: null, tabBarItemStyle: { display: 'none' } }} />

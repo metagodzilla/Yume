@@ -190,7 +190,7 @@ async function imagesFromAssets(assets: { uri: string; base64?: string | null; f
   );
 }
 
-export async function pickLocalImages(limit = REFERENCE_LIMIT): Promise<PickedImage[] | null> {
+export async function pickLocalImages(limit = REFERENCE_LIMIT, quality = 0.5): Promise<PickedImage[] | null> {
   const { Platform } = await import('react-native');
   if (Platform.OS === 'web' && typeof document !== 'undefined') {
     return new Promise((resolve, reject) => {
@@ -221,7 +221,7 @@ export async function pickLocalImages(limit = REFERENCE_LIMIT): Promise<PickedIm
     mediaTypes: ['images'] as ('images')[],
     allowsMultipleSelection: limit > 1,
     selectionLimit: limit,
-    quality: 0.5,
+    quality,
     base64: false,
     legacy: false,
     exif: false,

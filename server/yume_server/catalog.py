@@ -594,8 +594,10 @@ def restore_models(version_ids: list[int], last_used: int | None, hints: dict[in
     """Download missing Civitai models, then load the last-used checkpoint."""
     global _PENDING_LOAD
     from yume_server.reference import schedule_reference_weights
+    from yume_server.upscale import schedule_upscale_weights
 
     schedule_reference_weights()
+    schedule_upscale_weights()
     installed = {int(item.get("versionId") or 0) for item in list_models()}
     pending = None
     if last_used and last_used != DEFAULT_VERSION and last_used not in installed:

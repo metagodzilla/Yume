@@ -91,6 +91,10 @@ def loaded_version() -> int | None:
     return _LOADED_VERSION
 
 
+def loaded_pipe() -> Any:
+    return _PIPE
+
+
 def note_loaded(version_id: int) -> None:
     global _LOADED_VERSION
     _LOADED_VERSION = int(version_id)

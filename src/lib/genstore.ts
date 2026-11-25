@@ -43,6 +43,8 @@ export type GeneratorState = {
   referenceDenoise: number;
   referenceStyle: boolean;
   referenceStyleStrength: number;
+  /** When true, liked style tags are added lightly and disliked tags go to the negative. */
+  useTaste?: boolean;
   quality: string;
   qualityEdited: boolean;
   /** @deprecated Merged into positive. Kept so a 1.4.9 save still loads. */
@@ -125,6 +127,7 @@ export const initialGenerator = (): GeneratorState => ({
   referenceDenoise: 0.6,
   referenceStyle: false,
   referenceStyleStrength: 0.55,
+  useTaste: true,
   quality: DEFAULT_CHECKPOINT.quality,
   qualityEdited: false,
   extraPrompt: '',
