@@ -185,6 +185,78 @@ def test_install_jobs_persist_across_restarts(tmp_path, monkeypatch) -> None:
     assert restored["state"] == "paused" and restored["bytesDone"] == 5 and restored["type"] == "TextualInversion"
 
 
+def test_generate_installs_a_missing_lora_by_version(client: TestClient, tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("YUME_LORA_DIR", str(tmp_path / "loras"))
+    headers = {"Authorization": "Bearer test-key", "X-Civitai-Token": "civitai-token"}
+    payload = {
+        "prompt": "girl",
+        "width": 512,
+        "height": 512,
+        "steps": 1,
+        "loras": [{"name": "MOMO.SAFETENSORS", "weight": 0.7, "versionId": 7701, "baseModel": "Illustrious", "triggers": ["momo"]}],
+    }
+    first = client.post("/generate", headers=headers, json=payload)
+    if first.status_code == 409:
+        assert "installing" in first.json()["detail"].lower()
+        job = client.get("/models/installs", headers=headers).json()["jobs"][0]
+        for _ in range(40):
+            job = client.get(f"/models/install/{job['id']}", headers=headers).json()
+            if job["state"] in {"done", "error"}:
+                break
+        assert job["state"] == "done", job
+        second = client.post("/generate", headers=headers, json={"prompt": "girl", "width": 512, "height": 512, "steps": 1, "loras": [{"name": "momo", "weight": 0.7, "versionId": 7701}]})
+        assert second.status_code == 200, second.text
+    else:
+        assert first.status_code == 200, first.text
+    listed = client.get("/models", headers=headers).json()["models"]
+    lora = next(item for item in listed if item["versionId"] == 7701)
+    assert lora["type"] == "LORA"
+    assert lora["baseModel"] == "Illustrious"
+    assert "momo" in lora["triggers"]
+    assert lora.get("path") and os.path.exists(lora["path"])
+    from yume_server.downloads import lora_root
+
+    monkeypatch.setenv("YUME_LORA_DIR", "/loras")
+    assert lora_root() == "/models/loras"
+
+
+def test_restore_redownloads_a_missing_checkpoint(client: TestClient) -> None:
+    headers = {"Authorization": "Bearer test-key", "X-Civitai-Token": "civitai-token"}
+    version_id = 5015
+    client.delete(f"/models/{version_id}", headers=headers)
+    try:
+        response = client.post(
+            "/models/restore",
+            headers=headers,
+            json={
+                "versionIds": [1337429, version_id],
+                "lastUsedVersionId": version_id,
+                "models": [{"versionId": version_id, "type": "Checkpoint", "name": "Prefect XL"}],
+            },
+        )
+        assert response.status_code == 200, response.text
+        body = response.json()
+        assert body["pendingLoad"] == version_id
+        assert any(job["versionId"] == version_id for job in body["jobs"])
+        job = next(item for item in body["jobs"] if item["versionId"] == version_id)
+        for _ in range(40):
+            job = client.get(f"/models/install/{job['id']}", headers=headers).json()
+            if job["state"] in {"done", "error"}:
+                break
+        assert job["state"] == "done", job
+        listed = client.get("/models", headers=headers).json()
+        for _ in range(40):
+            if listed.get("activeVersionId") == version_id:
+                break
+            time.sleep(0.02)
+            listed = client.get("/models", headers=headers).json()
+        assert any(item["versionId"] == version_id for item in listed["models"])
+        assert listed["activeVersionId"] == version_id
+    finally:
+        client.post("/models/use", headers=headers, json={"versionId": 1337429})
+        client.post("/models/default", headers=headers, json={"versionId": 1337429})
+
+
 def test_hires_vae_and_loaded_name() -> None:
     from yume_server.generate import clip_skip_index, hires_plan, lora_directories, needs_fixed_vae
 

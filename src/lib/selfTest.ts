@@ -14,6 +14,8 @@ import { checkGithubRelease, decideReleaseCheck, parseGithubRelease, readInstall
 import { APP_VERSION, APP_VERSION_CODE } from '@/src/lib/version';
 import { type CheckRow, type CheckStatus } from '@/src/lib/checkRows';
 import { familyPreset, loadedModelName, loraBaseWarning, modelCardPress, routeLeavesCreate, settingsForCheckpoint } from '@/src/lib/checkpoints';
+import { DISK_RESET_NOTE, modelsToRestore } from '@/src/lib/keptModels';
+import { loraChoices, missingSelectedLoras } from '@/src/lib/loraGate';
 import { CLOUD_OFF_INSTALL, canUseAsDefault, installAction, installRequest, isServerInstalled } from '@/src/lib/installGate';
 
 export type { CheckRow } from '@/src/lib/checkRows';
@@ -337,6 +339,15 @@ export async function runAppCheck(input: { endpoint: string }): Promise<CheckRow
   rows.push(warning.includes('do not match') ? row('Create', 'LoRA apply', 'pass', 0, warning) : row('Create', 'LoRA apply', 'fail', 0, 'A mismatched LoRA base did not warn.'));
   const named = loadedModelName([{ versionId: 5, name: 'Prefect XL' }], 5);
   rows.push(named === 'Prefect XL' ? row('Create', 'Loaded model', 'pass', 0, 'The loaded checkpoint name is Prefect XL.') : row('Create', 'Loaded model', 'fail', 0, `Loaded model name was ${named}.`));
+  const missing = modelsToRestore(
+    { models: [{ versionId: 5, type: 'Checkpoint', name: 'Prefect XL' }], lastUsedVersionId: 5 },
+    [1337429],
+  );
+  const restoreOk = missing.length === 1 && missing[0]?.versionId === 5 && DISK_RESET_NOTE.toLowerCase().includes('disks reset');
+  rows.push(restoreOk ? row('Models', 'Restore', 'pass', 0, 'A saved Civitai checkpoint is sent again after the Salad disk resets.') : row('Models', 'Restore', 'fail', 0, 'Saved models would be forgotten when the node changes.'));
+  const loraList = loraChoices([{ versionId: 1, name: 'Animagine', type: 'Checkpoint' }], [{ versionId: 9, name: 'Momo', type: 'LORA' }]);
+  const loraOk = loraList.length === 1 && loraList[0]?.restoring && missingSelectedLoras([{ name: 'momo.safetensors', versionId: 9 }], []).length === 1;
+  rows.push(loraOk ? row('Models', 'LoRA install', 'pass', 0, 'A Civitai LoRA is installed before it is sent, and the picker only lists server LoRAs.') : row('Models', 'LoRA install', 'fail', 0, 'The LoRA picker can still select a file the server does not have.'));
   const html = friendlyGatewayMessage(503, '<html><body>no servers</body></html>');
   rows.push(html.includes('no machine ready') ? row('Cloud', 'Gateway page', 'pass', 0, html) : row('Cloud', 'Gateway page', 'fail', 0, html || 'HTML 503 was shown raw.'));
 

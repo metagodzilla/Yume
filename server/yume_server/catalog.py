@@ -25,6 +25,7 @@ class CivitaiAuthError(RuntimeError):
 
 _INSTALLS: dict[str, dict[str, Any]] = {}
 _INSTALL_LOCK = threading.Lock()
+_PENDING_LOAD: int | None = None
 _LOADED_DIR: str | None = None
 _LAST_SAVE = 0.0
 _LOG = logging.getLogger("yume.install")
@@ -364,6 +365,7 @@ def _run_install(job_id: str, version_id: int, token: str | None, hint: dict[str
         _store_record(record)
         size = os.path.getsize(record["path"]) if record.get("path") and os.path.exists(record["path"]) else 0
         _set_install(job_id, state="done", bytesDone=size, bytesTotal=size or int(record.get("bytes") or 0), record=record, error="")
+        _maybe_load_restored(int(version_id), str(record.get("type") or "Checkpoint"))
     except DownloadPaused:
         _set_install(job_id, state="paused", error="")
     except DownloadCancelled:
@@ -431,6 +433,40 @@ def _describe_version(version_id: int, token: str | None, hint: dict[str, Any] |
 
 def _begin(job_id: str, version_id: int, token: str | None, hint: dict[str, Any] | None) -> None:
     threading.Thread(target=_run_install, args=(job_id, version_id, civitai_token(token), hint), daemon=True).start()
+
+
+def _maybe_load_restored(version_id: int, kind: str) -> None:
+    global _PENDING_LOAD
+    if kind != "Checkpoint" or _PENDING_LOAD != version_id:
+        return
+    _PENDING_LOAD = None
+    try:
+        from yume_server.generate import start_use
+
+        start_use(version_id)
+    except Exception:
+        _LOG.exception("restored checkpoint %s could not be loaded", version_id)
+
+
+def restore_models(version_ids: list[int], last_used: int | None, hints: dict[int, dict[str, Any]], token: str | None) -> dict[str, Any]:
+    """Download missing Civitai models, then load the last-used checkpoint."""
+    global _PENDING_LOAD
+    installed = {int(item.get("versionId") or 0) for item in list_models()}
+    pending = None
+    if last_used and last_used != DEFAULT_VERSION and last_used not in installed:
+        _PENDING_LOAD = last_used
+        pending = last_used
+    jobs = []
+    for version_id in version_ids:
+        if version_id == DEFAULT_VERSION or version_id in installed:
+            continue
+        jobs.append(start_install(version_id, token, hints.get(version_id)))
+    if last_used and last_used in installed:
+        from yume_server.generate import loaded_version, start_use
+
+        if loaded_version() != last_used:
+            start_use(last_used)
+    return {"jobs": jobs, "pendingLoad": pending, "installed": sorted(installed)}
 
 
 def start_install(version_id: int, token: str | None, hint: dict[str, Any] | None = None) -> dict[str, Any]:

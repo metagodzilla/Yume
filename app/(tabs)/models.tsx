@@ -1,4 +1,5 @@
 import { router, useLocalSearchParams } from 'expo-router';
+import { useStudio } from '@/src/studio';
 import { useEffect, useRef, useState } from 'react';
 import { Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
@@ -8,8 +9,10 @@ import { rememberFault } from '@/src/lib/reportText';
 import { civitaiModelUrl, errorText, loraFileName, loraPage, searchCivitai, type CivitaiModel, type ContentFilter } from '@/src/lib/civitai';
 import { BASE_MODELS, MODEL_TYPES, SORTS } from '@/src/lib/defaultModel';
 import { addLora, patchGenerator, useGenerator } from '@/src/lib/genstore';
+import { ensureSelectedLoras } from '@/src/lib/ensureLoras';
+import { normalizeEndpoint } from '@/src/lib/salad';
+import { readCivitaiToken, readSaladKey } from '@/src/lib/storage';
 import { openLink } from '@/src/lib/openLink';
-import { readCivitaiToken } from '@/src/lib/storage';
 import { colors, font } from '@/src/theme';
 
 const FILTERS: { id: ContentFilter; label: string }[] = [
@@ -19,6 +22,7 @@ const FILTERS: { id: ContentFilter; label: string }[] = [
 ];
 
 export default function ModelsScreen() {
+  const studio = useStudio();
   const gen = useGenerator();
   const [query, setQuery] = useState('');
   const params = useLocalSearchParams<{ type?: string }>();
@@ -29,6 +33,7 @@ export default function ModelsScreen() {
   const [cursor, setCursor] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [loraNote, setLoraNote] = useState<string | null>(null);
   const request = useRef(0);
 
   async function load(nextCursor?: string | null, append = false) {
@@ -129,6 +134,7 @@ export default function ModelsScreen() {
         <Text style={styles.body}>
           All, SFW only, or NSFW only applies to the list and to every thumbnail. SFW hides mature items. NSFW only hides safe items. A saved Civitai token is used only when a download needs it.
         </Text>
+        {loraNote ? <Text testID="lora-download">{loraNote}</Text> : null}
         {error ? (
           <View>
             <Text testID="search-error" style={styles.error}>{error}</Text>
@@ -174,13 +180,38 @@ export default function ModelsScreen() {
                       patchGenerator({ loras: gen.loras.filter((item) => item.versionId !== version.id) });
                       return;
                     }
-                    addLora({
+                    const picked = {
                       name: loraFileName(version, model.name),
                       weight: 0.8,
                       modelId: model.id,
                       versionId: version.id,
                       triggers: version.trainedWords,
-                    });
+                      baseModel: version.baseModel,
+                    };
+                    addLora(picked);
+                    if (studio.settings.provider !== 'salad') return;
+                    void (async () => {
+                      const endpoint = normalizeEndpoint(studio.settings.saladEndpoint);
+                      const key = await readSaladKey();
+                      const token = await readCivitaiToken().catch(() => null);
+                      if (!endpoint || !key) {
+                        setLoraNote('Connect the cloud before this LoRA can download.');
+                        return;
+                      }
+                      setLoraNote('Downloading LoRA 0%');
+                      try {
+                        await ensureSelectedLoras({
+                          loras: [picked],
+                          endpoint,
+                          apiKey: key,
+                          civitaiToken: token,
+                          onProgress: setLoraNote,
+                        });
+                        setLoraNote(`${model.name} is on the server.`);
+                      } catch (caught) {
+                        setLoraNote(caught instanceof Error ? caught.message : 'The LoRA could not be downloaded.');
+                      }
+                    })();
                   }}>
                   <Text style={styles.link}>{selected ? 'Remove' : 'Use'}</Text>
                 </Pressable>

@@ -14,6 +14,7 @@ export const CHECKLIST = [
   'Downloading software',
   'Starting up',
   'Downloading model',
+  'Restoring your models',
   'Ready',
 ] as const;
 
@@ -90,6 +91,8 @@ export function cloudChecklist(input: {
   pullPercent?: number | null;
   modelDone?: number | null;
   modelTotal?: number | null;
+  restoreTotal?: number;
+  restorePercent?: number | null;
 }): { phase: CloudPhase; pill: string; liveTitle: string; steps: ChecklistStep[]; authBlocked: boolean; overall: number | null } {
   const authBlocked = input.healthStatus === 403 || input.readyStatus === 403;
   const ready = input.readyStatus === 200;
@@ -103,8 +106,13 @@ export function cloudChecklist(input: {
   let pill = 'Starting...';
   let liveTitle = 'Creating the container group';
 
-  if (ready) {
+  const restoring = (input.restoreTotal ?? 0) > 0 && (input.restorePercent ?? 100) < 100;
+  if (ready && restoring) {
     const steps = paint(5, input);
+    return { phase: 'starting', pill: 'Restoring', liveTitle: 'Restoring your models', steps, authBlocked: false, overall: overallPercent(steps) };
+  }
+  if (ready) {
+    const steps = paint(CHECKLIST.length - 1, input);
     return { phase: 'running', pill: 'Running', liveTitle: 'Ready', steps, authBlocked: false, overall: 100 };
   }
   if (!input.hasEndpoint && !input.groupStatus) {
@@ -169,21 +177,26 @@ export function capReached(spent: number, cap: number): boolean {
   return cap > 0 && spent >= cap - 0.0001;
 }
 
-function paint(current: number, input: { pullPercent?: number | null; modelDone?: number | null; modelTotal?: number | null }): ChecklistStep[] {
+function paint(current: number, input: { pullPercent?: number | null; modelDone?: number | null; modelTotal?: number | null; restorePercent?: number | null }): ChecklistStep[] {
   return CHECKLIST.map((label, index) => {
     const state = current < 0 ? 'todo' : index < current ? 'done' : index === current ? 'current' : 'todo';
     return { label, state, percent: stepPercent(index, state, input) };
   });
 }
 
-function stepPercent(index: number, state: ChecklistStep['state'], input: { pullPercent?: number | null; modelDone?: number | null; modelTotal?: number | null }): number | null {
+function stepPercent(
+  index: number,
+  state: ChecklistStep['state'],
+  input: { pullPercent?: number | null; modelDone?: number | null; modelTotal?: number | null; restorePercent?: number | null },
+): number | null {
   if (state === 'done') return 100;
   if (state !== 'current') return null;
   if (index === 2 && input.pullPercent != null) return clampPercent(input.pullPercent);
   if (index === 4 && input.modelTotal && input.modelTotal > 0 && input.modelDone != null) {
     return clampPercent((input.modelDone / input.modelTotal) * 100);
   }
-  if (index === 5) return 100;
+  if (index === 5 && input.restorePercent != null) return clampPercent(input.restorePercent);
+  if (index === CHECKLIST.length - 1) return 100;
   return null;
 }
 

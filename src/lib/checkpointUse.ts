@@ -17,13 +17,20 @@ export type CatalogResponse = {
   activeVersionId: number | null;
 };
 
-export async function fetchCatalog(endpoint: string, apiKey: string): Promise<CatalogResponse> {
+export async function fetchResources(endpoint: string, apiKey: string): Promise<CatalogResponse> {
   const response = await fetch(`${endpoint}/models`, { headers: authHeaders(apiKey) });
   const raw = await response.text();
   if (!response.ok) throw new Error(readable(raw) || `HTTP ${response.status}.`);
   const body = JSON.parse(raw) as { models?: CatalogCheckpoint[]; activeVersionId?: number | null };
-  const models = (body.models ?? []).filter(isCheckpoint);
-  return { models, activeVersionId: typeof body.activeVersionId === 'number' ? body.activeVersionId : null };
+  return {
+    models: body.models ?? [],
+    activeVersionId: typeof body.activeVersionId === 'number' ? body.activeVersionId : null,
+  };
+}
+
+export async function fetchCatalog(endpoint: string, apiKey: string): Promise<CatalogResponse> {
+  const catalog = await fetchResources(endpoint, apiKey);
+  return { ...catalog, models: catalog.models.filter(isCheckpoint) };
 }
 
 export async function runCheckpointUse(input: {

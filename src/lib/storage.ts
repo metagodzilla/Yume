@@ -236,6 +236,14 @@ export async function saveGeneratorBlob(value: string): Promise<void> {
   await setItem('yume.generator.v1', value);
 }
 
+export async function loadKeptModels(): Promise<string | null> {
+  return getItem('yume.keptModels.v1');
+}
+
+export async function saveKeptModels(value: string): Promise<void> {
+  await setItem('yume.keptModels.v1', value);
+}
+
 export async function readSaladKey(): Promise<string | null> {
   const raw = await readSecure(SALAD_KEY);
   const key = normalizeSaladKey(raw);
