@@ -753,7 +753,7 @@ assert(CREATE_PROMPT_FIELDS.join('|') === 'Describe|Prompt|Positive prompt|Extra
 assert(scaleLoraStack(studioState.loras).every((item) => item.weight <= 0.68) && scaleLoraStack([{ name: 'a', weight: 0.8 }, { name: 'b', weight: 0.4 }])[0]?.weight === 0.8, 'three strong loras scale down');
 assert(ANIME_STUDIO_CHECKPOINT.versionId === 1408658 && ANIME_STUDIO_CHECKPOINT.steps === 26 && ANIME_STUDIO_CHECKPOINT.width === 896, 'anime studio checkpoint');
 assert(CAST_ROUTE === '/cast' && castRouteOpensScreen('/cast') && !castRouteOpensScreen('/(tabs)/cast'), 'cast is a real screen, not a hidden tab');
-assert(meshPlan('') === 'stand-in' && meshPlan('  ') === 'stand-in' && meshPlan('https://mesh.example') === 'trellis' && PICTURE_SERVER_MESH_MESSAGE.includes('3D URL'), 'empty 3d url shows a stand-in and a message');
+assert(meshPlan('') === 'picture' && meshPlan('  ') === 'picture' && meshPlan('https://mesh.example') === 'separate' && PICTURE_SERVER_MESH_MESSAGE.includes('picture server'), 'an empty 3d url uses the picture server');
 assert(familyPreset('Pony').quality.startsWith('score_9'), 'pony uses score tags');
 assert(familyPreset('NoobAI', 'NoobAI XL v-pred').vPrediction && familyPreset('Illustrious').vPrediction === false, 'v-pred is detected from the name');
 assert(sentPositiveText(previewState).includes('masterpiece') && sentPositiveText(previewState).includes('1girl') && sentPositiveText(previewState).includes('shiny eyes') && sentPositiveText(previewState).includes('<lora:ribbon:0.8>'), 'final prompt matches the request');

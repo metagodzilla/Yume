@@ -21,7 +21,7 @@ from typing import Any
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel, Field
 
 from yume_mesh.generate import generate_mesh
@@ -37,6 +37,7 @@ from yume_server.jobs import submit as submit_job
 from yume_server.startup import snapshot as startup_snapshot
 from yume_server.stats import collect as collect_stats
 from yume_server.tagger import read_appearance
+from yume_server.threed import glb_path, job_view, start_job
 from yume_server.version import version_payload
 
 state: dict[str, Any] = {"ready": False, "error": None}
@@ -64,6 +65,11 @@ class MeshIn(BaseModel):
     image: str = Field(min_length=1)
     views: list[dict[str, str]] = []
     seed: int | None = None
+
+
+class ThreeDIn(BaseModel):
+    image: str = Field(min_length=1)
+    views: list[dict[str, str]] = []
 
 
 class GenerateIn(BaseModel):
@@ -628,3 +634,31 @@ def mesh(body: MeshIn, request: Request) -> dict[str, Any]:
         return generate_mesh(body)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.post("/3d/generate")
+def threed_generate(body: ThreeDIn, request: Request) -> dict[str, Any]:
+    _check_key(request)
+    try:
+        job_id = start_job(body.image, body.views)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return {"id": job_id}
+
+
+@app.get("/3d/jobs/{job_id}")
+def threed_job(job_id: str, request: Request) -> dict[str, Any]:
+    _check_key(request)
+    found = job_view(job_id)
+    if found is None:
+        raise HTTPException(status_code=404, detail="That 3D job does not exist.")
+    return found
+
+
+@app.get("/3d/jobs/{job_id}/model.glb")
+def threed_model(job_id: str, request: Request):
+    _check_key(request)
+    path = glb_path(job_id)
+    if not path:
+        raise HTTPException(status_code=404, detail="That 3D job has no model yet.")
+    return FileResponse(path, media_type="model/gltf-binary", filename="model.glb")
