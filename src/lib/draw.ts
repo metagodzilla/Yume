@@ -36,15 +36,19 @@ export function composeGenerationPrompt(state: GeneratorState, characterText = '
         .join(', ')
     : '';
   const preset = familyPreset(checkpoint?.baseModel ?? '', checkpoint?.name ?? '');
+  const quality = state.qualityTags ? (state.quality == null ? preset.quality : state.quality.trim()) : '';
   const bits = [
-    state.qualityTags ? preset.quality : '',
+    quality,
     state.triggers ? (checkpoint?.triggers ?? []).join(', ') : '',
     loraTriggers,
     characterText.trim(),
     embeddingTokens(state).join(', '),
     state.prompt.trim(),
   ];
-  return bits.filter(Boolean).join(', ');
+  const auto = bits.filter(Boolean).join(', ');
+  const extra = (state.extraPrompt || '').trim();
+  if (!extra) return auto;
+  return auto ? `${auto}, ${extra}` : extra;
 }
 
 export function generationParams(state: GeneratorState, prompt: string, seed: number): GenerationParams {

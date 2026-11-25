@@ -5,6 +5,7 @@ import { Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { CheckpointSheet } from '@/components/CheckpointSheet';
+import { LoraSheet } from '@/components/LoraSheet';
 import { Gallery } from '@/components/Gallery';
 import { characterClause } from '@/src/lib/prompt';
 import { composeGenerationPrompt, drawFrames, generationParams, samplerId, sentPositiveText } from '@/src/lib/draw';
@@ -15,7 +16,7 @@ import { SAMPLERS, sizesFor } from '@/src/lib/defaultModel';
 import { extractLoras } from '@/src/lib/a1111';
 import { loraPage } from '@/src/lib/civitai';
 import { openLink } from '@/src/lib/openLink';
-import { patchGenerator, resetModelDefaults, useGenerator } from '@/src/lib/genstore';
+import { patchGenerator, resetBuiltPrompt, resetModelDefaults, useGenerator } from '@/src/lib/genstore';
 import { endpointDiffersFromLive, LIVE_GATEWAY_URL, normalizeEndpoint } from '@/src/lib/salad';
 import { chooseSeeds } from '@/src/lib/seeds';
 import { persistPng, readApiKey, readSaladKey } from '@/src/lib/storage';
@@ -27,8 +28,7 @@ import type { Generation } from '@/src/lib/types';
 export default function GenerateScreen() {
   const studio = useStudio();
   const gen = useGenerator();
-  const [loraName, setLoraName] = useState('');
-  const [loraWeight, setLoraWeight] = useState('0.8');
+  const [loraSheet, setLoraSheet] = useState(false);
   const [status, setStatus] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -164,9 +164,29 @@ export default function GenerateScreen() {
           multiline
           style={styles.prompt}
         />
+        <Text style={styles.label}>Quality tags</Text>
+        <TextInput
+          testID="gen-quality"
+          value={gen.quality}
+          onChangeText={(quality) => patchGenerator({ quality, qualityTags: true })}
+          placeholder="masterpiece, best quality"
+          placeholderTextColor={colors.faint}
+          multiline
+          style={styles.negative}
+        />
+        <Text style={styles.label}>Extra prompt</Text>
+        <TextInput
+          testID="gen-extra"
+          value={gen.extraPrompt}
+          onChangeText={(extraPrompt) => patchGenerator({ extraPrompt })}
+          placeholder="tags or text added as-is, kept when you switch models"
+          placeholderTextColor={colors.faint}
+          multiline
+          style={styles.negative}
+        />
         <View style={styles.finalBox}>
           <View style={styles.row}>
-            <Text style={styles.label}>Final prompt</Text>
+            <Text style={styles.label}>Sent prompt</Text>
             <Pressable testID="copy-final-prompt" onPress={() => void Clipboard.setStringAsync(finalPrompt)}>
               <Text style={styles.link}>Copy</Text>
             </Pressable>
@@ -174,6 +194,9 @@ export default function GenerateScreen() {
           <Text testID="final-prompt" selectable style={styles.final}>
             {finalPrompt || 'The prompt is empty.'}
           </Text>
+          <Pressable testID="reset-built-prompt" onPress={() => resetBuiltPrompt(checkpoint?.baseModel ?? '', checkpoint?.name ?? '')}>
+            <Text style={styles.link}>Reset prompt</Text>
+          </Pressable>
           <Pressable onPress={() => setNegativeOpen((open) => !open)}>
             <Text style={styles.hint}>{negativeOpen ? 'Hide final negative' : 'Final negative'}</Text>
           </Pressable>
@@ -203,29 +226,10 @@ export default function GenerateScreen() {
           style={styles.negative}
         />
         <Text style={styles.label}>LoRAs</Text>
-        <View style={styles.row}>
-          <TextInput
-            testID="gen-lora-name"
-            value={loraName}
-            onChangeText={setLoraName}
-            placeholder="lora file name"
-            placeholderTextColor={colors.faint}
-            autoCapitalize="none"
-            style={[styles.input, { flex: 1 }]}
-          />
-          <TextInput value={loraWeight} onChangeText={setLoraWeight} style={[styles.input, styles.weight]} />
-          <Pressable
-            testID="gen-lora-add"
-            onPress={() => {
-              const name = loraName.trim();
-              const weight = Number(loraWeight);
-              if (!name) return;
-              patchGenerator({ loras: [...gen.loras, { name, weight: Number.isFinite(weight) ? weight : 0.8 }] });
-              setLoraName('');
-            }}>
-            <Text style={styles.link}>Add</Text>
-          </Pressable>
-        </View>
+        <Pressable testID="gen-lora-add" onPress={() => setLoraSheet(true)}>
+          <Text style={styles.link}>Add LoRA</Text>
+        </Pressable>
+        <LoraSheet visible={loraSheet} onClose={() => setLoraSheet(false)} />
         <View style={styles.row}>
           {gen.loras.map((lora) => {
             const page = loraPage(lora);
@@ -290,12 +294,21 @@ export default function GenerateScreen() {
             </Pressable>
           ))}
         </View>
-        <Pressable onPress={() => patchGenerator({ hires: !gen.hires })}>
+        <Pressable testID="hires-toggle" onPress={() => patchGenerator({ hires: !gen.hires })}>
           <Text style={styles.link}>{gen.hires ? 'Hires fix on' : 'Hires fix off'}</Text>
         </Pressable>
         {gen.hires ? (
+          <View style={styles.row}>
+            {['Latent', 'Anime ESRGAN'].map((name) => (
+              <Pressable key={name} onPress={() => patchGenerator({ hiresUpscaler: name })} style={[styles.chipButton, gen.hiresUpscaler === name && styles.chipOn]}>
+                <Text style={styles.chipText}>{name}</Text>
+              </Pressable>
+            ))}
+          </View>
+        ) : null}
+        {gen.hires ? (
           <Text style={styles.hint}>
-            {gen.hiresUpscaler}, scale {gen.hiresScale}, denoise {gen.hiresDenoise}, {gen.hiresSteps} steps. Salad runs a second pass. Demo writes these into the PNG metadata.
+            {gen.hiresUpscaler}, scale {gen.hiresScale}, denoise {gen.hiresDenoise}, {gen.hiresSteps} steps. The second pass is img2img. Anime ESRGAN is used when that file is on the server.
           </Text>
         ) : null}
         <View style={styles.row}>

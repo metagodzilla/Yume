@@ -10,6 +10,15 @@ from typing import Any
 STARTED = time.time()
 
 
+def _loaded_name() -> str:
+    try:
+        from yume_server.generate import loaded_model_name
+
+        return loaded_model_name()
+    except Exception:
+        return "Animagine XL 4.0"
+
+
 def collect() -> dict[str, Any]:
     mock = os.environ.get("YUME_MOCK", "").strip() in {"1", "true", "yes"}
     gpu = _gpu()
@@ -25,7 +34,7 @@ def collect() -> dict[str, Any]:
         "diskFreeMb": disk.get("free"),
         "diskTotalMb": disk.get("total"),
         "uptimeSec": int(time.time() - STARTED),
-        "model": "Animagine XL 4.0",
+        "model": _loaded_name(),
         "modelLoaded": os.environ.get("YUME_READY", "1") != "0",
         "source": gpu.get("source") or ("mock" if mock else "host"),
         "powerWatts": gpu.get("power"),

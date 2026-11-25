@@ -3,7 +3,7 @@ import { PermissionsAndroid, Platform } from 'react-native';
 import { containerGroupUrl, liveContainerGroup } from '@/src/lib/cloudActions';
 import { CLOUD_STOP_CHECK } from '@/src/lib/cloudRun';
 import { civitaiModelUrl, filterModels, getCivitaiModel, modelPasses, pickPreview, searchCivitai, thumbnailUrl } from '@/src/lib/civitai';
-import { classifyGatewayInput, normalizeEndpoint } from '@/src/lib/salad';
+import { classifyGatewayInput, friendlyGatewayMessage, normalizeEndpoint } from '@/src/lib/salad';
 import { normalizeSaladKey, pullPercent } from '@/src/lib/saladCloud';
 import { readPhone } from '@/src/lib/device';
 import { OFFLINE_MODEL, offlineBlockedReason } from '@/src/lib/offline';
@@ -13,7 +13,7 @@ import { deleteImageUri, persistPng, readCivitaiToken, readPng, readSaladKey } f
 import { checkGithubRelease, decideReleaseCheck, parseGithubRelease, readInstalledVersionCode } from '@/src/lib/updates';
 import { APP_VERSION, APP_VERSION_CODE } from '@/src/lib/version';
 import { type CheckRow, type CheckStatus } from '@/src/lib/checkRows';
-import { modelCardPress, routeLeavesCreate } from '@/src/lib/checkpoints';
+import { familyPreset, loadedModelName, loraBaseWarning, modelCardPress, routeLeavesCreate, settingsForCheckpoint } from '@/src/lib/checkpoints';
 import { CLOUD_OFF_INSTALL, canUseAsDefault, installAction, installRequest, isServerInstalled } from '@/src/lib/installGate';
 
 export type { CheckRow } from '@/src/lib/checkRows';
@@ -330,6 +330,16 @@ export async function runAppCheck(input: { endpoint: string }): Promise<CheckRow
       : row('Navigation', 'Model card', 'fail', 0, `The model card action is ${card.action}. Browse goes to ${card.browse}.`),
   );
 
+  const illustrious = settingsForCheckpoint('Illustrious', 'Prefect XL');
+  const hiresOk = illustrious.hires && illustrious.hiresScale === 1.5 && illustrious.hiresDenoise === 0.4 && illustrious.clipSkip === 1 && familyPreset('Illustrious', 'Wai').clipSkip === 2;
+  rows.push(hiresOk ? row('Create', 'Hires fix', 'pass', 0, 'Illustrious turns hires on at 1.5x and denoise 0.4. Prefect uses clip skip 1.') : row('Create', 'Hires fix', 'fail', 0, 'The Illustrious hires preset drifted.'));
+  const warning = loraBaseWarning('Illustrious', 'Pony');
+  rows.push(warning.includes('do not match') ? row('Create', 'LoRA apply', 'pass', 0, warning) : row('Create', 'LoRA apply', 'fail', 0, 'A mismatched LoRA base did not warn.'));
+  const named = loadedModelName([{ versionId: 5, name: 'Prefect XL' }], 5);
+  rows.push(named === 'Prefect XL' ? row('Create', 'Loaded model', 'pass', 0, 'The loaded checkpoint name is Prefect XL.') : row('Create', 'Loaded model', 'fail', 0, `Loaded model name was ${named}.`));
+  const html = friendlyGatewayMessage(503, '<html><body>no servers</body></html>');
+  rows.push(html.includes('no machine ready') ? row('Cloud', 'Gateway page', 'pass', 0, html) : row('Cloud', 'Gateway page', 'fail', 0, html || 'HTML 503 was shown raw.'));
+
   rows.push(await notificationRow());
   rememberFailures('app', rows);
   return rows;
@@ -378,7 +388,8 @@ async function callJson(url: string, init: RequestInit, timeoutMs = 15_000): Pro
     } catch {
       json = null;
     }
-    const message = messageOf(json) || text.replace(/\s+/g, ' ').trim().slice(0, 180) || `HTTP ${response.status}.`;
+    const friendly = friendlyGatewayMessage(response.status, text);
+    const message = friendly || messageOf(json) || text.replace(/\s+/g, ' ').trim().slice(0, 180) || `HTTP ${response.status}.`;
     return { ok: response.ok, status: response.status, ms: Date.now() - started, message, detail: text.slice(0, 800), json };
   } catch (error) {
     const aborted = error instanceof Error && error.name === 'AbortError';

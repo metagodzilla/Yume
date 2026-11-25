@@ -21,14 +21,14 @@ import { encodePng } from '@/src/lib/png';
 import { produceImages, resolveSeeds } from '@/src/lib/produce';
 import { renderDemoFrames } from '@/src/lib/render';
 import { describeUpdateError, downloadLabel } from '@/src/lib/apkInstall';
-import { baseFamily, baseLabel, defaultsForBase, familyPreset, modelCardPress, routeLeavesCreate } from '@/src/lib/checkpoints';
+import { baseFamily, baseLabel, defaultsForBase, familyPreset, settingsForCheckpoint, modelCardPress, routeLeavesCreate } from '@/src/lib/checkpoints';
 import { chooseSeeds } from '@/src/lib/seeds';
 import { redactValue } from '@/src/lib/reportText';
 import { buildSaladGenerateBody, composeGenerationPrompt, sentPositiveText } from '@/src/lib/draw';
-import type { GeneratorState } from '@/src/lib/genstore';
+import { getGenerator, patchGenerator, resetBuiltPrompt, resetModelDefaults, type GeneratorState } from '@/src/lib/genstore';
 import { downloadButtons, downloadKind, downloadPercent, formatEta, formatSpeed, RECONNECTING } from '@/src/lib/downloads';
 import { installFailureMessage } from '@/src/lib/modelInstall';
-import { buildSaladBody, classifyGatewayInput, generateUrl, LIVE_GATEWAY_URL, migrateKeyStoredAsUrl, normalizeEndpoint, redactSecrets, saladErrorMessage } from '@/src/lib/salad';
+import { buildSaladBody, classifyGatewayInput, friendlyGatewayMessage, generateUrl, LIVE_GATEWAY_URL, migrateKeyStoredAsUrl, normalizeEndpoint, redactSecrets, saladErrorMessage } from '@/src/lib/salad';
 import { browsingParams, civitaiModelUrl, filterModels, loraPage, pickPreview, thumbnailUrl, type CivitaiModel } from '@/src/lib/civitai';
 import { buildYumeContainerGroup, choicesFromGpuClasses, costLine, describeDeploy, groupStatusOf, maskKey, normalizeSaladKey, pickDefaultGpu, saladFailureMessage, saladRequest, serverUrlFromLink, shouldIdleStop, shouldIdleWarn } from '@/src/lib/saladCloud';
 import { containerGroupUrl, liveContainerGroup, validateSaladKey } from '@/src/lib/cloudActions';
@@ -625,6 +625,8 @@ assert(denial.includes('blocked Yume') && !denial.includes('Permission Denial') 
 assert(describeUpdateError(new Error('Android is asking Yume for permission to install apps. Turn on Allow from this source, then tap Update again.')).includes('Allow from this source'), 'unknown-apps prompt stays');
 assert(saladErrorMessage({ aborted: true }).toLowerCase().includes('waking'), 'cold start copy');
 assert(saladErrorMessage({ aborted: false, status: 503 }).toLowerCase().includes('not ready'), '503 copy');
+assert(friendlyGatewayMessage(503, '<html><title>no healthy upstream</title></html>') === 'Cloud is starting / no machine ready yet', 'html gateway page');
+assert(saladErrorMessage({ aborted: false, status: 404, body: '<!doctype html><html></html>' }).includes('no machine ready'), 'html 404');
 const previewState = {
   prompt: '1girl',
   negative: 'lowres',
@@ -652,6 +654,8 @@ const previewState = {
   denoise: 0.55,
   nsfw: false,
   contentFilter: 'sfw',
+  quality: 'masterpiece, high score, great score, absurdres',
+  extraPrompt: 'shiny eyes',
   vPrediction: false,
   installed: [{ versionId: 1337429, modelId: 1, name: 'Animagine XL 4.0', version: 'v4', type: 'Checkpoint', baseModel: 'SDXL 1.0', filename: 'animagine-xl-4.0.safetensors', hash: '1d5b43ff75', sha256: '', triggers: [], isDefault: true }],
 } as GeneratorState;
@@ -664,9 +668,16 @@ assert(baseFamily('Illustrious') === 'Illustrious' && baseFamily('Pony') === 'Po
 assert(defaultsForBase('Pony').clipSkip === 2 && defaultsForBase('Pony').width === 832 && defaultsForBase('SD 1.5').height === 768 && defaultsForBase('Flux.1 D').clipSkip === 1, 'base defaults');
 const illustrious = familyPreset('Illustrious', 'Prefectious XL NSFW');
 assert(illustrious.cfg === 5 && illustrious.steps === 28 && illustrious.sampler === 'Euler a' && illustrious.quality.includes('very aesthetic') && !illustrious.quality.includes('high score') && illustrious.negative.includes('shiny skin'), 'illustrious preset drops animagine score tags');
+assert(familyPreset('Illustrious', 'Prefect XL').clipSkip === 1 && familyPreset('Illustrious', 'Prefect XL').hires && familyPreset('Illustrious', 'Prefect XL').hiresDenoise === 0.4 && familyPreset('Illustrious', 'Prefectious XL').clipSkip === 2, 'prefect clip skip and illustrious hires');
+assert(settingsForCheckpoint('SDXL 1.0', 'Photo', { cfg: 4, steps: 20, sampler: 'Euler' }).cfg === 4, 'civitai recommended settings override the family');
+patchGenerator({ extraPrompt: 'shiny eyes', prompt: 'girl' });
+resetModelDefaults('Illustrious', 'Wai');
+assert(getGenerator().extraPrompt === 'shiny eyes' && getGenerator().hires, 'extra prompt survives a model preset');
+resetBuiltPrompt('Illustrious', 'Wai');
+assert(getGenerator().extraPrompt === '' && getGenerator().quality.includes('very aesthetic'), 'reset restores the auto-built prompt');
 assert(familyPreset('Pony').quality.startsWith('score_9'), 'pony uses score tags');
 assert(familyPreset('NoobAI', 'NoobAI XL v-pred').vPrediction && familyPreset('Illustrious').vPrediction === false, 'v-pred is detected from the name');
-assert(sentPositiveText(previewState).includes('masterpiece') && sentPositiveText(previewState).includes('1girl') && sentPositiveText(previewState).includes('<lora:ribbon:0.8>'), 'final prompt matches the request');
+assert(sentPositiveText(previewState).includes('masterpiece') && sentPositiveText(previewState).includes('1girl') && sentPositiveText(previewState).includes('shiny eyes') && sentPositiveText(previewState).includes('<lora:ribbon:0.8>'), 'final prompt matches the request');
 assert(installFailureMessage(502, 'error code: 502').retry && installFailureMessage(401, 'Civitai needs your API key').message.includes('Civitai needs your API key'), 'install 502 retries and 401 explains the token');
 assert(RECONNECTING === 'Reconnecting', 'reconnect copy');
 assert(downloadPercent({ state: 'downloading', bytesDone: 50, bytesTotal: 100 }) === 50, 'download percent');

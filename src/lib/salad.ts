@@ -124,7 +124,18 @@ function safeWhere(url?: string): string {
   return ` Tried ${url}.`;
 }
 
+export function isGatewayHtml(body: string): boolean {
+  return /<!doctype html|<html[\s>]/i.test(body);
+}
+
+export function friendlyGatewayMessage(status: number | undefined, body: string): string {
+  if ((status === 404 || status === 503) && isGatewayHtml(body)) return 'Cloud is starting / no machine ready yet';
+  return '';
+}
+
 export function saladErrorMessage(input: { aborted: boolean; status?: number; body?: string; url?: string }): string {
+  const friendly = friendlyGatewayMessage(input.status, input.body ?? '');
+  if (friendly) return friendly;
   const where = safeWhere(input.url);
   if (input.aborted) {
     return `Salad is still waking up and did not answer in time.${where} The first SDXL picture can take a few minutes.`;

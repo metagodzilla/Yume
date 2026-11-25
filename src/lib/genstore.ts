@@ -1,7 +1,7 @@
 import { useSyncExternalStore } from 'react';
 
 import type { ContentFilter } from '@/src/lib/civitai';
-import { familyPreset } from '@/src/lib/checkpoints';
+import { settingsForCheckpoint, type RecommendedSettings } from '@/src/lib/checkpoints';
 import { DEFAULT_CHECKPOINT } from '@/src/lib/defaultModel';
 
 export type InstalledResource = {
@@ -20,6 +20,8 @@ export type InstalledResource = {
 
 export type GeneratorState = {
   prompt: string;
+  quality: string;
+  extraPrompt: string;
   negative: string;
   sampler: string;
   steps: number;
@@ -65,6 +67,8 @@ export const defaultResource = (): InstalledResource => ({
 
 export const initialGenerator = (): GeneratorState => ({
   prompt: '',
+  quality: DEFAULT_CHECKPOINT.quality,
+  extraPrompt: '',
   negative: DEFAULT_CHECKPOINT.negative,
   sampler: DEFAULT_CHECKPOINT.sampler,
   steps: DEFAULT_CHECKPOINT.steps,
@@ -83,9 +87,9 @@ export const initialGenerator = (): GeneratorState => ({
   vae: '',
   hires: false,
   hiresScale: 1.5,
-  hiresDenoise: 0.45,
+  hiresDenoise: 0.4,
   hiresUpscaler: 'Latent',
-  hiresSteps: 15,
+  hiresSteps: 18,
   mode: 'txt2img',
   denoise: 0.55,
   nsfw: false,
@@ -126,8 +130,8 @@ export function installLocal(resource: InstalledResource) {
   patchGenerator({ installed, checkpointId: resource.type === 'Checkpoint' ? resource.versionId : state.checkpointId });
 }
 
-export function applyCheckpoint(resource: InstalledResource) {
-  const preset = familyPreset(resource.baseModel, resource.name);
+export function applyCheckpoint(resource: InstalledResource, recommended?: RecommendedSettings) {
+  const preset = settingsForCheckpoint(resource.baseModel, resource.name, recommended);
   const installed = [
     ...state.installed
       .filter((item) => item.versionId !== resource.versionId)
@@ -144,13 +148,19 @@ export function applyCheckpoint(resource: InstalledResource) {
     width: preset.width,
     height: preset.height,
     negative: preset.negative,
+    quality: preset.quality,
     qualityTags: true,
+    hires: preset.hires,
+    hiresScale: preset.hiresScale,
+    hiresDenoise: preset.hiresDenoise,
+    hiresSteps: preset.hiresSteps,
+    hiresUpscaler: preset.hiresUpscaler,
     vPrediction: preset.vPrediction,
   });
 }
 
 export function resetModelDefaults(baseModel: string, name = '') {
-  const preset = familyPreset(baseModel, name);
+  const preset = settingsForCheckpoint(baseModel, name);
   patchGenerator({
     sampler: preset.sampler,
     steps: preset.steps,
@@ -159,9 +169,31 @@ export function resetModelDefaults(baseModel: string, name = '') {
     width: preset.width,
     height: preset.height,
     negative: preset.negative,
+    quality: preset.quality,
     qualityTags: true,
+    hires: preset.hires,
+    hiresScale: preset.hiresScale,
+    hiresDenoise: preset.hiresDenoise,
+    hiresSteps: preset.hiresSteps,
+    hiresUpscaler: preset.hiresUpscaler,
     vPrediction: preset.vPrediction,
   });
+}
+
+export function resetBuiltPrompt(baseModel: string, name = '') {
+  const preset = settingsForCheckpoint(baseModel, name);
+  patchGenerator({ quality: preset.quality, qualityTags: true, extraPrompt: '' });
+}
+
+export function addLora(lora: { name: string; weight: number; modelId?: number; versionId?: number; triggers?: string[] }) {
+  const triggers = (lora.triggers ?? []).map((item) => item.trim()).filter(Boolean);
+  const existing = state.prompt.trim();
+  const missing = triggers.filter((item) => !existing.toLowerCase().includes(item.toLowerCase()));
+  const prompt = missing.length ? [existing, missing.join(', ')].filter(Boolean).join(', ') : state.prompt;
+  const same = (item: GeneratorState['loras'][number]) =>
+    lora.versionId && item.versionId ? item.versionId === lora.versionId : item.name === lora.name;
+  const others = state.loras.filter((item) => !same(item));
+  patchGenerator({ loras: [...others, { name: lora.name, weight: lora.weight, modelId: lora.modelId, versionId: lora.versionId }], prompt, triggers: true });
 }
 
 export function rememberServerModels(records: InstalledResource[]) {

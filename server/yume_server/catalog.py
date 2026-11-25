@@ -391,7 +391,7 @@ def _describe_version(version_id: int, token: str | None, hint: dict[str, Any] |
             "filename": str(hint.get("filename") or f"civitai-{version_id}.safetensors"),
             "hash": "",
             "sha256": "",
-            "triggers": [],
+            "triggers": list(hint.get("triggers") or []),
             "isDefault": False,
             "bytes": 0,
         }

@@ -21,7 +21,7 @@ export async function startDownload(
   endpoint: string,
   apiKey: string,
   versionId: number,
-  hint?: { type?: string; name?: string; filename?: string },
+  hint?: { type?: string; name?: string; filename?: string; baseModel?: string; triggers?: string[] },
   civitaiToken?: string | null,
 ): Promise<DownloadJob> {
   const request = installRequest(versionId, civitaiToken);
