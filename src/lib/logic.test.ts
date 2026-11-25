@@ -32,7 +32,7 @@ import { meshPlan, PICTURE_SERVER_MESH_MESSAGE } from '@/src/lib/mesh';
 import { newerServerRelease, serverUpdateCall } from '@/src/lib/serverUpdate';
 import { CAST_ROUTE, castRouteOpensScreen } from '@/src/lib/routes';
 import { chooseSeeds } from '@/src/lib/seeds';
-import { redactValue } from '@/src/lib/reportText';
+import { redactValue, reportDocument } from '@/src/lib/reportText';
 import { CREATE_PROMPT_FIELDS } from '@/src/lib/createFields';
 import { describeParts, describeToTags, isClothesTag, keepManualTags, namedPeople, settleSavedPrompts, supportTags } from '@/src/lib/positiveTags';
 import { defaultOutfitTags, pickCleanTriggerGroup, sentNegative } from '@/src/lib/draw';
@@ -878,6 +878,27 @@ assert(downloadKind({ id: 'a', versionId: 1, state: 'done', bytesDone: 1, bytesT
 assert(downloadKind({ id: 'a', versionId: 1, state: 'done', bytesDone: 1, bytesTotal: 1, type: 'TextualInversion' }) === 'Embedding', 'embedding kind');
 assert(formatSpeed(1024 * 1024).includes('MB') && formatEta(90) === '1 min', 'speed and eta');
 assert(!JSON.stringify(redactValue({ apiKey: 'salad_cloud_user_secret', note: 'token=abc' })).includes('secret'), 'client report redacts secrets');
+const groupDump = {
+  container: {
+    environment_variables: {
+      YUME_ADMIN_TOKEN: 'adminkeyvalue1234',
+      YUME_API_KEY: 'salad_cloud_user_abcdefghijklmnopqrstuvwxyz',
+      YUME_CIVITAI_TOKEN: 'civitaikeyvalue1234',
+      HF_HOME: '/models',
+    },
+  },
+};
+const cleanedGroup = JSON.stringify(redactValue(groupDump, ['adminkeyvalue1234', 'civitaikeyvalue1234']));
+assert(cleanedGroup.includes('"YUME_ADMIN_TOKEN":"***"') && cleanedGroup.includes('"HF_HOME":"***"'), 'env names stay and values are hidden');
+assert(!cleanedGroup.includes('adminkeyvalue1234') && !cleanedGroup.includes('civitaikeyvalue1234') && !cleanedGroup.includes('abcdefghijklmnopqrstuvwxyz'), 'group export keeps no env values');
+const html503 = '<!DOCTYPE html><html><head><title>503 Service Unavailable</title></head><body>no instance ready</body></html>';
+const exported = reportDocument(
+  [{ endpoint: html503, status: 503, message: 'Cloud Group state failed', payload: groupDump }],
+  { note: 'saw adminkeyvalue1234 in a log' },
+  ['adminkeyvalue1234'],
+);
+assert(exported.includes('Salad gateway 503: no instance ready') && !exported.includes('<html') && !exported.includes('<!DOCTYPE'), 'html gateway pages become a short summary');
+assert(!exported.includes('adminkeyvalue1234') && !exported.includes('civitaikeyvalue1234') && !exported.includes('abcdefghijklmnopqrstuvwxyz'), 'the copied report has no secret values');
 assert(normalizeSaladKey('  salad_cloud_user_abc\r\n') === 'salad_cloud_user_abc', 'pasted key drops whitespace');
 assert(normalizeSaladKey('Salad-Api-Key: salad_cloud_user_abc') === 'salad_cloud_user_abc', 'pasted key drops a header label');
 const orgMiss = saladFailureMessage(404, 'https://api.salad.com/api/public/organizations');

@@ -12,7 +12,6 @@ import { capReached, checkLine, cloudChecklist, deploymentForEndpoint, formatCos
 import { DISK_RESET_NOTE, restoreSummary } from '@/src/lib/keptModels';
 import { fetchInstalls } from '@/src/lib/downloadClient';
 import { restoreMissingModels } from '@/src/lib/restoreModels';
-import { readCivitaiToken } from '@/src/lib/storage';
 import { confirmAction } from '@/src/lib/confirm';
 import { probe, type Probe } from '@/src/lib/connection';
 import { readPhone, type PhoneReading } from '@/src/lib/device';
@@ -23,7 +22,7 @@ import { endpointDiffersFromLive, LIVE_GATEWAY_URL, normalizeEndpoint, redactSec
 import { groupStatusOf, instanceCounts, normalizeSaladKey, pullPercent } from '@/src/lib/saladCloud';
 import { areaCounts, type CheckRow } from '@/src/lib/checkRows';
 import { runAppCheck, runCloudCheck } from '@/src/lib/selfTest';
-import { readCloudDeployment, readSaladKey, touchCloudActivity, writeCloudDeployment } from '@/src/lib/storage';
+import { readAdminToken, readCivitaiToken, readCloudDeployment, readSaladKey, touchCloudActivity, writeCloudDeployment } from '@/src/lib/storage';
 import { getThrottle } from '@/src/lib/thermalState';
 import { emptyStats, money, type CloudStats } from '@/src/lib/usage';
 import { useStudio } from '@/src/studio';
@@ -464,7 +463,20 @@ export function StatusPanel({ preview = '' }: { preview?: string }) {
             {openError === index ? <Text selectable style={styles.help}>{item.traceback || item.message}</Text> : null}
           </View>
         ))}
-        <Pressable testID="copy-report" onPress={() => void Clipboard.setStringAsync(reportDocument([...cloudRows, ...appRows].map((item) => ({ message: `${item.status.toUpperCase()} ${item.area} ${item.name}: ${item.message}`, endpoint: item.detail, status: item.http })), clientReportBody()))}>
+        <Pressable
+          testID="copy-report"
+          onPress={() => {
+            void (async () => {
+              const [salad, admin, civitai] = await Promise.all([readSaladKey(), readAdminToken(), readCivitaiToken()]);
+              const secrets = [salad, admin, civitai].filter((item): item is string => Boolean(item && item.trim().length >= 8));
+              const rows = [...cloudRows, ...appRows].map((item) => ({
+                message: `${item.status.toUpperCase()} ${item.area} ${item.name}: ${item.message}`,
+                endpoint: item.detail,
+                status: item.http,
+              }));
+              await Clipboard.setStringAsync(reportDocument(rows, clientReportBody(), secrets));
+            })();
+          }}>
           <Text style={styles.link}>Copy report</Text>
         </Pressable>
         {wrongServer ? (
