@@ -185,6 +185,43 @@ def test_install_jobs_persist_across_restarts(tmp_path, monkeypatch) -> None:
     assert restored["state"] == "paused" and restored["bytesDone"] == 5 and restored["type"] == "TextualInversion"
 
 
+def test_restore_redownloads_a_missing_checkpoint(client: TestClient) -> None:
+    headers = {"Authorization": "Bearer test-key", "X-Civitai-Token": "civitai-token"}
+    version_id = 5015
+    client.delete(f"/models/{version_id}", headers=headers)
+    try:
+        response = client.post(
+            "/models/restore",
+            headers=headers,
+            json={
+                "versionIds": [1337429, version_id],
+                "lastUsedVersionId": version_id,
+                "models": [{"versionId": version_id, "type": "Checkpoint", "name": "Prefect XL"}],
+            },
+        )
+        assert response.status_code == 200, response.text
+        body = response.json()
+        assert body["pendingLoad"] == version_id
+        assert any(job["versionId"] == version_id for job in body["jobs"])
+        job = next(item for item in body["jobs"] if item["versionId"] == version_id)
+        for _ in range(40):
+            job = client.get(f"/models/install/{job['id']}", headers=headers).json()
+            if job["state"] in {"done", "error"}:
+                break
+        assert job["state"] == "done", job
+        listed = client.get("/models", headers=headers).json()
+        for _ in range(40):
+            if listed.get("activeVersionId") == version_id:
+                break
+            time.sleep(0.02)
+            listed = client.get("/models", headers=headers).json()
+        assert any(item["versionId"] == version_id for item in listed["models"])
+        assert listed["activeVersionId"] == version_id
+    finally:
+        client.post("/models/use", headers=headers, json={"versionId": 1337429})
+        client.post("/models/default", headers=headers, json={"versionId": 1337429})
+
+
 def test_hires_vae_and_loaded_name() -> None:
     from yume_server.generate import clip_skip_index, hires_plan, lora_directories, needs_fixed_vae
 
