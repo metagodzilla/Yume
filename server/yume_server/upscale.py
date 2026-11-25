@@ -409,6 +409,10 @@ def _encode(image: Any) -> bytes:
 
 
 def _esrgan_pass(image: Any) -> Any:
+    from yume_server.features import ensure_feature
+
+    if not ensure_feature("upscaler"):
+        raise RuntimeError("The upscaler runtime is still installing. Try again in a moment.")
     import numpy as np
     import torch
     from PIL import Image

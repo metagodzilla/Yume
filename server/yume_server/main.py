@@ -491,6 +491,7 @@ class RestoreIn(BaseModel):
     versionIds: list[int] = []
     lastUsedVersionId: int | None = None
     models: list[RestoreModelIn] = []
+    features: list[str] = []
 
 
 class DefaultIn(BaseModel):
@@ -543,6 +544,10 @@ def restore(body: RestoreIn, request: Request) -> dict[str, Any]:
         for item in body.models
     }
     version_ids = list(body.versionIds) or [item.versionId for item in body.models]
+    if body.features:
+        from yume_server.features import restore_features
+
+        threading.Thread(target=restore_features, args=(body.features,), name="yume-features", daemon=True).start()
     return restore_models(version_ids, body.lastUsedVersionId, hints, token)
 
 

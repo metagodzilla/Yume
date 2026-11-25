@@ -24,7 +24,7 @@ import { emptyCloudWatch, noteCloudMove, observeCloud, type CloudWatchView } fro
 import { fileLine, filesForPhase, formatReadyIn, overallEtaSeconds, parseProgressFiles, phaseDetail, softwareDetail, type WeightFile } from '@/src/lib/startupEta';
 import { areaCounts, type CheckRow } from '@/src/lib/checkRows';
 import { runAppCheck, runCloudCheck } from '@/src/lib/selfTest';
-import { readAdminToken, readCivitaiToken, readCloudDeployment, readSaladKey, touchCloudActivity, writeCloudDeployment } from '@/src/lib/storage';
+import { loadFeatures, readAdminToken, readCivitaiToken, readCloudDeployment, readSaladKey, saveFeatures, touchCloudActivity, writeCloudDeployment } from '@/src/lib/storage';
 import { getThrottle } from '@/src/lib/thermalState';
 import { formatBytes, formatEta, formatSpeed } from '@/src/lib/downloads';
 import { emptyStats, money, type CloudStats } from '@/src/lib/usage';
@@ -232,6 +232,12 @@ export function StatusPanel({ preview = '' }: { preview?: string }) {
       const progress = saved ? await probe(`${saved}/progress`, { headers }, 8000) : undefined;
       const listedFiles = parseProgressFiles(progress?.body);
       setFiles(listedFiles);
+      const seen = listedFiles.map((item) => item.feature || '').filter(Boolean);
+      if (seen.length) {
+        const prior = await loadFeatures();
+        const next = [...new Set([...prior, ...seen])];
+        if (next.length !== prior.length) await saveFeatures(next);
+      }
       setModelStats({
         done: typeof startupBody?.bytesDone === 'number' ? startupBody.bytesDone : 0,
         total: typeof startupBody?.bytesTotal === 'number' ? startupBody.bytesTotal : 0,

@@ -62,7 +62,6 @@ def ensure_peft() -> bool:
         return True
     if mock_mode():
         return False
-    with _LOCK:
-        if _can_import():
-            return True
-        return _pip_install()
+    from yume_server.features import ensure_feature
+
+    return ensure_feature("peft")

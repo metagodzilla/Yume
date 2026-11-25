@@ -32,7 +32,7 @@ def note_download(done: int, total: int) -> None:
     note_file("checkpoint", name="Checkpoint", kind="Checkpoint", done=done, total=total, state="downloading")
 
 
-def note_file(key: str, *, name: str, kind: str, done: int = 0, total: int = 0, state: str = "downloading", version_id: int | None = None) -> None:
+def note_file(key: str, *, name: str, kind: str, done: int = 0, total: int = 0, state: str = "downloading", version_id: int | None = None, feature: str | None = None) -> None:
     """Record one weight file. speed is bytes per second."""
     now = time.monotonic()
     with _LOCK:
@@ -55,6 +55,7 @@ def note_file(key: str, *, name: str, kind: str, done: int = 0, total: int = 0, 
             "speed": speed,
             "state": "waiting" if state in {"queued", "paused"} else state,
             "eta_seconds": int((total - done) / speed) if speed > 0 and total > done else None,
+            "feature": feature or row.get("feature") or "",
         })
         _FILES[key] = row
 

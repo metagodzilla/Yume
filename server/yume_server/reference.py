@@ -47,23 +47,10 @@ def ensure_reference_weights() -> None:
     with _LOCK:
         if _READY:
             return
-        try:
-            import controlnet_aux  # noqa: F401
-        except Exception:
-            _LOG.info("installing controlnet_aux for OpenPose preview")
-            subprocess.check_call(
-                [
-                    sys.executable,
-                    "-m",
-                    "pip",
-                    "install",
-                    "--disable-pip-version-check",
-                    "--upgrade-strategy",
-                    "only-if-needed",
-                    "controlnet_aux==0.0.9",
-                    "opencv-python-headless==4.10.0.84",
-                ]
-            )
+        from yume_server.features import ensure_feature
+
+        if not ensure_feature("pose"):
+            raise RuntimeError("The pose detector is still installing. Try again in a moment.")
         from huggingface_hub import snapshot_download
 
         cache = os.environ.get("HF_HOME") or os.environ.get("YUME_MODEL_DIR") or "/models"

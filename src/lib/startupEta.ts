@@ -13,6 +13,7 @@ export type WeightFile = {
   speed: number;
   state: string;
   etaSeconds: number | null;
+  feature?: string;
 };
 
 export function formatElapsed(ms: number): string {
@@ -69,6 +70,7 @@ export function parseProgressFiles(payload: unknown): WeightFile[] {
       speed: Number(row.speed ?? row.bytesPerSecond ?? 0) || 0,
       state: String(row.state || 'waiting'),
       etaSeconds: typeof row.eta_seconds === 'number' ? row.eta_seconds : typeof row.etaSeconds === 'number' ? row.etaSeconds : null,
+      feature: typeof row.feature === 'string' ? row.feature : '',
     };
   });
 }

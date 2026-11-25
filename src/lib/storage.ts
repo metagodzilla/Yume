@@ -24,6 +24,7 @@ const KEYS = {
   turnarounds: 'yume.turnarounds.v1',
   meshes: 'yume.meshes.v1',
   taste: 'yume.taste.v1',
+  features: 'yume.features.v1',
 };
 
 let database: Promise<IDBDatabase> | null = null;
@@ -113,6 +114,22 @@ export async function loadTaste(): Promise<string | null> {
 
 export async function saveTaste(value: string): Promise<void> {
   await setItem(KEYS.taste, value);
+}
+
+export async function loadFeatures(): Promise<string[]> {
+  const raw = await getItem(KEYS.features);
+  if (!raw) return [];
+  try {
+    const parsed = JSON.parse(raw) as unknown;
+    return Array.isArray(parsed) ? parsed.filter((item) => typeof item === 'string' && item.trim()) : [];
+  } catch {
+    return [];
+  }
+}
+
+export async function saveFeatures(names: string[]): Promise<void> {
+  const unique = [...new Set(names.map((item) => item.trim()).filter(Boolean))];
+  await setItem(KEYS.features, JSON.stringify(unique));
 }
 
 export async function loadSession(): Promise<Session> {
