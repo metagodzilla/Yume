@@ -313,6 +313,23 @@ def test_startup_answers_before_ready(client: TestClient) -> None:
     assert client.get("/health").json()["startup"]["stage"] == body["stage"]
 
 
+def test_wai_boot_download_is_on_progress(tmp_path, monkeypatch, caplog) -> None:
+    monkeypatch.setenv("YUME_MODEL_DIR", str(tmp_path))
+    monkeypatch.setenv("YUME_MOCK", "1")
+    from yume_server.catalog import materialize_checkpoint, wai_record
+    from yume_server.startup import note_download, snapshot
+
+    with caplog.at_level("INFO", logger="yume.startup"):
+        materialize_checkpoint(wai_record())
+        note_download(2_000_000, 6_946_000_000, name="WAI-illustrious-SDXL")
+    body = snapshot()
+    row = next(item for item in body["files"] if item["name"] == "WAI-illustrious-SDXL")
+    assert row["type"] == "Checkpoint" and row["bytes_done"] == 2_000_000 and row["bytes_total"] == 6_946_000_000
+    assert body["bytesDone"] == 2_000_000 and body["bytesTotal"] == 6_946_000_000 and "bytesPerSecond" in body
+    assert "checkpoint download WAI-illustrious-SDXL 2000000/6946000000 bytes" in caplog.text
+    assert "secret" not in caplog.text
+
+
 def test_health_and_ready(client: TestClient) -> None:
     health = client.get("/health").json()
     assert health["status"] == "ok"

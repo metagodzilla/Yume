@@ -224,6 +224,7 @@ export function StatusPanel({ preview = '' }: { preview?: string }) {
         startupMessage: typeof startupBody?.message === 'string' ? startupBody.message : '',
         probeError: probeError || undefined,
         pullPercent: groupPull,
+        instanceState: activeState,
         modelDone: typeof startupBody?.bytesDone === 'number' ? startupBody.bytesDone : null,
         modelTotal: typeof startupBody?.bytesTotal === 'number' ? startupBody.bytesTotal : null,
         restoreTotal,

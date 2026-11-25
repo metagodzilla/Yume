@@ -47,7 +47,7 @@ import { buildSaladBody, classifyGatewayInput, friendlyGatewayMessage, generateU
 import { browsingParams, civitaiModelUrl, filterModels, loraPage, pickPreview, thumbnailUrl, type CivitaiModel } from '@/src/lib/civitai';
 import { buildYumeContainerGroup, choicesFromGpuClasses, costLine, describeDeploy, groupStatusOf, maskKey, normalizeSaladKey, pickDefaultGpu, saladFailureMessage, saladRequest, serverUrlFromLink, shouldIdleStop, shouldIdleWarn } from '@/src/lib/saladCloud';
 import { containerGroupUrl, liveContainerGroup, validateSaladKey } from '@/src/lib/cloudActions';
-import { capReached, checkLine, cloudChecklist, deploymentForEndpoint, formatCostLine, resolveHourly, RTX_4090_LOW_HOURLY, sessionUsd, uptimeSeconds } from '@/src/lib/cloudSteps';
+import { capReached, checkLine, cloudChecklist, deploymentForEndpoint, formatCostLine, imagePullSettled, resolveHourly, RTX_4090_LOW_HOURLY, sessionUsd, uptimeSeconds } from '@/src/lib/cloudSteps';
 import { CLOUD_STOP_CHECK } from '@/src/lib/cloudRun';
 import { CLOUD_OFF_INSTALL, canUseAsDefault, cloudIsOff, installAction, installRequest, isServerInstalled } from '@/src/lib/installGate';
 import { dropTiles, filterTiles, galleryTiles, reusePatch } from '@/src/lib/gallery';
@@ -604,6 +604,30 @@ assert(downloading.phase === 'starting' && downloading.steps[4]?.state === 'curr
 assert(downloading.liveTitle.toLowerCase().includes('downloading model'), 'model download title');
 const imagePull = cloudChecklist({ hasEndpoint: true, downloading: 1, readyStatus: 503, pullPercent: 37 });
 assert(imagePull.liveTitle === 'Downloading server software (Salad)' && imagePull.steps[2]?.state === 'current' && imagePull.steps[4]?.state === 'todo', 'image pull is not the model download');
+const booted = cloudChecklist({
+  hasEndpoint: true,
+  groupStatus: 'running',
+  running: 1,
+  instanceState: 'running',
+  pullPercent: 100,
+  healthStatus: 503,
+  readyStatus: 503,
+});
+assert(imagePullSettled({ instanceState: 'running', pullPercent: 100 }) && !imagePullSettled({ instanceState: 'running', pullPercent: 37 }) && !imagePullSettled({ instanceState: 'downloading', pullPercent: 100 }), 'a running instance with a full pull has the image');
+assert(booted.liveTitle === 'Starting up' && booted.steps[2]?.state === 'done' && booted.steps[3]?.state === 'current', 'running with pulling_progress 1.0 leaves the software step even if started is empty');
+const waiBar = cloudChecklist({
+  hasEndpoint: true,
+  instanceState: 'running',
+  running: 1,
+  pullPercent: 100,
+  healthStatus: 200,
+  readyStatus: 503,
+  healthReady: false,
+  startupMessage: 'Downloading WAI-illustrious-SDXL',
+  modelDone: 1_000,
+  modelTotal: 4_000,
+});
+assert(waiBar.steps[4]?.state === 'current' && waiBar.steps[4]?.percent === 25 && waiBar.steps[2]?.state === 'done', 'WAI bytes fill the model bar once the server answers');
 const slowPull = softwareDetail([{ at: 0, percent: 10 }, { at: 60_000, percent: 11 }], 11);
 assert(slowPull.line.includes('1.0%/min') && slowPull.line.includes('11%'), 'software line shows percent and rate');
 const stuckPull = observeCloud(emptyCloudWatch(), { now: 0, instanceState: 'downloading', pullingPercent: 10, updateTime: 't', readyStatus: 503, healthStatus: null, modelDone: null, startupMessage: '', active: true }, true);

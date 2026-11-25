@@ -235,6 +235,7 @@ def start_model() -> None:
 
     def _once() -> None:
         from yume_server.catalog import materialize_checkpoint
+        from yume_server.startup import note_download
 
         mark("downloading", "Downloading the fixed VAE")
         ensure_fixed_vae()
@@ -243,10 +244,10 @@ def start_model() -> None:
         path = str(record.get("path") or "")
         diffusers = record.get("source") == "diffusers" or (version == DEFAULT_VERSION and not path)
         if diffusers:
-            mark("downloading", "Downloading model")
+            note_download(0, 0, name=name)
             _load_default_diffusers()
         else:
-            mark("downloading", f"Downloading {name}")
+            note_download(0, int(record.get("bytes") or 0), name=name)
             saved = materialize_checkpoint(dict(record))
             mark("loading", f"Loading {name}")
             _load_single_file(saved)
@@ -1072,7 +1073,7 @@ def _snapshot_animagine() -> str:
     class _DownloadBar(tqdm):
         def update(self, n=1):
             shown = super().update(n)
-            note_download(int(self.n or 0), int(self.total or 0))
+            note_download(int(self.n or 0), int(self.total or 0), name=model_id())
             return shown
 
     try:
