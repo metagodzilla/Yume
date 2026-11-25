@@ -90,7 +90,10 @@ export type Character = {
   /** Adult body-shape tags from a photo or from the measurements. */
   bodyTags?: string[];
   fromImage?: boolean;
+  /** Front photo. Different views and 3D use this one. */
   referenceUri?: string;
+  /** Every reference photo, including the front one. At most six. */
+  referenceUris?: string[];
   updatedAt: number;
 };
 

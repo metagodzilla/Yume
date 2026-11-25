@@ -18,8 +18,8 @@ export const MESH_LIMIT =
 export const DEMO_MESH_NOTE =
   'Demo studio builds a simple colored figure from the character traits. It does not reconstruct the drawing, and it does not run a 3D model. Hands are blobs on purpose.';
 
-export const TRELLIS_MESH_NOTE =
-  'Salad runs Microsoft TRELLIS on the front view only. The other turnaround angles are ignored, because this model does not take a multi-view set. Hair and hands often need cleanup.';
+export const TRIPOSR_MESH_NOTE =
+  'The picture server builds a textured GLB with TripoSR from one photo. Extra views are kept with the job. Hair and hands often need cleanup.';
 
 export type SavedMesh = {
   characterId: string;
@@ -34,16 +34,16 @@ export type SavedMesh = {
 export type MeshResult = {
   glb: Uint8Array;
   model: string;
-  mode: 'mock' | 'trellis' | 'demo';
+  mode: 'mock' | 'trellis' | 'triposr' | 'demo';
   note: string;
 };
 
 export const PICTURE_SERVER_MESH_MESSAGE =
-  'This cloud draws pictures, not 3D meshes. Add a TRELLIS gateway under Connect, in the 3D URL field. A stand-in figure is open so you can still spin the viewer.';
+  '3D is built on the picture server. Add that Salad gateway under Connect. A separate 3D URL is not required.';
 
-/** An empty 3D URL means the picture server. That server has no TRELLIS, so the phone shows a stand-in instead of a silent 503. */
-export function meshPlan(meshEndpoint: string): 'stand-in' | 'trellis' {
-  return meshEndpoint.trim() ? 'trellis' : 'stand-in';
+/** An empty 3D URL means the picture server. A filled one is an older separate mesh gateway. */
+export function meshPlan(meshEndpoint: string): 'picture' | 'separate' {
+  return meshEndpoint.trim() ? 'separate' : 'picture';
 }
 
 export function demoMesh(character: Character): MeshResult {
@@ -115,6 +115,64 @@ export async function requestSaladMesh(input: {
     glb: base64ToBytes(parsed.glb),
     model: typeof parsed.model === 'string' ? parsed.model : 'salad',
     mode,
-    note: typeof parsed.note === 'string' ? parsed.note : mode === 'trellis' ? TRELLIS_MESH_NOTE : MESH_LIMIT,
+    note: typeof parsed.note === 'string' ? parsed.note : mode === 'trellis' ? TRIPOSR_MESH_NOTE : MESH_LIMIT,
   };
+}
+
+function meshHeaders(apiKey: string): Record<string, string> {
+  return {
+    Authorization: `Bearer ${apiKey}`,
+    'X-Api-Key': apiKey,
+    'Salad-Api-Key': apiKey,
+  };
+}
+
+export async function requestPictureMesh(input: {
+  endpoint: string;
+  apiKey: string;
+  image: Uint8Array;
+  views: { angle: string; png: Uint8Array }[];
+  onStatus?: (message: string) => void;
+}): Promise<MeshResult> {
+  const endpoint = normalizeEndpoint(input.endpoint);
+  if (!endpoint) throw new Error('Add the picture server in Connect. 3D runs on that same cloud.');
+  const apiKey = normalizeSaladKey(input.apiKey);
+  if (!apiKey) throw new Error('Add the Salad API key in Connect. 3D uses the same key as pictures.');
+  const headers = { ...meshHeaders(apiKey), 'Content-Type': 'application/json' };
+  input.onStatus?.('Sending the picture to the cloud.');
+  const started = await fetch(`${endpoint}/3d/generate`, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({
+      image: bytesToBase64(input.image),
+      views: input.views.map((view) => ({ angle: view.angle, image: bytesToBase64(view.png) })),
+    }),
+  });
+  const startedText = await started.text();
+  if (!started.ok) throw new Error(saladErrorMessage({ aborted: false, status: started.status, body: startedText }));
+  const job = JSON.parse(startedText) as { id?: unknown };
+  if (typeof job.id !== 'string' || !job.id) throw new Error('The picture server did not start a 3D job.');
+  const deadline = Date.now() + 20 * 60 * 1000;
+  let modelName = 'stabilityai/TripoSR';
+  while (Date.now() < deadline) {
+    const status = await fetch(`${endpoint}/3d/jobs/${job.id}`, { headers: meshHeaders(apiKey) });
+    const statusText = await status.text();
+    if (!status.ok) throw new Error(saladErrorMessage({ aborted: false, status: status.status, body: statusText }));
+    const body = JSON.parse(statusText) as { status?: string; error?: string; model?: string };
+    if (body.model) modelName = body.model;
+    if (body.status === 'error') throw new Error(body.error || 'The mesh could not be built.');
+    if (body.status === 'done') break;
+    input.onStatus?.(body.status === 'running' ? 'Building the mesh on the GPU. The first run also downloads TripoSR.' : 'Waiting for the 3D job.');
+    await new Promise((resolve) => setTimeout(resolve, 4000));
+  }
+  if (Date.now() >= deadline) throw new Error('The 3D job is still running. Leave the cloud up and try again in a minute.');
+  const file = await fetch(`${endpoint}/3d/jobs/${job.id}/model.glb`, { headers: meshHeaders(apiKey) });
+  if (!file.ok) {
+    const detail = await file.text();
+    throw new Error(saladErrorMessage({ aborted: false, status: file.status, body: detail }));
+  }
+  const glb = new Uint8Array(await file.arrayBuffer());
+  if (glb.length < 12) throw new Error('The picture server did not return a GLB.');
+  const mode = modelName.includes('mock') ? 'mock' : 'triposr';
+  return { glb, model: modelName, mode, note: mode === 'triposr' ? TRIPOSR_MESH_NOTE : MESH_LIMIT };
 }

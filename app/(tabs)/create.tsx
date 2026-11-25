@@ -16,7 +16,7 @@ import { applyCheckpoint, installLocal, patchGenerator, resetBuiltPrompt, resetM
 import { WAI_ILLUSTRIOUS, baseFamily, baseLabel, illustriousOffer, loraBaseWarning, modelCardPress } from '@/src/lib/checkpoints';
 import { triggerGroups } from '@/src/lib/draw';
 import { runModelInstall } from '@/src/lib/modelInstall';
-import { describeToTags, supportTags } from '@/src/lib/positiveTags';
+import { describeToTags, keepManualTags, namedPeople, supportTags, type NamedPerson } from '@/src/lib/positiveTags';
 import { STUDIO_SIZES, STUDIO_STYLES } from '@/src/lib/animeStudio';
 import { SAMPLERS, sizesFor } from '@/src/lib/defaultModel';
 import { extractLoras } from '@/src/lib/a1111';
@@ -63,6 +63,11 @@ export default function GenerateScreen() {
   const character = studio.selectedCharacter;
   const characterText = character ? characterClause(character) : '';
   const finalPrompt = sentPositiveText(gen, characterText);
+  const people: NamedPerson[] = namedPeople({
+    characters: studio.characters.filter((item) => item.saved || item.id === studio.selectedCharacterId),
+    loras: [...gen.installed.filter((item) => /lora/i.test(item.type)), ...gen.loras],
+  });
+  const peopleKey = people.map((person) => `${person.name}:${person.gender}:${(person.triggers ?? []).join('/')}:${(person.tags ?? []).join('/')}`).join('|');
   const describeKey = [
     gen.describe,
     gen.promptAuto ? '1' : '0',
@@ -77,26 +82,32 @@ export default function GenerateScreen() {
     character?.pose ?? '',
     character?.setting ?? '',
     character?.lighting ?? '',
+    peopleKey,
   ].join('|');
   useEffect(() => {
     if (!gen.describe.trim()) return;
     const timer = setTimeout(() => {
       const current = getGenerator();
-      const patch: { prompt?: string; positive?: string } = {};
+      const patch: { prompt?: string; positive?: string; autoPrompt?: string; autoPositive?: string } = {};
       if (current.promptAuto) {
-        const prompt = describeToTags(current.describe);
+        const generated = describeToTags(current.describe, people);
+        const prompt = keepManualTags(generated, current.prompt, current.autoPrompt ?? '', 'auto');
         if (prompt && prompt !== current.prompt) patch.prompt = prompt;
+        if (generated !== (current.autoPrompt ?? '')) patch.autoPrompt = generated;
       }
       if (current.positiveAuto) {
-        const positive = supportTags({
+        const generated = supportTags({
           text: current.describe,
           baseModel: checkpoint?.baseModel,
           style: current.studioStyle,
           character,
+          people,
         });
+        const positive = keepManualTags(generated, current.positive, current.autoPositive ?? '', 'auto');
         if (positive !== current.positive) patch.positive = positive;
+        if (generated !== (current.autoPositive ?? '')) patch.autoPositive = generated;
       }
-      if (patch.prompt != null || patch.positive != null) patchGenerator(patch);
+      if (patch.prompt != null || patch.positive != null || patch.autoPrompt != null || patch.autoPositive != null) patchGenerator(patch);
     }, 350);
     return () => clearTimeout(timer);
   }, [describeKey]);
@@ -268,13 +279,19 @@ export default function GenerateScreen() {
                 patchGenerator({ promptAuto: false });
                 return;
               }
+              const generated = gen.describe.trim() ? describeToTags(gen.describe, people) : '';
+              const support = gen.describe.trim()
+                ? supportTags({ text: gen.describe, baseModel: checkpoint?.baseModel, style: gen.studioStyle, character, people })
+                : '';
               patchGenerator({
                 promptAuto: true,
                 positiveAuto: true,
-                ...(gen.describe.trim()
+                ...(generated
                   ? {
-                      prompt: describeToTags(gen.describe),
-                      positive: supportTags({ text: gen.describe, baseModel: checkpoint?.baseModel, style: gen.studioStyle, character }),
+                      prompt: keepManualTags(generated, gen.prompt, gen.autoPrompt ?? '', gen.promptAuto ? 'auto' : 'edited'),
+                      positive: keepManualTags(support, gen.positive, gen.autoPositive ?? '', gen.positiveAuto ? 'auto' : 'edited'),
+                      autoPrompt: generated,
+                      autoPositive: support,
                     }
                   : {}),
               });
@@ -283,14 +300,18 @@ export default function GenerateScreen() {
           </Pressable>
           <Pressable
             testID="positive-regenerate"
-            onPress={() =>
+            onPress={() => {
+              const generated = describeToTags(gen.describe, people);
+              const support = supportTags({ text: gen.describe, baseModel: checkpoint?.baseModel, style: gen.studioStyle, character, people });
               patchGenerator({
                 promptAuto: true,
                 positiveAuto: true,
-                prompt: describeToTags(gen.describe),
-                positive: supportTags({ text: gen.describe, baseModel: checkpoint?.baseModel, style: gen.studioStyle, character }),
-              })
-            }>
+                prompt: keepManualTags(generated, gen.prompt, gen.autoPrompt ?? '', gen.promptAuto ? 'auto' : 'edited'),
+                positive: keepManualTags(support, gen.positive, gen.autoPositive ?? '', gen.positiveAuto ? 'auto' : 'edited'),
+                autoPrompt: generated,
+                autoPositive: support,
+              });
+            }}>
             <Text style={styles.link}>Regenerate</Text>
           </Pressable>
         </View>

@@ -162,7 +162,7 @@ export function StatusPanel({ preview = '' }: { preview?: string }) {
       const health = saved ? await probe(healthUrl, { headers }, 8000) : undefined;
       const ready = saved ? await probe(readyUrl, { headers }, 8000) : undefined;
       const startup = saved ? await probe(`${saved}/startup`, { headers }, 8000) : undefined;
-      const startupBody = startup?.body as { bytesDone?: number; bytesTotal?: number } | undefined;
+      const startupBody = startup?.body as { bytesDone?: number; bytesTotal?: number; message?: string } | undefined;
       const probeError = [groupError, health?.error, ready?.error].filter(Boolean).join(' ');
       let restoreTotal = 0;
       let restorePercent: number | null = null;
@@ -192,6 +192,7 @@ export function StatusPanel({ preview = '' }: { preview?: string }) {
         readyStatus: ready?.status,
         healthReady: health?.body?.ready,
         readyDetail: textOf(ready) || textOf(health),
+        startupMessage: typeof startupBody?.message === 'string' ? startupBody.message : '',
         probeError: probeError || undefined,
         pullPercent: groupPull,
         modelDone: typeof startupBody?.bytesDone === 'number' ? startupBody.bytesDone : null,

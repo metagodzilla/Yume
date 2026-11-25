@@ -25,9 +25,12 @@ export type GeneratorState = {
   prompt: string;
   /** When true, Describe is converted into the Prompt box. */
   promptAuto: boolean;
+  /** Last tags written from Describe, so a later edit can keep hand-added tags. */
+  autoPrompt?: string;
   positive: string;
   /** When true, Positive is filled with supporting tags from the same description. */
   positiveAuto: boolean;
+  autoPositive?: string;
   quality: string;
   qualityEdited: boolean;
   /** @deprecated Merged into positive. Kept so a 1.4.9 save still loads. */
@@ -95,8 +98,10 @@ export const initialGenerator = (): GeneratorState => ({
   describe: '',
   prompt: '',
   promptAuto: true,
+  autoPrompt: '',
   positive: '',
   positiveAuto: true,
+  autoPositive: '',
   quality: ANIME_STUDIO_CHECKPOINT.quality,
   qualityEdited: false,
   extraPrompt: '',

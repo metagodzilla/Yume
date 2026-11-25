@@ -6,11 +6,12 @@ import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { MeshStage, type MeshStageHandle } from '@/components/MeshStage';
+import { referenceImages } from '@/src/lib/fromImage';
 import { parseGlb } from '@/src/lib/glb';
 import { saveImageToLibrary, shareFile } from '@/src/lib/media';
-import { DEMO_MESH_NOTE, MESH_LIMIT, MESH_STEPS, PICTURE_SERVER_MESH_MESSAGE, TRELLIS_MESH_NOTE, demoMesh, meshPlan, requestSaladMesh, type SavedMesh } from '@/src/lib/mesh';
+import { DEMO_MESH_NOTE, MESH_LIMIT, MESH_STEPS, TRIPOSR_MESH_NOTE, demoMesh, requestPictureMesh, type SavedMesh } from '@/src/lib/mesh';
 import { composeSheet } from '@/src/lib/sheet';
-import { loadMeshes, loadTurnarounds, persistPng, readApiKey, readPng, readSaladKey, saveMeshes } from '@/src/lib/storage';
+import { loadMeshes, loadTurnarounds, persistPng, readPng, readSaladKey, saveMeshes } from '@/src/lib/storage';
 import { useStudio } from '@/src/studio';
 import { colors, font } from '@/src/theme';
 
@@ -92,42 +93,33 @@ export default function MeshScreen() {
           },
           result.glb,
         );
-        setStatus(front ? 'The front drawing stayed on the phone. Demo studio did not turn those pixels into a mesh.' : 'No front drawing yet. This figure uses the traits only.');
+        setStatus('Demo studio does not turn pixels into a mesh. Connect the picture server to build a real GLB.');
         return;
       }
-      if (!front) {
-        throw new Error('Draw the turnaround first. The front view is what a 3D mesh is built from.');
-      }
-      if (meshPlan(studio.settings.meshEndpoint) === 'stand-in') {
-        setStep(1);
-        const result = demoMesh(character);
-        parseGlb(result.glb);
-        setStep(MESH_STEPS.length);
-        const glbUri = await persistPng(`${character.id}-mesh-${Date.now()}.glb`, result.glb);
-        await remember(
-          {
-            characterId: character.id,
-            createdAt: Date.now(),
-            glbUri,
-            note: result.note,
-            model: result.model,
-            mode: result.mode,
-          },
-          result.glb,
-        );
-        throw new Error(PICTURE_SERVER_MESH_MESSAGE);
-      }
-      setStep(1);
-      const [saladKey] = await Promise.all([readSaladKey(), readApiKey()]);
-      const endpoint = studio.settings.meshEndpoint.trim();
-      const frontPng = await readPng(front.imageUri);
+      const refs = referenceImages(character);
+      const photo = refs[0] ? await readPng(refs[0]) : null;
+      const frontPng = front ? await readPng(front.imageUri) : null;
+      const source = photo ?? frontPng;
+      if (!source) throw new Error('Add reference photos on the casting sheet, or draw Different views first.');
       const book = books.find((item) => item.characterId === character.id);
       const views = [];
-      for (const view of book?.versions[0]?.views.filter((item) => item.angle !== 'front') ?? []) {
+      for (const extra of refs.slice(1)) views.push({ angle: 'reference', png: await readPng(extra) });
+      for (const view of book?.versions[0]?.views ?? []) {
+        if (photo && view.angle === 'front' && view.imageUri === front?.imageUri) continue;
         views.push({ angle: view.angle, png: await readPng(view.imageUri) });
       }
-      setStatus('Waiting on the mesh container. The first boot downloads TRELLIS and can take several minutes. The gateway gives up after about 100 seconds, so wait until the group is Ready.');
-      const result = await requestSaladMesh({ endpoint, apiKey: saladKey ?? '', frontPng, views });
+      setStep(1);
+      const saladKey = await readSaladKey();
+      const result = await requestPictureMesh({
+        endpoint: studio.settings.saladEndpoint,
+        apiKey: saladKey ?? '',
+        image: source,
+        views,
+        onStatus: (message) => {
+          setStatus(message);
+          setStep(2);
+        },
+      });
       parseGlb(result.glb);
       setStep(3);
       const glbUri = await persistPng(`${character.id}-mesh-${Date.now()}.glb`, result.glb);
@@ -137,13 +129,13 @@ export default function MeshScreen() {
           characterId: character.id,
           createdAt: Date.now(),
           glbUri,
-          note: result.mode === 'trellis' ? TRELLIS_MESH_NOTE : result.note,
+          note: result.mode === 'triposr' ? TRIPOSR_MESH_NOTE : result.note,
           model: result.model,
           mode: result.mode,
         },
         result.glb,
       );
-      setStatus(result.mode === 'trellis' ? 'TRELLIS used the front view only.' : result.note);
+      setStatus(photo ? 'TripoSR used the front reference photo.' : 'TripoSR used the front view.');
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : 'The mesh could not be built.');
     } finally {
@@ -263,7 +255,7 @@ export default function MeshScreen() {
           <View style={styles.empty}>
             <Text style={styles.emptyTitle}>No mesh yet.</Text>
             <Text style={styles.body}>
-              Make 3D builds a textured GLB you can spin and export. A TRELLIS gateway in the 3D URL uses the front view. Without that URL, Yume opens a stand-in figure and says this picture cloud cannot build meshes.
+              Build 3D asks the picture server for a textured GLB from the From-image photo, or from the front view when there is no photo. Drag to turn it, then save the sheet or share the .glb.
             </Text>
           </View>
         )}

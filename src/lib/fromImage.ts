@@ -1,5 +1,3 @@
-import { Platform } from 'react-native';
-
 import { base64ToBytes, bytesToBase64 } from '@/src/lib/base64';
 import { blankCharacter } from '@/src/lib/id';
 import { isChildTag } from '@/src/lib/measurements';
@@ -64,29 +62,218 @@ export async function requestAppearance(input: { endpoint: string; apiKey: strin
   return parsed;
 }
 
-export async function pickLocalImage(): Promise<{ bytes: Uint8Array; name: string } | null> {
+export const REFERENCE_LIMIT = 6;
+
+export type PickedImage = { bytes: Uint8Array; name: string; width: number; height: number };
+
+export function referenceImages(character: { referenceUri?: string; referenceUris?: string[] }): string[] {
+  const listed = (character.referenceUris ?? []).map((uri) => uri.trim()).filter(Boolean);
+  const front = character.referenceUri?.trim() ?? '';
+  const rest = listed.filter((uri) => uri !== front);
+  return [...(front ? [front] : []), ...rest].slice(0, REFERENCE_LIMIT);
+}
+
+export function assignReferences<T extends { referenceUri?: string; referenceUris?: string[]; fromImage?: boolean }>(
+  character: T,
+  uris: string[],
+  front?: string,
+): T {
+  const unique = [...new Set(uris.map((uri) => uri.trim()).filter(Boolean))].slice(0, REFERENCE_LIMIT);
+  const chosen = front && unique.includes(front) ? front : unique[0];
+  return {
+    ...character,
+    referenceUris: unique,
+    referenceUri: chosen,
+    fromImage: unique.length > 0 ? true : character.fromImage,
+  };
+}
+
+/** Portrait shots and names that say "front" beat wide sheets and side or back names. */
+export function pickFrontIndex(images: { width: number; height: number; name: string }[]): number {
+  let best = 0;
+  let bestScore = -Infinity;
+  images.forEach((image, index) => {
+    const ratio = image.width > 0 && image.height > 0 ? image.height / image.width : 1;
+    const name = image.name.toLowerCase();
+    let score = index === 0 ? 0.5 : 0;
+    if (ratio >= 1) score += 2;
+    if (ratio >= 1.2 && ratio <= 2.2) score += 2;
+    if (ratio < 0.8) score -= 2;
+    if (name.includes('front')) score += 5;
+    if (name.includes('back') || name.includes('side') || name.includes('profile')) score -= 4;
+    if (score > bestScore) {
+      best = index;
+      bestScore = score;
+    }
+  });
+  return images.length ? best : 0;
+}
+
+export function mergeAppearances(list: Appearance[]): Appearance {
+  const tags: string[] = [];
+  for (const item of list) {
+    for (const tag of item.tags) {
+      if (!isChildTag(tag) && tag.trim() && !tags.includes(tag)) tags.push(tag);
+    }
+  }
+  function vote(values: string[], allowed?: Set<string>): string {
+    const counts = new Map<string, number>();
+    for (const value of values) {
+      const text = value.trim();
+      if (!text || (allowed && !allowed.has(text))) continue;
+      counts.set(text, (counts.get(text) ?? 0) + 1);
+    }
+    let best = '';
+    let count = 0;
+    for (const [value, votes] of counts) {
+      if (votes > count) {
+        best = value;
+        count = votes;
+      }
+    }
+    return best;
+  }
+  const accessories = [...new Set(list.map((item) => item.accessories.trim()).filter(Boolean))];
+  return {
+    model: list[0]?.model || 'yume-appearance',
+    tags,
+    hairColor: vote(list.map((item) => item.hairColor), HAIR),
+    hairStyle: vote(list.map((item) => item.hairStyle), HAIR_STYLE) || 'long',
+    eyeColor: vote(list.map((item) => item.eyeColor), EYES),
+    outfit: vote(list.map((item) => item.outfit), OUTFITS),
+    accessories: accessories.join(', '),
+    body: vote(list.map((item) => item.body)),
+    adult: true,
+  };
+}
+
+export function applyAppearance(character: Character, appearance: Appearance): Character {
+  const tagged = characterFromAppearance(appearance, character.id);
+  return {
+    ...character,
+    name: character.name.trim() ? character.name : tagged.name,
+    fromImage: true,
+    hairColor: tagged.hairColor || character.hairColor,
+    hairStyle: tagged.hairStyle || character.hairStyle,
+    eyeColor: tagged.eyeColor || character.eyeColor,
+    outfit: tagged.outfit || character.outfit,
+    bodyTags: tagged.bodyTags,
+    notes: character.notes?.trim() ? character.notes : tagged.notes,
+  };
+}
+
+async function bytesFromUri(uri: string): Promise<Uint8Array> {
+  try {
+    const { File } = await import('expo-file-system');
+    const file = new File(uri);
+    const bytes = new Uint8Array(await file.arrayBuffer());
+    if (bytes.length) return bytes;
+  } catch {
+    // Some Android gallery URIs are not a direct file. Fall through to fetch.
+  }
+  const response = await fetch(uri);
+  if (!response.ok) throw new Error('That photo could not be read from the gallery.');
+  const bytes = new Uint8Array(await response.arrayBuffer());
+  if (!bytes.length) throw new Error('That photo had no pixel data.');
+  return bytes;
+}
+
+async function imagesFromAssets(assets: { uri: string; base64?: string | null; fileName?: string | null; width?: number; height?: number }[]): Promise<PickedImage[]> {
+  const picked = assets.slice(0, REFERENCE_LIMIT);
+  if (!picked.length) throw new Error('The gallery closed without a photo.');
+  return Promise.all(
+    picked.map(async (asset) => {
+      const bytes = asset.base64 ? base64ToBytes(asset.base64) : await bytesFromUri(asset.uri);
+      if (!bytes.length) throw new Error('That photo had no pixel data.');
+      return { bytes, name: asset.fileName || 'photo.jpg', width: asset.width || 0, height: asset.height || 0 };
+    }),
+  );
+}
+
+export async function pickLocalImages(): Promise<PickedImage[] | null> {
+  const { Platform } = await import('react-native');
   if (Platform.OS === 'web' && typeof document !== 'undefined') {
-    return new Promise((resolve) => {
+    return new Promise((resolve, reject) => {
       const input = document.createElement('input');
       input.type = 'file';
       input.accept = 'image/png,image/jpeg,image/*';
+      input.multiple = true;
       input.onchange = () => {
-        const file = input.files?.[0];
-        if (!file) {
+        const files = [...(input.files ?? [])].slice(0, REFERENCE_LIMIT);
+        if (!files.length) {
           resolve(null);
           return;
         }
-        void file.arrayBuffer().then((buffer) => resolve({ bytes: new Uint8Array(buffer), name: file.name }));
+        void Promise.all(
+          files.map(async (file) => ({
+            bytes: new Uint8Array(await file.arrayBuffer()),
+            name: file.name,
+            width: 0,
+            height: 0,
+          })),
+        ).then(resolve, reject);
       };
       input.click();
     });
   }
   const ImagePicker = await import('expo-image-picker');
-  const permission = await ImagePicker.requestMediaLibraryPermissionsAsync();
-  if (!permission.granted) throw new Error('Allow photo access to choose a picture.');
-  const result = await ImagePicker.launchImageLibraryAsync({ mediaTypes: ['images'], base64: true, quality: 0.7 });
-  if (result.canceled || !result.assets[0]) return null;
-  const asset = result.assets[0];
-  if (!asset.base64) throw new Error('That photo had no pixel data.');
-  return { bytes: base64ToBytes(asset.base64), name: asset.fileName || 'photo.jpg' };
+  const options = {
+    mediaTypes: ['images'] as ('images')[],
+    allowsMultipleSelection: true,
+    selectionLimit: REFERENCE_LIMIT,
+    quality: 0.5,
+    base64: false,
+    legacy: false,
+    exif: false,
+    defaultTab: 'photos' as const,
+  };
+  // Android 13+ opens the system photo picker with no storage permission.
+  // Asking for READ_MEDIA_IMAGES first was the failure on Android 14/15: a denial never opened the gallery.
+  if (Platform.OS === 'ios') {
+    const permission = await ImagePicker.requestMediaLibraryPermissionsAsync();
+    if (!permission.granted && permission.accessPrivileges !== 'limited') {
+      throw new Error('Allow photo access to choose pictures of this character.');
+    }
+  }
+  const started = Date.now();
+  let result: Awaited<ReturnType<typeof ImagePicker.launchImageLibraryAsync>>;
+  try {
+    result = await ImagePicker.launchImageLibraryAsync(options);
+  } catch (caught) {
+    const message = caught instanceof Error ? caught.message : '';
+    if (Platform.OS === 'android' && /permission/i.test(message)) {
+      const permission = await ImagePicker.requestMediaLibraryPermissionsAsync();
+      if (!permission.granted && permission.accessPrivileges !== 'limited') {
+        throw new Error('Allow photo access so the gallery can open, then try From image again.');
+      }
+      result = await ImagePicker.launchImageLibraryAsync(options);
+    } else {
+      throw new Error(message || 'The photo gallery did not open.');
+    }
+  }
+  if (result.canceled) {
+    if (Date.now() - started < 350) {
+      throw new Error('The gallery did not open. Try From image again. This phone can pick photos without extra storage access.');
+    }
+    return null;
+  }
+  if (!result.assets?.length) throw new Error('The gallery closed without a photo. Try Add reference images again.');
+  return imagesFromAssets(result.assets);
+}
+
+/** Recover a pick if Android destroyed the screen while the gallery was open. */
+export async function takePendingImages(): Promise<PickedImage[] | null> {
+  const { Platform } = await import('react-native');
+  if (Platform.OS === 'web') return null;
+  const ImagePicker = await import('expo-image-picker');
+  const pending = await ImagePicker.getPendingResultAsync();
+  if (!pending) return null;
+  if ('code' in pending) throw new Error(pending.message || 'The gallery closed before the photos came back.');
+  if (pending.canceled || !pending.assets?.length) return null;
+  return imagesFromAssets(pending.assets);
+}
+
+export async function pickLocalImage(): Promise<{ bytes: Uint8Array; name: string } | null> {
+  const picked = await pickLocalImages();
+  return picked?.[0] ?? null;
 }
