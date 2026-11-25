@@ -31,7 +31,8 @@ import { CAST_ROUTE, castRouteOpensScreen } from '@/src/lib/routes';
 import { chooseSeeds } from '@/src/lib/seeds';
 import { redactValue } from '@/src/lib/reportText';
 import { CREATE_PROMPT_FIELDS } from '@/src/lib/createFields';
-import { buildSaladGenerateBody, composeGenerationPrompt, positiveText, sentPositiveText } from '@/src/lib/draw';
+import { describeToTags, settleSavedPrompts, supportTags } from '@/src/lib/positiveTags';
+import { buildSaladGenerateBody, composeGenerationPrompt, sentPositiveText } from '@/src/lib/draw';
 import { getGenerator, patchGenerator, resetBuiltPrompt, resetModelDefaults, resetQualityTags, type GeneratorState } from '@/src/lib/genstore';
 import { downloadButtons, downloadKind, downloadPercent, formatEta, formatSpeed, RECONNECTING } from '@/src/lib/downloads';
 import { installFailureMessage } from '@/src/lib/modelInstall';
@@ -677,7 +678,10 @@ const previewState = {
   contentFilter: 'sfw',
   quality: 'masterpiece, high score, great score, absurdres',
   qualityEdited: false,
+  describe: '',
+  promptAuto: true,
   positive: '',
+  positiveAuto: true,
   extraPrompt: 'shiny eyes',
   vPrediction: false,
   studioStyle: 'off',
@@ -698,7 +702,7 @@ patchGenerator({ positive: 'shiny eyes', prompt: 'girl' });
 resetModelDefaults('Illustrious', 'Wai');
 assert(getGenerator().positive === 'shiny eyes' && getGenerator().hires, 'positive prompt survives a model preset');
 resetBuiltPrompt('Illustrious', 'Wai');
-assert(getGenerator().positive === '' && getGenerator().quality.includes('very aesthetic'), 'reset restores the auto-built prompt');
+assert(getGenerator().positive === 'shiny eyes' && getGenerator().extraPrompt === '' && getGenerator().quality.includes('very aesthetic'), 'reset clears extra and keeps positive');
 patchGenerator({ quality: 'custom tags', qualityEdited: true });
 resetModelDefaults('Pony', 'Pony');
 assert(getGenerator().quality === 'custom tags', 'edited quality tags survive a preset change');
@@ -715,19 +719,23 @@ assert(studioPrompt.startsWith('girl in a skirt') && studioPrompt.indexOf(studio
 const withPositive = composeGenerationPrompt({
   ...studioState,
   positive: 'shiny eyes',
-  extraPrompt: 'shiny eyes',
+  extraPrompt: 'wet clothes',
   studioStyle: 'anime',
   loras: [{ name: 'ribbon', weight: 0.8, triggers: ['ribbon hair'] }],
 });
 assert(
-  withPositive.startsWith('girl in a skirt, shiny eyes') &&
-    withPositive.indexOf('shiny eyes') < withPositive.indexOf(studioSuffix('anime')) &&
+  withPositive.startsWith('girl in a skirt, shiny eyes, wet clothes') &&
+    withPositive.indexOf('wet clothes') < withPositive.indexOf(studioSuffix('anime')) &&
     withPositive.indexOf(studioSuffix('anime')) < withPositive.indexOf('ribbon hair') &&
-    withPositive.endsWith('absurdres') &&
-    withPositive.indexOf('shiny eyes') === withPositive.lastIndexOf('shiny eyes'),
-  'sent order is prompt, positive, style, lora triggers, quality',
+    withPositive.endsWith('absurdres'),
+  'sent order is prompt, positive, extra, style, lora triggers, quality',
 );
-assert(positiveText({ extraPrompt: 'kept tags' }) === 'kept tags' && CREATE_PROMPT_FIELDS.join('|') === 'Prompt|Positive prompt|Negative prompt|Quality tags', 'positive box keeps a saved extra prompt');
+const selfie = describeToTags('a girl with pink hair taking a selfie in her room');
+assert(selfie === '1girl, solo, pink hair, selfie, holding phone, bedroom, indoors', 'describe becomes danbooru tags');
+assert(supportTags({ text: 'a girl with pink hair taking a selfie in her room', baseModel: 'SDXL 1.0', style: 'anime' }).includes('detailed eyes') && !supportTags({ text: 'a girl with pink hair taking a selfie in her room', baseModel: 'SDXL 1.0', style: 'anime' }).includes('1girl'), 'positive adds detail tags only');
+const settled = settleSavedPrompts({ positive: 'shiny eyes', extraPrompt: 'old extra' });
+assert(settled.positive === 'shiny eyes' && settled.extraPrompt === '' && settled.positiveAuto === false, 'saved positive stays and extra starts empty');
+assert(CREATE_PROMPT_FIELDS.join('|') === 'Describe|Prompt|Positive prompt|Extra prompt|Negative prompt|Quality tags', 'create field order');
 assert(scaleLoraStack(studioState.loras).every((item) => item.weight <= 0.68) && scaleLoraStack([{ name: 'a', weight: 0.8 }, { name: 'b', weight: 0.4 }])[0]?.weight === 0.8, 'three strong loras scale down');
 assert(ANIME_STUDIO_CHECKPOINT.versionId === 1408658 && ANIME_STUDIO_CHECKPOINT.steps === 26 && ANIME_STUDIO_CHECKPOINT.width === 896, 'anime studio checkpoint');
 assert(CAST_ROUTE === '/cast' && castRouteOpensScreen('/cast') && !castRouteOpensScreen('/(tabs)/cast'), 'cast is a real screen, not a hidden tab');

@@ -2,6 +2,7 @@ import { useSyncExternalStore } from 'react';
 
 import type { ContentFilter } from '@/src/lib/civitai';
 import { ANIME_STUDIO_CHECKPOINT, STUDIO_APPLIED, type StudioStyleId } from '@/src/lib/animeStudio';
+import { settleSavedPrompts } from '@/src/lib/positiveTags';
 import { settingsForCheckpoint, type RecommendedSettings } from '@/src/lib/checkpoints';
 import { DEFAULT_CHECKPOINT } from '@/src/lib/defaultModel';
 
@@ -20,8 +21,13 @@ export type InstalledResource = {
 };
 
 export type GeneratorState = {
+  describe: string;
   prompt: string;
+  /** When true, Describe is converted into the Prompt box. */
+  promptAuto: boolean;
   positive: string;
+  /** When true, Positive is filled with supporting tags from the same description. */
+  positiveAuto: boolean;
   quality: string;
   qualityEdited: boolean;
   /** @deprecated Merged into positive. Kept so a 1.4.9 save still loads. */
@@ -86,8 +92,11 @@ export const studioResource = (): InstalledResource => ({
 });
 
 export const initialGenerator = (): GeneratorState => ({
+  describe: '',
   prompt: '',
+  promptAuto: true,
   positive: '',
+  positiveAuto: true,
   quality: ANIME_STUDIO_CHECKPOINT.quality,
   qualityEdited: false,
   extraPrompt: '',
@@ -219,7 +228,7 @@ export function resetModelDefaults(baseModel: string, name = '') {
 
 export function resetBuiltPrompt(baseModel: string, name = '') {
   const preset = settingsForCheckpoint(baseModel, name);
-  patchGenerator({ quality: preset.quality, qualityEdited: false, qualityTags: true, positive: '', extraPrompt: '' });
+  patchGenerator({ quality: preset.quality, qualityEdited: false, qualityTags: true, extraPrompt: '' });
 }
 
 export function resetQualityTags(baseModel: string, name = '') {
@@ -316,9 +325,8 @@ export async function hydrateFromDisk() {
           ? 'all'
           : 'sfw';
     const fresh = initialGenerator();
-    const legacyExtra = typeof parsed.extraPrompt === 'string' ? parsed.extraPrompt : '';
-    const positive = typeof parsed.positive === 'string' && parsed.positive.trim() ? parsed.positive : legacyExtra;
-    state = { ...fresh, ...parsed, positive, extraPrompt: '', installed, contentFilter, nsfw: contentFilter !== 'sfw' };
+    const settled = settleSavedPrompts(parsed);
+    state = { ...fresh, ...parsed, ...settled, installed, contentFilter, nsfw: contentFilter !== 'sfw' };
     if (parsed.studioApplied !== STUDIO_APPLIED) {
       if (!state.installed.some((item) => item.versionId === ANIME_STUDIO_CHECKPOINT.versionId)) {
         state.installed = [studioResource(), ...state.installed.map((item) => ({ ...item, isDefault: false }))];

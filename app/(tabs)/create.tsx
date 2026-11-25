@@ -12,13 +12,14 @@ import { characterClause } from '@/src/lib/prompt';
 import { composeGenerationPrompt, drawFrames, generationParams, samplerId, sentPositiveText } from '@/src/lib/draw';
 import { sendClientReport } from '@/src/lib/clientReport';
 import { rememberFault } from '@/src/lib/reportText';
-import { baseLabel, modelCardPress } from '@/src/lib/checkpoints';
+import { baseFamily, baseLabel, modelCardPress } from '@/src/lib/checkpoints';
+import { describeToTags, supportTags } from '@/src/lib/positiveTags';
 import { STUDIO_SIZES, STUDIO_STYLES } from '@/src/lib/animeStudio';
 import { SAMPLERS, sizesFor } from '@/src/lib/defaultModel';
 import { extractLoras } from '@/src/lib/a1111';
 import { loraPage } from '@/src/lib/civitai';
 import { openLink } from '@/src/lib/openLink';
-import { patchGenerator, resetBuiltPrompt, resetModelDefaults, resetQualityTags, useGenerator } from '@/src/lib/genstore';
+import { getGenerator, patchGenerator, resetBuiltPrompt, resetModelDefaults, resetQualityTags, useGenerator } from '@/src/lib/genstore';
 import { DISK_RESET_NOTE, modelPresence } from '@/src/lib/keptModels';
 import { restoreMissingModels, useRestoringIds } from '@/src/lib/restoreModels';
 import { ensureSelectedLoras } from '@/src/lib/ensureLoras';
@@ -59,6 +60,43 @@ export default function GenerateScreen() {
   const character = studio.selectedCharacter;
   const characterText = character ? characterClause(character) : '';
   const finalPrompt = sentPositiveText(gen, characterText);
+  const describeKey = [
+    gen.describe,
+    gen.promptAuto ? '1' : '0',
+    gen.positiveAuto ? '1' : '0',
+    gen.studioStyle,
+    checkpoint?.baseModel ?? '',
+    character?.hairColor ?? '',
+    character?.hairStyle ?? '',
+    character?.eyeColor ?? '',
+    character?.outfit ?? '',
+    character?.expression ?? '',
+    character?.pose ?? '',
+    character?.setting ?? '',
+    character?.lighting ?? '',
+  ].join('|');
+  useEffect(() => {
+    if (!gen.describe.trim()) return;
+    const timer = setTimeout(() => {
+      const current = getGenerator();
+      const patch: { prompt?: string; positive?: string } = {};
+      if (current.promptAuto) {
+        const prompt = describeToTags(current.describe);
+        if (prompt && prompt !== current.prompt) patch.prompt = prompt;
+      }
+      if (current.positiveAuto) {
+        const positive = supportTags({
+          text: current.describe,
+          baseModel: checkpoint?.baseModel,
+          style: current.studioStyle,
+          character,
+        });
+        if (positive !== current.positive) patch.positive = positive;
+      }
+      if (patch.prompt != null || patch.positive != null) patchGenerator(patch);
+    }, 350);
+    return () => clearTimeout(timer);
+  }, [describeKey]);
 
   useEffect(() => {
     void import('@/src/lib/genstore').then(({ hydrateFromDisk }) => hydrateFromDisk());
@@ -173,26 +211,86 @@ export default function GenerateScreen() {
         </View>
         <Text style={styles.label}>{CREATE_PROMPT_FIELDS[0]}</Text>
         <TextInput
-          testID="gen-prompt"
-          value={gen.prompt}
-          onChangeText={(prompt) => patchGenerator({ prompt })}
-          placeholder="what to draw, for example a girl in a shrine in the rain"
+          testID="gen-describe"
+          value={gen.describe}
+          onChangeText={(describe) => patchGenerator({ describe })}
+          placeholder="a girl with pink hair taking a selfie in her room"
           placeholderTextColor={colors.faint}
           multiline
           style={styles.prompt}
         />
-        <Text style={styles.label}>{CREATE_PROMPT_FIELDS[1]}</Text>
+        <Text style={styles.hint}>Everyday words. Yume turns them into tags in the Prompt box.</Text>
+        <View style={styles.row}>
+          <Text style={styles.label}>{CREATE_PROMPT_FIELDS[1]}</Text>
+          <Pressable
+            testID="positive-auto"
+            onPress={() => {
+              const next = !gen.promptAuto;
+              if (!next) {
+                patchGenerator({ promptAuto: false });
+                return;
+              }
+              patchGenerator({
+                promptAuto: true,
+                positiveAuto: true,
+                ...(gen.describe.trim()
+                  ? {
+                      prompt: describeToTags(gen.describe),
+                      positive: supportTags({ text: gen.describe, baseModel: checkpoint?.baseModel, style: gen.studioStyle, character }),
+                    }
+                  : {}),
+              });
+            }}>
+            <Text style={styles.link}>{gen.promptAuto ? 'Auto on' : 'Auto off'}</Text>
+          </Pressable>
+          <Pressable
+            testID="positive-regenerate"
+            onPress={() =>
+              patchGenerator({
+                promptAuto: true,
+                positiveAuto: true,
+                prompt: describeToTags(gen.describe),
+                positive: supportTags({ text: gen.describe, baseModel: checkpoint?.baseModel, style: gen.studioStyle, character }),
+              })
+            }>
+            <Text style={styles.link}>Regenerate</Text>
+          </Pressable>
+        </View>
+        <TextInput
+          testID="gen-prompt"
+          value={gen.prompt}
+          onChangeText={(prompt) => patchGenerator({ prompt, promptAuto: false })}
+          placeholder="1girl, solo, pink hair, selfie"
+          placeholderTextColor={colors.faint}
+          multiline
+          style={styles.prompt}
+        />
+        <Text style={styles.hint}>Filled from Describe. Editing this box turns Auto off until you tap Regenerate.</Text>
+        <Text style={styles.label}>{CREATE_PROMPT_FIELDS[2]}</Text>
         <TextInput
           testID="gen-positive"
           value={gen.positive}
-          onChangeText={(positive) => patchGenerator({ positive, extraPrompt: '' })}
-          placeholder="extra positive tags added to every generation"
+          onChangeText={(positive) => patchGenerator({ positive, positiveAuto: false })}
+          placeholder="supporting detail tags"
           placeholderTextColor={colors.faint}
           multiline
-          style={styles.prompt}
+          style={styles.negative}
         />
-        <Text style={styles.hint}>Kept when you switch models. This is the old Extra prompt.</Text>
-        <Text style={styles.label}>{CREATE_PROMPT_FIELDS[2]}</Text>
+        <Text style={styles.hint}>
+          Auto adds detail tags for {baseFamily(checkpoint?.baseModel ?? '')}, the style, and the selected character. Editing this box keeps your tags. They stay when you switch models.
+        </Text>
+        <Text style={styles.label}>{CREATE_PROMPT_FIELDS[3]}</Text>
+        <TextInput
+          testID="gen-extra"
+          value={gen.extraPrompt}
+          onChangeText={(extraPrompt) => patchGenerator({ extraPrompt })}
+          placeholder="your own text, added as written"
+          placeholderTextColor={colors.faint}
+          multiline
+          style={styles.negative}
+        />
+        <Text style={styles.hint}>Not filled automatically. Kept when you switch models.</Text>
+        <Text style={styles.label}>{CREATE_PROMPT_FIELDS[4]}</Text>
         <TextInput
           testID="gen-negative"
           value={gen.negative}
@@ -203,7 +301,7 @@ export default function GenerateScreen() {
           style={styles.negative}
         />
         <View style={styles.row}>
-          <Text style={styles.label}>{CREATE_PROMPT_FIELDS[3]}</Text>
+          <Text style={styles.label}>{CREATE_PROMPT_FIELDS[5]}</Text>
           <Pressable testID="reset-quality-tags" onPress={() => resetQualityTags(checkpoint?.baseModel ?? '', checkpoint?.name ?? '')}>
             <Text style={styles.link}>Reset</Text>
           </Pressable>
@@ -268,7 +366,7 @@ export default function GenerateScreen() {
           ) : null}
         </View>
         <Text style={styles.hint}>
-          Sent order: your prompt, positive tags, the style suffix, LoRA triggers, then quality tags.
+          Sent order: your prompt, positive tags, extra text, the style suffix, LoRA triggers, then quality tags.
         </Text>
         <View style={styles.row}>
           <Pressable onPress={() => patchGenerator({ qualityTags: !gen.qualityTags })}>

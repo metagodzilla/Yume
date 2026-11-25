@@ -33,13 +33,8 @@ export function namedLoras(state: GeneratorState, prompt: string): { name: strin
     .filter((lora) => lora.name || lora.versionId);
 }
 
-/** Positive tags. A saved Extra prompt from 1.4.9 is the same box. */
-export function positiveText(state: { positive?: string; extraPrompt?: string }): string {
-  const positive = (state.positive || '').trim();
-  const extra = (state.extraPrompt || '').trim();
-  if (!positive) return extra;
-  if (!extra || extra.toLowerCase() === positive.toLowerCase()) return positive;
-  return `${positive}, ${extra}`;
+export function positiveText(state: { positive?: string }): string {
+  return (state.positive || '').trim();
 }
 
 export function composeGenerationPrompt(state: GeneratorState, characterText = ''): string {
@@ -63,7 +58,7 @@ export function composeGenerationPrompt(state: GeneratorState, characterText = '
     characterText.trim(),
     embeddingTokens(state).join(', '),
   ];
-  const head = [state.prompt.trim(), positiveText(state), style, ...afterStyle].filter(Boolean).join(', ');
+  const head = [state.prompt.trim(), positiveText(state), (state.extraPrompt || '').trim(), style, ...afterStyle].filter(Boolean).join(', ');
   const quality = (state.quality || '').trim();
   return [head, quality].filter(Boolean).join(', ');
 }
