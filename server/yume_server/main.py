@@ -364,6 +364,13 @@ def startup() -> dict[str, Any]:
     return startup_snapshot()
 
 
+@app.get("/progress")
+def progress() -> dict[str, Any]:
+    """Per-file weight progress. Answers before /ready, with no secrets."""
+    body = startup_snapshot()
+    return {"files": body.get("files") or [], **body}
+
+
 @app.get("/ready")
 def ready() -> dict[str, str]:
     from yume_server.selfheal import SELF_HEAL_MESSAGE

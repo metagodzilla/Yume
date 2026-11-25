@@ -268,9 +268,14 @@ def ensure_upscale_weights() -> None:
         from huggingface_hub import snapshot_download
 
         cache = os.environ.get("HF_HOME") or os.environ.get("YUME_MODEL_DIR") or "/models"
-        snapshot_download(TILE_REPO, cache_dir=cache)
-        snapshot_download(LINEART_REPO, cache_dir=cache)
-        snapshot_download(IP_REPO, allow_patterns=[f"{IP_SUBFOLDER}/{FACE_WEIGHT}", f"{IP_SUBFOLDER}/image_encoder/**"], cache_dir=cache)
+        from yume_server.startup import note_file, tqdm_factory
+
+        snapshot_download(TILE_REPO, cache_dir=cache, tqdm_class=tqdm_factory("controlnet-tile", "Tile ControlNet", "ControlNet"))
+        note_file("controlnet-tile", name="Tile ControlNet", kind="ControlNet", done=1, total=1, state="done")
+        snapshot_download(LINEART_REPO, cache_dir=cache, tqdm_class=tqdm_factory("controlnet-line", "Lineart ControlNet", "ControlNet"))
+        note_file("controlnet-line", name="Lineart ControlNet", kind="ControlNet", done=1, total=1, state="done")
+        snapshot_download(IP_REPO, allow_patterns=[f"{IP_SUBFOLDER}/{FACE_WEIGHT}", f"{IP_SUBFOLDER}/image_encoder/**"], cache_dir=cache, tqdm_class=tqdm_factory("ip-adapter-face", "IP-Adapter Face", "IP-Adapter"))
+        note_file("ip-adapter-face", name="IP-Adapter Face", kind="IP-Adapter", done=1, total=1, state="done")
         _READY = True
         _LOG.info("upscale weights ready")
 

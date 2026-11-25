@@ -1,6 +1,6 @@
 export type AppFault = {
   time: number;
-  source: 'generate' | 'install' | 'search' | 'check';
+  source: 'generate' | 'install' | 'search' | 'check' | 'cloud';
   message: string;
   endpoint?: string;
   status?: number;

@@ -209,7 +209,13 @@ def ensure_anime_upscaler() -> str | None:
         os.makedirs(os.path.dirname(path), exist_ok=True)
         import urllib.request
 
-        urllib.request.urlretrieve(ANIME_ESRGAN_URL, path)
+        from yume_server.startup import note_file
+
+        def _report(block: int, block_size: int, total: int) -> None:
+            note_file("upscaler", name="RealESRGAN anime", kind="Upscaler", done=block * block_size, total=total or 0, state="downloading")
+
+        urllib.request.urlretrieve(ANIME_ESRGAN_URL, path, reporthook=_report)
+        note_file("upscaler", name="RealESRGAN anime", kind="Upscaler", done=os.path.getsize(path), total=os.path.getsize(path), state="done")
     except Exception as exc:
         _LOG.warning("anime upscaler was not downloaded: %s", exc)
         return None

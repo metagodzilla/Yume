@@ -151,7 +151,7 @@ export default function SetupScreen() {
         if (gateway && (status.running > 0 || status.status === 'running')) {
           ready = (await probe(`${gateway}/ready`, {}, 8000)).ok;
         }
-        const described = describeDeploy({ groupStatus: status.status, allocating: status.allocating, creating: status.creating, running: status.running, ready });
+        const described = describeDeploy({ groupStatus: status.status, allocating: status.allocating, downloading: status.downloading, creating: status.creating, running: status.running, ready });
         setPhase(described.title);
         setProgress(described.progress);
         reportJob(job.id, described.progress, described.title);

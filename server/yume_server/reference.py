@@ -67,8 +67,12 @@ def ensure_reference_weights() -> None:
         from huggingface_hub import snapshot_download
 
         cache = os.environ.get("HF_HOME") or os.environ.get("YUME_MODEL_DIR") or "/models"
-        snapshot_download(CONTROLNET_REPO, cache_dir=cache)
-        snapshot_download(IP_REPO, allow_patterns=[f"{IP_SUBFOLDER}/ip-adapter-plus_sdxl_vit-h.*", f"{IP_SUBFOLDER}/image_encoder/**"], cache_dir=cache)
+        from yume_server.startup import note_file, tqdm_factory
+
+        snapshot_download(CONTROLNET_REPO, cache_dir=cache, tqdm_class=tqdm_factory("controlnet-pose", "OpenPose ControlNet", "ControlNet"))
+        note_file("controlnet-pose", name="OpenPose ControlNet", kind="ControlNet", done=1, total=1, state="done")
+        snapshot_download(IP_REPO, allow_patterns=[f"{IP_SUBFOLDER}/ip-adapter-plus_sdxl_vit-h.*", f"{IP_SUBFOLDER}/image_encoder/**"], cache_dir=cache, tqdm_class=tqdm_factory("ip-adapter", "IP-Adapter", "IP-Adapter"))
+        note_file("ip-adapter", name="IP-Adapter", kind="IP-Adapter", done=1, total=1, state="done")
         _READY = True
         _LOG.info("reference weights ready: %s and %s", CONTROLNET_REPO, IP_WEIGHT)
 

@@ -168,6 +168,7 @@ export async function loadSettings(): Promise<Settings> {
     height: clampRange(settings.height, 512, 1536, 1216),
     seed: clampRange(settings.seed, 0, 2_147_483_647, 1),
     hourlyRateTouched: settings.hourlyRateTouched === true,
+    autoFixStuckCloud: settings.autoFixStuckCloud !== false,
   };
 }
 

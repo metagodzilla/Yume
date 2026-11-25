@@ -108,12 +108,14 @@ export function pickDefaultGpu(choices: GpuChoice[]): GpuChoice | null {
 export function describeDeploy(input: {
   groupStatus?: string;
   allocating?: number;
+  downloading?: number;
   creating?: number;
   running?: number;
   ready?: boolean;
 }): { phase: DeployPhase; title: string; progress: number } {
   if (input.groupStatus === 'failed') return { phase: 'failed', title: 'The server failed', progress: 0 };
   if (input.ready) return { phase: 'ready', title: 'Ready', progress: 1 };
+  if ((input.downloading ?? 0) > 0) return { phase: 'pulling', title: 'Downloading server software (Salad)', progress: 0.45 };
   if ((input.running ?? 0) > 0 || input.groupStatus === 'running') {
     return { phase: 'downloading', title: 'Downloading the model', progress: 0.72 };
   }
@@ -133,6 +135,7 @@ export function gatewayFromGroup(group: unknown): string {
 export function groupStatusOf(group: unknown): {
   status: string;
   allocating: number;
+  downloading: number;
   creating: number;
   running: number;
   startTime: string | null;
@@ -144,6 +147,7 @@ export function groupStatusOf(group: unknown): {
   return {
     status: typeof current.status === 'string' ? current.status : '',
     allocating: Math.max(numberField(counts.allocating_count), instances.allocating),
+    downloading: Math.max(numberField(counts.downloading_count), instances.downloading),
     creating: Math.max(numberField(counts.creating_count), instances.creating),
     running: Math.max(numberField(counts.running_count), instances.running),
     startTime: typeof current.start_time === 'string' ? current.start_time : null,
@@ -151,7 +155,48 @@ export function groupStatusOf(group: unknown): {
   };
 }
 
+export type SaladInstance = {
+  id: string;
+  machineId: string;
+  state: string;
+  pullingPercent: number | null;
+  ready: boolean;
+  started: string | null;
+  updateTime: string | null;
+};
+
+export function readSaladInstances(payload: unknown): SaladInstance[] {
+  const list = Array.isArray(payload)
+    ? payload
+    : isRecord(payload) && Array.isArray(payload.instances)
+      ? payload.instances
+      : isRecord(payload) && Array.isArray(payload.items)
+        ? payload.items
+        : [];
+  return list.filter(isRecord).map((item) => ({
+    id: textField(item.id),
+    machineId: textField(item.machine_id),
+    state: textField(item.state || item.status).toLowerCase(),
+    pullingPercent: percentField(item.pulling_progress),
+    ready: item.ready === true,
+    started: textField(item.started) || null,
+    updateTime: textField(item.update_time) || null,
+  }));
+}
+
+/** Reallocate needs the instance id. machine_id answers 404. */
+export function reallocateTarget(instance: SaladInstance | null | undefined): string {
+  return instance?.id.trim() || '';
+}
+
+export function pickActiveInstance(instances: SaladInstance[]): SaladInstance | null {
+  const rank = (state: string) => (state.includes('download') || state.includes('pull') ? 0 : state.includes('creat') ? 1 : state.includes('run') ? 2 : state.includes('allocat') ? 3 : 4);
+  return [...instances].sort((a, b) => rank(a.state) - rank(b.state))[0] ?? null;
+}
+
 export function pullPercent(payload: unknown): number | null {
+  const reported = readSaladInstances(payload).find((item) => item.pullingPercent != null)?.pullingPercent;
+  if (reported != null) return reported;
   let found: number | null = null;
   const visit = (value: unknown) => {
     if (found != null) return;
@@ -172,25 +217,19 @@ export function pullPercent(payload: unknown): number | null {
   return found;
 }
 
-export function instanceCounts(payload: unknown): { allocating: number; creating: number; running: number } {
-  const list = Array.isArray(payload)
-    ? payload
-    : isRecord(payload) && Array.isArray(payload.instances)
-      ? payload.instances
-      : isRecord(payload) && Array.isArray(payload.items)
-        ? payload.items
-        : [];
+export function instanceCounts(payload: unknown): { allocating: number; downloading: number; creating: number; running: number } {
   let allocating = 0;
+  let downloading = 0;
   let creating = 0;
   let running = 0;
-  for (const item of list) {
-    if (!isRecord(item)) continue;
-    const state = String(item.state || item.status || '').toLowerCase();
+  for (const item of readSaladInstances(payload)) {
+    const state = item.state;
     if (state.includes('allocat')) allocating += 1;
-    else if (state.includes('creat') || state.includes('pull') || state.includes('download')) creating += 1;
+    else if (state.includes('download') || state.includes('pull')) downloading += 1;
+    else if (state.includes('creat')) creating += 1;
     else if (state.includes('run')) running += 1;
   }
-  return { allocating, creating, running };
+  return { allocating, downloading, creating, running };
 }
 
 export function buildYumeContainerGroup(input: { apiKey: string; gpuClassId: string; image?: string; name?: string; adminToken?: string }): Record<string, unknown> {
@@ -300,6 +339,18 @@ function httpProbe(path: string, initialDelay: number, period: number, timeout: 
     success_threshold: 1,
     failure_threshold: failureThreshold,
   };
+}
+
+function textField(value: unknown): string {
+  return typeof value === 'string' ? value.trim() : '';
+}
+
+function percentField(value: unknown): number | null {
+  const number = typeof value === 'number' ? value : typeof value === 'string' && value.trim() ? Number(value) : NaN;
+  if (!Number.isFinite(number) || number < 0) return null;
+  const percent = number <= 1 ? number * 100 : number;
+  if (percent > 100) return null;
+  return Math.round(percent * 10) / 10;
 }
 
 function numberField(value: unknown): number {

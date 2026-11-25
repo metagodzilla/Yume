@@ -162,6 +162,8 @@ export type Settings = {
   idleStopMinutes: number;
   lowPower: boolean;
   serverUpdateCheck: boolean;
+  /** Move a Salad machine that stops making progress. On unless turned off. */
+  autoFixStuckCloud?: boolean;
 };
 
 export type Session = {
@@ -218,6 +220,7 @@ export const DEFAULT_SETTINGS: Settings = {
   idleStopMinutes: 0,
   lowPower: false,
   serverUpdateCheck: true,
+  autoFixStuckCloud: true,
 };
 
 export const DEFAULT_SESSION: Session = {

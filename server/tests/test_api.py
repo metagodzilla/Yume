@@ -299,7 +299,17 @@ def test_startup_answers_before_ready(client: TestClient) -> None:
     assert startup.status_code == 200, startup.text
     body = startup.json()
     assert body["stage"] in {"idle", "ready", "downloading", "loading"}
-    assert "bytesDone" in body and "bytesTotal" in body
+    assert "bytesDone" in body and "bytesTotal" in body and "bytesPerSecond" in body and "etaSeconds" in body
+    from yume_server.startup import eta_seconds, note_file
+
+    assert eta_seconds(100, 250, 50) == 3
+    note_file("tile", name="Tile ControlNet", kind="ControlNet", done=20, total=40, state="downloading")
+    progress = client.get("/progress")
+    assert progress.status_code == 200
+    names = [item["name"] for item in progress.json()["files"]]
+    assert "Tile ControlNet" in names
+    tile = next(item for item in progress.json()["files"] if item["name"] == "Tile ControlNet")
+    assert tile["type"] == "ControlNet" and tile["bytes_done"] == 20 and tile["bytes_total"] == 40 and tile["state"] == "downloading"
     assert client.get("/health").json()["startup"]["stage"] == body["stage"]
 
 
