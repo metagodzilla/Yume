@@ -242,7 +242,7 @@ export function loraBaseWarning(checkpointBase: string, loraBase: string): strin
 
 export function loadedModelName(models: { versionId: number; name: string }[], active: number | null): string {
   const match = models.find((item) => item.versionId === active);
-  return match?.name || 'Animagine XL 4.0';
+  return match?.name || 'WAI-illustrious-SDXL';
 }
 
 export function defaultsForBase(

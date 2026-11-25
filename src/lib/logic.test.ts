@@ -34,7 +34,8 @@ import { CAST_ROUTE, castRouteOpensScreen } from '@/src/lib/routes';
 import { chooseSeeds } from '@/src/lib/seeds';
 import { redactValue } from '@/src/lib/reportText';
 import { CREATE_PROMPT_FIELDS } from '@/src/lib/createFields';
-import { describeToTags, keepManualTags, namedPeople, settleSavedPrompts, supportTags } from '@/src/lib/positiveTags';
+import { describeParts, describeToTags, isClothesTag, keepManualTags, namedPeople, settleSavedPrompts, supportTags } from '@/src/lib/positiveTags';
+import { defaultOutfitTags, pickCleanTriggerGroup, sentNegative } from '@/src/lib/draw';
 import { buildSaladGenerateBody, composeGenerationPrompt, sentPositiveText } from '@/src/lib/draw';
 import { addLora, getGenerator, patchGenerator, resetBuiltPrompt, resetModelDefaults, resetQualityTags, type GeneratorState } from '@/src/lib/genstore';
 import { downloadButtons, downloadKind, downloadPercent, formatEta, formatSpeed, RECONNECTING } from '@/src/lib/downloads';
@@ -311,7 +312,7 @@ assert(parsed.length === 1 && parsed[0]!.positions.length > 30, 'stand-in mesh w
 assert(parsed[0]!.png?.[0] === 137, 'stand-in has no png texture');
 const darker = buildMockGlb({ hair: 'black', outfit: 'kimono', eye: 'gold' });
 assert(darker.some((byte, index) => byte !== glb[index]), 'hair color did not change the glb');
-assert(DEFAULT_CHECKPOINT.versionId === 1337429 && DEFAULT_CHECKPOINT.hash === '1d5b43ff75', 'default checkpoint drifted');
+assert(DEFAULT_CHECKPOINT.versionId === 2883731 && DEFAULT_CHECKPOINT.modelId === 827184 && DEFAULT_CHECKPOINT.baseModel === 'Illustrious', 'default checkpoint is WAI');
 const tagged = extractLoras('a shrine <lora:ribbon:0.8> at dusk');
 assert(tagged.loras[0]?.name === 'ribbon' && tagged.loras[0]?.weight === 0.8, 'lora tag was not read');
 assert(!tagged.prompt.includes('<lora:'), 'lora tag stayed in the prompt');
@@ -335,7 +336,7 @@ const imported = parseParameters(parameters);
 assert(imported.prompt === 'a shrine' && imported.sampler === 'Euler a' && imported.seed === 42 && imported.clipSkip === 2, 'parameters did not round-trip');
 assert(imported.loras?.[0]?.name === 'ribbon', 'lora hash line was dropped');
 const taggedPng = embedParameters(encodePng(2, 2, new Uint8ClampedArray(16).fill(255)), parameters);
-assert(readParameters(taggedPng)?.includes('Model hash: 1d5b43ff75'), 'png dropped the parameters chunk');
+assert(readParameters(taggedPng)?.includes('a shrine'), 'png dropped the parameters chunk');
 
 import { interpretConnection } from '@/src/lib/connection';
 import { profileFor, offlineBlockedReason } from '@/src/lib/offline';
@@ -692,6 +693,8 @@ const previewState = {
   promptAuto: true,
   positive: '',
   positiveAuto: true,
+  clothes: '',
+  clothesAuto: true,
   extraPrompt: 'shiny eyes',
   vPrediction: false,
   studioStyle: 'off',
@@ -755,13 +758,24 @@ function hasTag(prompt: string, tag: string) {
   const tags = prompt.split(',').map((item) => item.trim().toLowerCase());
   assert(tags.includes(tag.toLowerCase()), `${tag} missing from ${prompt}`);
 }
-const scene = describeToTags('two girls with red hair and a blue dress, sitting on a wooden bench under cherry blossoms at night, smiling and looking at the camera, soft moonlight, close-up');
-for (const tag of ['2girls', 'red hair', 'blue dress', 'sitting', 'wooden bench', 'cherry blossoms', 'night', 'smile', 'looking at viewer', 'moonlight', 'close-up']) hasTag(scene, tag);
-assert(!scene.split(',').map((item) => item.trim()).includes('solo'), `two girls is not solo: ${scene}`);
-const boyScene = describeToTags('a boy with green eyes wearing a black hoodie, holding a sword, standing on a rooftop at night in the rain');
-for (const tag of ['1boy', 'solo', 'green eyes', 'black hoodie', 'holding sword', 'standing', 'rooftop', 'night', 'rain']) hasTag(boyScene, tag);
-const ride = describeToTags('a girl with a polka-dot scarf riding a bicycle beside the canal, full body, cinematic lighting');
-for (const tag of ['1girl', 'solo', 'polka-dot scarf', 'riding a bicycle', 'canal', 'full body', 'cinematic lighting']) hasTag(ride, tag);
+const sceneParts = describeParts('two girls with red hair and a blue dress, sitting on a wooden bench under cherry blossoms at night, smiling and looking at the camera, soft moonlight, close-up');
+for (const tag of ['2girls', 'red hair', 'sitting', 'wooden bench', 'cherry blossoms', 'night', 'smile', 'looking at viewer', 'moonlight', 'close-up']) hasTag(sceneParts.prompt, tag);
+hasTag(sceneParts.clothes, 'blue dress');
+assert(!sceneParts.prompt.toLowerCase().includes('dress'), `clothes left the prompt: ${sceneParts.prompt}`);
+assert(!sceneParts.prompt.split(',').map((item) => item.trim()).includes('solo'), `two girls is not solo: ${sceneParts.prompt}`);
+const boyParts = describeParts('a boy with green eyes wearing a black hoodie, holding a sword, standing on a rooftop at night in the rain');
+for (const tag of ['1boy', 'solo', 'green eyes', 'holding sword', 'standing', 'rooftop', 'night', 'rain']) hasTag(boyParts.prompt, tag);
+hasTag(boyParts.clothes, 'black hoodie');
+assert(!boyParts.prompt.toLowerCase().includes('hoodie'), `hoodie left the prompt: ${boyParts.prompt}`);
+const rideParts = describeParts('a girl with a polka-dot scarf riding a bicycle beside the canal, full body, cinematic lighting');
+for (const tag of ['1girl', 'solo', 'riding a bicycle', 'canal', 'full body', 'cinematic lighting']) hasTag(rideParts.prompt, tag);
+hasTag(rideParts.clothes, 'polka-dot scarf');
+assert(!isClothesTag('pink hair') && isClothesTag('school uniform') && isClothesTag('pleated skirt') && isClothesTag('nude'), 'clothes detector');
+const wardrobe = describeParts('a girl in a red shirt and pleated skirt, nude hat off, blue swimsuit, white socks, black shoes, gold jewelry, school uniform');
+for (const tag of ['shirt', 'skirt', 'nude', 'swimsuit', 'socks', 'shoes', 'jewelry', 'uniform']) {
+  assert(wardrobe.clothes.toLowerCase().includes(tag), `${tag} missing from clothes ${wardrobe.clothes}`);
+  assert(!wardrobe.prompt.toLowerCase().includes(tag), `${tag} leaked into prompt ${wardrobe.prompt}`);
+}
 const momo = describeToTags('Momo kissing a man and he is touching her breasts', [{ name: 'Momo', triggers: ['momo (koigasaki)'], gender: 'girl' }]);
 for (const tag of ['momo (koigasaki)', '1girl', '1boy', 'hetero', 'kiss', 'breast grab']) hasTag(momo, tag);
 assert(momo.toLowerCase().includes("grabbing another's breast"), `breast interaction missing from ${momo}`);
@@ -769,10 +783,28 @@ assert(!momo.split(',').map((item) => item.trim().toLowerCase()).includes('solo'
 const momoPlain = describeToTags('Momo kissing a man and he is touching her breasts');
 for (const tag of ['momo', '1girl', '1boy', 'hetero', 'kiss', 'breast grab']) hasTag(momoPlain, tag);
 assert(!momoPlain.split(',').map((item) => item.trim().toLowerCase()).includes('solo'), `unnamed momo is not solo: ${momoPlain}`);
-const keptPrompt = keepManualTags(describeToTags('a girl with pink hair and a blue dress'), '1girl, solo, pink hair, masterpiece', '1girl, solo, pink hair', 'edited');
-hasTag(keptPrompt, 'blue dress');
+const dressParts = describeParts('a girl with pink hair and a blue dress');
+assert(!dressParts.prompt.includes('blue dress') && dressParts.clothes.includes('blue dress'), `blue dress stays in clothes: ${dressParts.prompt} | ${dressParts.clothes}`);
+const keptPrompt = keepManualTags(dressParts.prompt, '1girl, solo, pink hair, masterpiece', '1girl, solo, pink hair', 'edited');
 hasTag(keptPrompt, 'masterpiece');
 hasTag(keptPrompt, 'pink hair');
+assert(!keptPrompt.includes('blue dress'), 'manual prompt keeps extra tags and not the dress');
+const outfitCharacter = { ...blankCharacter('momo'), bodyTags: ['school uniform', 'pleated skirt', 'pink hair'] };
+const outfitState = {
+  ...previewState,
+  prompt: '1girl',
+  clothes: 'red bikini',
+  negative: 'lowres',
+  triggers: true,
+  loras: [{ name: 'momo', weight: 0.8, triggers: ['momo, school uniform, pleated skirt', 'momo'], triggerGroup: 0 }],
+};
+const outfitPrompt = composeGenerationPrompt(outfitState, characterClause(outfitCharacter));
+assert(outfitPrompt.includes('red bikini') && outfitPrompt.includes('momo') && !outfitPrompt.includes('school uniform') && !outfitPrompt.includes('pleated skirt'), `new clothes replace the default: ${outfitPrompt}`);
+assert(!characterClause(outfitCharacter).includes('school uniform'), 'identity clause drops clothing tags');
+const outfitNegative = sentNegative(outfitState, outfitCharacter);
+assert(outfitNegative.includes('school uniform') && outfitNegative.includes('pleated skirt') && outfitNegative.includes('lowres') && !outfitNegative.includes('red bikini'), `old clothes move to negative: ${outfitNegative}`);
+assert(pickCleanTriggerGroup([['momo', 'school uniform', 'pleated skirt'], ['momo']]).join(',') === 'momo', 'lora trigger group without the outfit wins');
+assert(defaultOutfitTags(outfitCharacter, outfitState.loras).includes('pleated skirt'), 'default outfit is remembered from the character and the lora');
 const keptPositive = keepManualTags('detailed eyes, detailed face', 'detailed eyes, shiny eyes', 'detailed eyes', 'edited');
 hasTag(keptPositive, 'shiny eyes');
 hasTag(keptPositive, 'detailed face');
@@ -781,7 +813,7 @@ const named = namedPeople({ characters: [{ ...blankCharacter('c'), name: 'Momo',
 assert(named.some((person) => person.name === 'Momo' && person.tags?.includes('pink hair')) && named.some((person) => person.triggers?.[0] === 'momo (koigasaki)'), 'cast and lora names are available to describe');
 const settled = settleSavedPrompts({ positive: 'shiny eyes', extraPrompt: 'old extra' });
 assert(settled.positive === 'shiny eyes' && settled.extraPrompt === '' && settled.positiveAuto === false, 'saved positive stays and extra starts empty');
-assert(CREATE_PROMPT_FIELDS.join('|') === 'Describe|Prompt|Positive prompt|Extra prompt|Negative prompt|Quality tags', 'create field order');
+assert(CREATE_PROMPT_FIELDS.join('|') === 'Describe|Prompt|Clothes prompt|Positive prompt|Extra prompt|Negative prompt|Quality tags', 'create field order');
 assert(scaleLoraStack(studioState.loras).every((item) => item.weight <= 0.68) && scaleLoraStack([{ name: 'a', weight: 0.8 }, { name: 'b', weight: 0.4 }])[0]?.weight === 0.8, 'three strong loras scale down');
 assert(ANIME_STUDIO_CHECKPOINT.versionId === 1408658 && ANIME_STUDIO_CHECKPOINT.steps === 26 && ANIME_STUDIO_CHECKPOINT.width === 896, 'anime studio checkpoint');
 assert(CAST_ROUTE === '/cast' && castRouteOpensScreen('/cast') && !castRouteOpensScreen('/(tabs)/cast'), 'cast is a real screen, not a hidden tab');

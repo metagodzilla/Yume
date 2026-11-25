@@ -82,6 +82,11 @@ const PHRASES: [RegExp, string[]][] = [
   [/\bneon\b/i, ['neon lights']],
   [/\bcandle\b/i, ['candlelight']],
   [/\bflower\b|\bblossom\b/i, ['flower']],
+  [/\b(?:completely |fully )?nude\b|\bnaked\b|\bno clothes\b|\bwithout clothes\b/i, ['nude']],
+  [/\btopless\b/i, ['topless']],
+  [/\bbottomless\b/i, ['bottomless']],
+  [/\bswimsuit\b|\bbikini\b/i, ['swimsuit']],
+  [/\bunderwear\b|\blingerie\b|\bpanties\b|\bbra\b/i, ['underwear']],
 ];
 
 const FAMILY_DETAIL: Record<BaseFamily, string[]> = {
@@ -184,7 +189,9 @@ const NOT_NAMES = new Set(
 );
 
 const COLORS = 'red|blue|green|pink|black|white|blonde|blond|brown|purple|silver|grey|gray|orange|yellow|crimson|golden|gold';
-const COLOR_OBJECTS = 'hair|eyes|dress|dresses|skirt|shirt|jacket|hoodie|ribbon|scarf|hat|shoes|gloves|coat|cape|kimono|armor|armour|flower|sky|background|nails|lips|boots|pants|shorts|sweater|blouse|suit|tie|bow|wings|tail|horns';
+const COLOR_OBJECTS = 'hair|eyes|dress|dresses|skirt|shirt|jacket|hoodie|ribbon|scarf|hat|shoes|gloves|coat|cape|kimono|armor|armour|flower|sky|background|nails|lips|boots|pants|shorts|sweater|blouse|suit|tie|bow|wings|tail|horns|bikini|swimsuit|socks|uniform';
+
+const CLOTHES = /\b(dress|dresses|shirt|shirts|skirt|skirts|swimsuit|swimwear|bikini|uniform|nude|naked|topless|bottomless|underwear|panties|bra|lingerie|shoes?|boots?|socks?|stockings|thighhighs|hats?|caps?|jewelry|jewellery|necklace|earrings?|glasses|sunglasses|hoodie|jacket|kimono|armou?r|coat|cape|gloves?|pants|trousers|shorts|sweater|blouse|suit|tie|scarf|scarves|leotard|bodysuit|apron|collar|choker|crown|tiara|veil|belt|clothes|clothing|outfit|costume)\b/i;
 const COUNT_TAG = /^(?:[1-5]girls?|[1-5]boys?|6\+girls|6\+boys|solo|hetero)$/i;
 
 type Span = {
@@ -203,13 +210,12 @@ export function characterPromptTags(character: Character): string[] {
     known(HAIR_COLOR, character.hairColor),
     known(HAIR_STYLE, character.hairStyle),
     known(EYE, character.eyeColor),
-    known(OUTFIT, character.outfit),
     known(EXPRESSION, character.expression),
     known(POSE, character.pose),
     known(SETTING, character.setting),
     known(LIGHT, character.lighting),
     ...(character.bodyTags ?? []),
-  ].filter((tag) => tag && !isChildTag(tag));
+  ].filter((tag) => tag && !isChildTag(tag) && !isClothesTag(tag));
 }
 
 export function namedPeople(input: {
@@ -347,6 +353,10 @@ export function describeToTags(text: string, people: NamedPerson[] = []): string
     addPattern(found, source, pattern, (match) => ({ rank: 2, tags, breast: /\bbreasts?\b/i.test(match[0]) }));
   }
   addPattern(found, source, /\briding (?:a |an |the )?[a-z0-9-]+\b/i, (match) => ({ rank: 2, tags: [cleanChunk(match[0]) || match[0].toLowerCase()] }));
+  addPattern(found, source, /\b(?:pleated|mini|plaid|checkered|striped|frilled)\s+(?:skirt|dress|shirt|shorts|socks|pants)\b/i, (match) => ({
+    rank: 2,
+    tags: [match[0].toLowerCase()],
+  }));
   addPattern(found, source, new RegExp(`\\b(${COLORS})\\s+(${COLOR_OBJECTS})\\b`, 'i'), (match) => {
     const rawColor = match[1]!.toLowerCase();
     const color = rawColor === 'blond' ? 'blonde' : rawColor === 'grey' ? 'gray' : rawColor;
@@ -446,6 +456,43 @@ export function describeToTags(text: string, people: NamedPerson[] = []): string
     return withoutSolo.join(', ');
   }
   return tags.join(', ');
+}
+
+export function isClothesTag(tag: string): boolean {
+  return CLOTHES.test(tag.trim());
+}
+
+export function splitPromptAndClothes(tags: string): { prompt: string; clothes: string } {
+  const prompt: string[] = [];
+  const clothes: string[] = [];
+  for (const tag of splitTagList(tags)) {
+    if (isClothesTag(tag)) clothes.push(tag);
+    else prompt.push(tag);
+  }
+  return { prompt: prompt.join(', '), clothes: clothes.join(', ') };
+}
+
+/** Prompt tags and clothing tags from one description. Clothing never stays in the prompt half. */
+export function describeParts(text: string, people: NamedPerson[] = []): { prompt: string; clothes: string } {
+  return splitPromptAndClothes(describeToTags(text, people));
+}
+
+export function characterOutfitTags(character: Character | null | undefined): string[] {
+  if (!character) return [];
+  const tags: string[] = [];
+  const mapped = known(OUTFIT, character.outfit);
+  if (mapped) tags.push(mapped);
+  else if (character.outfit.trim() && isClothesTag(character.outfit)) tags.push(character.outfit.trim());
+  for (const tag of character.bodyTags ?? []) {
+    if (isClothesTag(tag)) tags.push(tag);
+  }
+  const seen = new Set<string>();
+  return tags.filter((tag) => {
+    const key = tag.toLowerCase();
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
 }
 
 /** Detail, lighting, composition, and character tags that are not already in the converted prompt. */

@@ -1,6 +1,9 @@
 /** Models the phone remembers so a new Salad node can download them again. */
 
-export const BUILTIN_CHECKPOINT = 1337429;
+import { RETIRED_CHECKPOINTS } from '@/src/lib/defaultModel';
+
+export const BUILTIN_CHECKPOINT = 2883731;
+export const RETIRED_CHECKPOINT_IDS = new Set<number>(RETIRED_CHECKPOINTS);
 export const DISK_RESET_NOTE = 'Salad disks reset when the cloud restarts. Yume downloads your saved models again.';
 
 export type KeptModel = {
@@ -20,8 +23,8 @@ export type KeptLibrary = {
 export const emptyLibrary = (): KeptLibrary => ({ models: [], lastUsedVersionId: null });
 
 export function rememberModel(library: KeptLibrary, model: KeptModel, lastUsed = false): KeptLibrary {
-  if (!model.versionId || model.versionId === BUILTIN_CHECKPOINT) {
-    return lastUsed ? { ...library, lastUsedVersionId: model.versionId || library.lastUsedVersionId } : library;
+  if (!model.versionId || RETIRED_CHECKPOINT_IDS.has(model.versionId)) {
+    return library;
   }
   const others = library.models.filter((item) => item.versionId !== model.versionId);
   return {
@@ -39,11 +42,11 @@ export function forgetModel(library: KeptLibrary, versionId: number): KeptLibrar
 
 export function modelsToRestore(library: KeptLibrary, catalogVersionIds: number[]): KeptModel[] {
   const present = new Set(catalogVersionIds);
-  return library.models.filter((item) => item.versionId !== BUILTIN_CHECKPOINT && !present.has(item.versionId));
+  return library.models.filter((item) => !RETIRED_CHECKPOINT_IDS.has(item.versionId) && !present.has(item.versionId));
 }
 
 export function modelPresence(versionId: number, catalogVersionIds: number[], restoringIds: number[]): 'installed' | 'restoring' | 'missing' {
-  if (catalogVersionIds.includes(versionId) || versionId === BUILTIN_CHECKPOINT) return 'installed';
+  if (catalogVersionIds.includes(versionId)) return 'installed';
   if (restoringIds.includes(versionId)) return 'restoring';
   return 'missing';
 }

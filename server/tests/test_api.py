@@ -306,7 +306,7 @@ def test_startup_answers_before_ready(client: TestClient) -> None:
 def test_health_and_ready(client: TestClient) -> None:
     health = client.get("/health").json()
     assert health["status"] == "ok"
-    assert "Animagine" in health["model"]
+    assert "WAI" in health["model"]
     assert "gpu" in health
     assert client.get("/ready").status_code == 200
 
@@ -420,11 +420,9 @@ def test_default_checkpoint_is_installed_and_metadata_is_written(client: TestCli
     listed = client.get("/models", headers=headers)
     assert listed.status_code == 200, listed.text
     models = listed.json()["models"]
-    classic = next(item for item in models if item["versionId"] == 1337429)
-    assert classic["name"] == "Animagine XL 4.0"
-    assert classic["hash"] == "1d5b43ff75"
-    opt = next((item for item in models if item["versionId"] == 1408658), None)
-    assert opt and opt["name"] == "Animagine XL 4.0 Opt"
+    wai = next(item for item in models if item["versionId"] == 2883731)
+    assert wai["name"] == "WAI-illustrious-SDXL" and wai["isDefault"] is True
+    assert wai["modelId"] == 827184
     installed = client.post("/models/install", headers=headers, json={"versionId": 42})
     assert installed.status_code == 200, installed.text
     job = installed.json()
@@ -472,7 +470,7 @@ def test_stats_diagnostics_and_jobs(client: TestClient) -> None:
     stats = client.get("/stats", headers=headers)
     assert stats.status_code == 200, stats.text
     body = stats.json()
-    assert "Animagine" in body["model"]
+    assert "WAI" in body["model"]
     assert "gpu" in body and "diskFreeMb" in body
     assert body["powerWatts"] is None
     diag = client.get("/diagnostics", headers=headers)
@@ -583,16 +581,26 @@ def test_errors_hide_secrets_and_keep_a_client_report(client: TestClient, tmp_pa
     assert client.get("/errors").status_code == 401
 
 
-def test_anime_studio_opt_boots_without_the_fixed_vae(tmp_path, monkeypatch) -> None:
+def test_wai_is_the_boot_default_and_animagine_can_be_deleted(tmp_path, monkeypatch) -> None:
     monkeypatch.setenv("YUME_MODEL_DIR", str(tmp_path))
+    monkeypatch.delenv("YUME_DEFAULT_VERSION_ID", raising=False)
     monkeypatch.setenv("YUME_MOCK", "1")
-    from yume_server.catalog import ensure_opt_default
+    monkeypatch.setenv("YUME_CIVITAI_TOKEN", "secret-civitai-token")
+    from yume_server.catalog import civitai_token, delete_version, ensure_boot_default, ensure_default, ensure_opt_default, list_models
     from yume_server.generate import loaded_model_name, needs_fixed_vae, start_model
 
-    record = ensure_opt_default()
-    assert record["versionId"] == 1408658 and record["isDefault"] is True
+    assert civitai_token(None) == "secret-civitai-token"
+    assert civitai_token("from-app") == "from-app"
+    record = ensure_boot_default()
+    assert record["versionId"] == 2883731 and record["isDefault"] is True
     start_model()
-    assert loaded_model_name() == "Animagine XL 4.0 Opt"
+    assert loaded_model_name() == "WAI-illustrious-SDXL"
+    ensure_default()
+    ensure_opt_default()
+    delete_version(1408658)
+    delete_version(1337429)
+    ids = {int(item["versionId"]) for item in list_models()}
+    assert 1337429 not in ids and 1408658 not in ids and 2883731 in ids
     assert needs_fixed_vae("SDXL 1.0", "animagine-xl-4.0-opt.safetensors") is False
 
 

@@ -1,6 +1,6 @@
 import * as Clipboard from 'expo-clipboard';
 import { router } from 'expo-router';
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
@@ -16,7 +16,8 @@ import { applyCheckpoint, installLocal, patchGenerator, resetBuiltPrompt, resetM
 import { WAI_ILLUSTRIOUS, baseFamily, baseLabel, illustriousOffer, loraBaseWarning, modelCardPress } from '@/src/lib/checkpoints';
 import { triggerGroups } from '@/src/lib/draw';
 import { runModelInstall } from '@/src/lib/modelInstall';
-import { describeToTags, keepManualTags, namedPeople, supportTags, type NamedPerson } from '@/src/lib/positiveTags';
+import { describeParts, keepManualTags, namedPeople, supportTags, type NamedPerson } from '@/src/lib/positiveTags';
+import { defaultOutfitTags, sentNegative } from '@/src/lib/draw';
 import { STUDIO_SIZES, STUDIO_STYLES } from '@/src/lib/animeStudio';
 import { SAMPLERS, sizesFor } from '@/src/lib/defaultModel';
 import { extractLoras } from '@/src/lib/a1111';
@@ -72,6 +73,7 @@ export default function GenerateScreen() {
     gen.describe,
     gen.promptAuto ? '1' : '0',
     gen.positiveAuto ? '1' : '0',
+    gen.clothesAuto ? '1' : '0',
     gen.studioStyle,
     checkpoint?.baseModel ?? '',
     character?.hairColor ?? '',
@@ -88,12 +90,20 @@ export default function GenerateScreen() {
     if (!gen.describe.trim()) return;
     const timer = setTimeout(() => {
       const current = getGenerator();
-      const patch: { prompt?: string; positive?: string; autoPrompt?: string; autoPositive?: string } = {};
+      const patch: { prompt?: string; positive?: string; clothes?: string; autoPrompt?: string; autoPositive?: string; autoClothes?: string } = {};
+      const parts = describeParts(current.describe, people);
       if (current.promptAuto) {
-        const generated = describeToTags(current.describe, people);
-        const prompt = keepManualTags(generated, current.prompt, current.autoPrompt ?? '', 'auto');
+        const prompt = keepManualTags(parts.prompt, current.prompt, current.autoPrompt ?? '', 'auto');
         if (prompt && prompt !== current.prompt) patch.prompt = prompt;
-        if (generated !== (current.autoPrompt ?? '')) patch.autoPrompt = generated;
+        if (parts.prompt !== (current.autoPrompt ?? '')) patch.autoPrompt = parts.prompt;
+      }
+      if (current.clothesAuto) {
+        const clothes = keepManualTags(parts.clothes, current.clothes || '', current.autoClothes ?? '', 'auto');
+        if (clothes !== (current.clothes || '')) patch.clothes = clothes;
+        if (parts.clothes !== (current.autoClothes ?? '')) patch.autoClothes = parts.clothes;
+        if (character && clothes !== (character.clothesPrompt ?? '')) {
+          void studio.commitCharacter({ ...character, clothesPrompt: clothes });
+        }
       }
       if (current.positiveAuto) {
         const generated = supportTags({
@@ -107,7 +117,7 @@ export default function GenerateScreen() {
         if (positive !== current.positive) patch.positive = positive;
         if (generated !== (current.autoPositive ?? '')) patch.autoPositive = generated;
       }
-      if (patch.prompt != null || patch.positive != null || patch.autoPrompt != null || patch.autoPositive != null) patchGenerator(patch);
+      if (patch.prompt != null || patch.positive != null || patch.clothes != null || patch.autoPrompt != null || patch.autoPositive != null || patch.autoClothes != null) patchGenerator(patch);
     }, 350);
     return () => clearTimeout(timer);
   }, [describeKey]);
@@ -115,6 +125,18 @@ export default function GenerateScreen() {
   useEffect(() => {
     void import('@/src/lib/genstore').then(({ hydrateFromDisk }) => hydrateFromDisk());
   }, []);
+
+  const clothesOwner = useRef<string | null>(null);
+  useEffect(() => {
+    if (!character) {
+      clothesOwner.current = null;
+      return;
+    }
+    if (clothesOwner.current === character.id) return;
+    clothesOwner.current = character.id;
+    const seeded = character.clothesPrompt != null ? character.clothesPrompt : defaultOutfitTags(character, gen.loras).join(', ');
+    patchGenerator({ clothes: seeded, clothesAuto: false, autoClothes: seeded });
+  }, [character?.id]);
 
   async function useWaiIllustrious(offer: 'switch' | 'install') {
     const installed = gen.installed.find((item) => item.type === 'Checkpoint' && baseFamily(item.baseModel) === 'Illustrious');
@@ -200,7 +222,7 @@ export default function GenerateScreen() {
         userPrompt: gen.prompt,
         enhancedPrompt: prompt,
         finalPrompt: prompt,
-        negative: gen.negative,
+        negative: sentNegative(gen, character),
         styleId: 'watercolor',
         styleName: params.model,
         aspectId: gen.height >= gen.width ? 'wallpaper' : 'landscape',
@@ -279,18 +301,18 @@ export default function GenerateScreen() {
                 patchGenerator({ promptAuto: false });
                 return;
               }
-              const generated = gen.describe.trim() ? describeToTags(gen.describe, people) : '';
+              const parts = gen.describe.trim() ? describeParts(gen.describe, people) : { prompt: '', clothes: '' };
               const support = gen.describe.trim()
                 ? supportTags({ text: gen.describe, baseModel: checkpoint?.baseModel, style: gen.studioStyle, character, people })
                 : '';
               patchGenerator({
                 promptAuto: true,
                 positiveAuto: true,
-                ...(generated
+                ...(parts.prompt
                   ? {
-                      prompt: keepManualTags(generated, gen.prompt, gen.autoPrompt ?? '', gen.promptAuto ? 'auto' : 'edited'),
+                      prompt: keepManualTags(parts.prompt, gen.prompt, gen.autoPrompt ?? '', gen.promptAuto ? 'auto' : 'edited'),
                       positive: keepManualTags(support, gen.positive, gen.autoPositive ?? '', gen.positiveAuto ? 'auto' : 'edited'),
-                      autoPrompt: generated,
+                      autoPrompt: parts.prompt,
                       autoPositive: support,
                     }
                   : {}),
@@ -301,14 +323,14 @@ export default function GenerateScreen() {
           <Pressable
             testID="positive-regenerate"
             onPress={() => {
-              const generated = describeToTags(gen.describe, people);
+              const parts = describeParts(gen.describe, people);
               const support = supportTags({ text: gen.describe, baseModel: checkpoint?.baseModel, style: gen.studioStyle, character, people });
               patchGenerator({
                 promptAuto: true,
                 positiveAuto: true,
-                prompt: keepManualTags(generated, gen.prompt, gen.autoPrompt ?? '', gen.promptAuto ? 'auto' : 'edited'),
+                prompt: keepManualTags(parts.prompt, gen.prompt, gen.autoPrompt ?? '', gen.promptAuto ? 'auto' : 'edited'),
                 positive: keepManualTags(support, gen.positive, gen.autoPositive ?? '', gen.positiveAuto ? 'auto' : 'edited'),
-                autoPrompt: generated,
+                autoPrompt: parts.prompt,
                 autoPositive: support,
               });
             }}>
@@ -324,8 +346,61 @@ export default function GenerateScreen() {
           multiline
           style={styles.prompt}
         />
-        <Text style={styles.hint}>Filled from Describe. Editing this box turns Auto off until you tap Regenerate.</Text>
-        <Text style={styles.label}>{CREATE_PROMPT_FIELDS[2]}</Text>
+        <Text style={styles.hint}>Filled from Describe, without clothing. Editing this box turns Auto off until you tap Regenerate.</Text>
+        <View style={styles.row}>
+          <Text style={styles.label}>{CREATE_PROMPT_FIELDS[2]}</Text>
+          <Pressable
+            testID="clothes-auto"
+            onPress={() => {
+              const next = !gen.clothesAuto;
+              if (!next) {
+                patchGenerator({ clothesAuto: false });
+                return;
+              }
+              const clothes = describeParts(gen.describe, people).clothes;
+              patchGenerator({
+                clothesAuto: true,
+                clothes: keepManualTags(clothes, gen.clothes || '', gen.autoClothes ?? '', gen.clothesAuto ? 'auto' : 'edited'),
+                autoClothes: clothes,
+              });
+            }}>
+            <Text style={styles.link}>{gen.clothesAuto ? 'Auto on' : 'Auto off'}</Text>
+          </Pressable>
+          <Pressable
+            testID="clothes-regenerate"
+            onPress={() => {
+              const clothes = describeParts(gen.describe, people).clothes;
+              patchGenerator({
+                clothesAuto: true,
+                clothes: keepManualTags(clothes, gen.clothes || '', gen.autoClothes ?? '', gen.clothesAuto ? 'auto' : 'edited'),
+                autoClothes: clothes,
+              });
+            }}>
+            <Text style={styles.link}>Regenerate</Text>
+          </Pressable>
+          <Pressable
+            testID="clear-clothes"
+            onPress={() => {
+              patchGenerator({ clothes: '', clothesAuto: false, autoClothes: '' });
+              if (character) void studio.commitCharacter({ ...character, clothesPrompt: '' });
+            }}>
+            <Text style={styles.link}>Clear clothes</Text>
+          </Pressable>
+        </View>
+        <TextInput
+          testID="gen-clothes"
+          value={gen.clothes || ''}
+          onChangeText={(clothes) => {
+            patchGenerator({ clothes, clothesAuto: false });
+            if (character) void studio.commitCharacter({ ...character, clothesPrompt: clothes });
+          }}
+          placeholder="red bikini, sandals"
+          placeholderTextColor={colors.faint}
+          multiline
+          style={styles.prompt}
+        />
+        <Text style={styles.hint}>Outfit only. Editing this box turns its Auto off, so you can change clothes and keep the rest. It is saved on the selected character.</Text>
+        <Text style={styles.label}>{CREATE_PROMPT_FIELDS[3]}</Text>
         <TextInput
           testID="gen-positive"
           value={gen.positive}
@@ -338,7 +413,7 @@ export default function GenerateScreen() {
         <Text style={styles.hint}>
           Auto adds detail tags for {baseFamily(checkpoint?.baseModel ?? '')}, the style, and the selected character. Editing this box keeps your tags. They stay when you switch models.
         </Text>
-        <Text style={styles.label}>{CREATE_PROMPT_FIELDS[3]}</Text>
+        <Text style={styles.label}>{CREATE_PROMPT_FIELDS[4]}</Text>
         <TextInput
           testID="gen-extra"
           value={gen.extraPrompt}
@@ -349,7 +424,7 @@ export default function GenerateScreen() {
           style={styles.negative}
         />
         <Text style={styles.hint}>Not filled automatically. Kept when you switch models.</Text>
-        <Text style={styles.label}>{CREATE_PROMPT_FIELDS[4]}</Text>
+        <Text style={styles.label}>{CREATE_PROMPT_FIELDS[5]}</Text>
         <TextInput
           testID="gen-negative"
           value={gen.negative}
@@ -360,7 +435,7 @@ export default function GenerateScreen() {
           style={styles.negative}
         />
         <View style={styles.row}>
-          <Text style={styles.label}>{CREATE_PROMPT_FIELDS[5]}</Text>
+          <Text style={styles.label}>{CREATE_PROMPT_FIELDS[6]}</Text>
           <Pressable testID="reset-quality-tags" onPress={() => resetQualityTags(checkpoint?.baseModel ?? '', checkpoint?.name ?? '')}>
             <Text style={styles.link}>Reset</Text>
           </Pressable>

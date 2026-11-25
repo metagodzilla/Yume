@@ -1,25 +1,27 @@
-/** Animagine XL 4.0 v4.0 on Civitai. Weights download on the server; this is the record. */
+/** WAI-illustrious-SDXL. The phone and a fresh cloud node start here. */
 export const DEFAULT_CHECKPOINT = {
-  modelId: 1188071,
-  versionId: 1337429,
-  name: 'Animagine XL 4.0',
-  version: 'v4.0',
+  modelId: 827184,
+  versionId: 2883731,
+  name: 'WAI-illustrious-SDXL',
+  version: 'v17.0',
   type: 'Checkpoint' as const,
-  baseModel: 'SDXL 1.0',
-  filename: 'animagine-xl-4.0.safetensors',
-  hash: '1d5b43ff75',
-  sha256: '1D5B43FF75B6AB598502D4C779D2FBFA3DCECA51C60C3B609640A60772333916',
-  downloadUrl: 'https://civitai.com/api/download/models/1337429',
+  baseModel: 'Illustrious',
+  filename: 'WAI-Nsfw-Illustrious-17.safetensors',
+  hash: '',
+  sha256: '',
+  downloadUrl: 'https://civitai.com/api/download/models/2883731',
   sampler: 'Euler a',
-  steps: 25,
-  cfg: 6,
+  steps: 28,
+  cfg: 5,
   clipSkip: 2,
   width: 832,
   height: 1216,
-  quality: 'masterpiece, high score, great score, absurdres',
+  quality: 'masterpiece, best quality, very aesthetic, absurdres',
   negative:
-    'lowres, bad anatomy, bad hands, text, error, missing finger, extra digits, fewer digits, cropped, worst quality, low quality, low score, bad score, average score, signature, watermark, username, blurry',
+    'lowres, worst quality, bad quality, bad anatomy, bad hands, signature, watermark, username, blurry',
 };
+
+export const RETIRED_CHECKPOINTS = [1337429, 1408658] as const;
 
 export const BASE_MODELS = ['SD 1.5', 'SDXL 1.0', 'Pony', 'Illustrious', 'NoobAI', 'Flux.1 D', 'Flux.1 S'] as const;
 
