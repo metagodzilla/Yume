@@ -77,6 +77,7 @@ export default function RootLayout() {
               <Stack.Screen name="character" options={{ animation: 'slide_from_right' }} />
               <Stack.Screen name="styles" options={{ animation: 'slide_from_right' }} />
               <Stack.Screen name="library" options={{ animation: 'slide_from_right' }} />
+              <Stack.Screen name="cast" options={{ animation: 'slide_from_right' }} />
               <Stack.Screen name="turnaround" options={{ animation: 'slide_from_right' }} />
               <Stack.Screen name="mesh" options={{ animation: 'slide_from_right' }} />
               <Stack.Screen name="model" options={{ animation: 'slide_from_right' }} />

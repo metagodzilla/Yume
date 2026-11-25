@@ -410,7 +410,7 @@ export default function GenerateScreen() {
         ) : null}
         <Gallery variant="strip" />
         <View style={styles.row}>
-          <Pressable onPress={() => router.push('/(tabs)/cast')}>
+          <Pressable onPress={() => router.push('/cast')}>
             <Text style={styles.link}>Cast</Text>
           </Pressable>
           <Pressable onPress={() => router.push('/styles')}>

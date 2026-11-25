@@ -25,6 +25,8 @@ import { describeUpdateError, downloadLabel } from '@/src/lib/apkInstall';
 import { baseFamily, baseLabel, defaultsForBase, familyPreset, settingsForCheckpoint, modelCardPress, routeLeavesCreate } from '@/src/lib/checkpoints';
 import { modelsToRestore, modelPresence } from '@/src/lib/keptModels';
 import { friendlyLoraMessage, loraChoices, loraStem, missingSelectedLoras } from '@/src/lib/loraGate';
+import { meshPlan, PICTURE_SERVER_MESH_MESSAGE } from '@/src/lib/mesh';
+import { CAST_ROUTE, castRouteOpensScreen } from '@/src/lib/routes';
 import { chooseSeeds } from '@/src/lib/seeds';
 import { redactValue } from '@/src/lib/reportText';
 import { buildSaladGenerateBody, composeGenerationPrompt, sentPositiveText } from '@/src/lib/draw';
@@ -697,6 +699,8 @@ const withExtra = composeGenerationPrompt({ ...studioState, extraPrompt: 'shiny 
 assert(withExtra.indexOf('shiny eyes') < withExtra.indexOf('absurdres') && !withExtra.startsWith('masterpiece'), 'extra prompt stays ahead of quality tags');
 assert(scaleLoraStack(studioState.loras).every((item) => item.weight <= 0.68) && scaleLoraStack([{ name: 'a', weight: 0.8 }, { name: 'b', weight: 0.4 }])[0]?.weight === 0.8, 'three strong loras scale down');
 assert(ANIME_STUDIO_CHECKPOINT.versionId === 1408658 && ANIME_STUDIO_CHECKPOINT.steps === 26 && ANIME_STUDIO_CHECKPOINT.width === 896, 'anime studio checkpoint');
+assert(CAST_ROUTE === '/cast' && castRouteOpensScreen('/cast') && !castRouteOpensScreen('/(tabs)/cast'), 'cast is a real screen, not a hidden tab');
+assert(meshPlan('') === 'stand-in' && meshPlan('  ') === 'stand-in' && meshPlan('https://mesh.example') === 'trellis' && PICTURE_SERVER_MESH_MESSAGE.includes('3D URL'), 'empty 3d url shows a stand-in and a message');
 assert(familyPreset('Pony').quality.startsWith('score_9'), 'pony uses score tags');
 assert(familyPreset('NoobAI', 'NoobAI XL v-pred').vPrediction && familyPreset('Illustrious').vPrediction === false, 'v-pred is detected from the name');
 assert(sentPositiveText(previewState).includes('masterpiece') && sentPositiveText(previewState).includes('1girl') && sentPositiveText(previewState).includes('shiny eyes') && sentPositiveText(previewState).includes('<lora:ribbon:0.8>'), 'final prompt matches the request');

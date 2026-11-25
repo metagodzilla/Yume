@@ -35,31 +35,27 @@ export default function CastScreen() {
           saved.map((character) => {
             const on = character.id === selectedCharacterId;
             return (
-              <Pressable
-                key={character.id}
-                onPress={() => {
-                  selectCharacter(character.id);
-                  router.navigate('/');
-                }}
-                style={[styles.card, on && styles.cardOn]}>
+              <View key={character.id} style={[styles.card, on && styles.cardOn]}>
                 <View style={{ flex: 1, gap: 4 }}>
-                  <Text style={styles.name}>{character.name}</Text>
-                  <Text style={styles.meta}>{characterSummary(character) || 'No traits yet'}</Text>
-                  {on ? <Text style={styles.using}>Using on the next drawing</Text> : null}
-                  <View style={styles.links}>
-                    <Pressable
-                      testID={`open-turnaround-${character.id}`}
-                      accessibilityLabel={`Turnaround for ${character.name}`}
-                      onPress={() => router.push({ pathname: '/turnaround', params: { id: character.id } })}>
-                      <Text style={styles.turn}>Turnaround</Text>
-                    </Pressable>
-                    <Pressable
-                      testID={`open-mesh-${character.id}`}
-                      accessibilityLabel={`Make 3D for ${character.name}`}
-                      onPress={() => router.push({ pathname: '/mesh', params: { id: character.id } })}>
-                      <Text style={styles.mesh}>Make 3D</Text>
-                    </Pressable>
-                  </View>
+                  <Pressable onPress={() => selectCharacter(character.id)}>
+                    <Text style={styles.name}>{character.name}</Text>
+                    <Text style={styles.meta}>{characterSummary(character) || 'No traits yet'}</Text>
+                    {on ? <Text style={styles.using}>Using on the next drawing</Text> : null}
+                  </Pressable>
+                <View style={styles.links}>
+                  <Pressable
+                    testID={`open-turnaround-${character.id}`}
+                    accessibilityLabel={`Turnaround for ${character.name}`}
+                    onPress={() => router.push({ pathname: '/turnaround', params: { id: character.id } })}>
+                    <Text style={styles.turn}>Turnaround</Text>
+                  </Pressable>
+                  <Pressable
+                    testID={`open-mesh-${character.id}`}
+                    accessibilityLabel={`Make 3D for ${character.name}`}
+                    onPress={() => router.push({ pathname: '/mesh', params: { id: character.id } })}>
+                    <Text style={styles.mesh}>Make 3D</Text>
+                  </Pressable>
+                </View>
                 </View>
                 <Pressable
                   accessibilityLabel={`Edit ${character.name}`}
@@ -82,7 +78,7 @@ export default function CastScreen() {
                   }}>
                   <Ionicons name="trash-outline" size={20} color={colors.faint} />
                 </Pressable>
-              </Pressable>
+              </View>
             );
           })
         )}

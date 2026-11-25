@@ -8,7 +8,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { MeshStage, type MeshStageHandle } from '@/components/MeshStage';
 import { parseGlb } from '@/src/lib/glb';
 import { saveImageToLibrary, shareFile } from '@/src/lib/media';
-import { DEMO_MESH_NOTE, MESH_LIMIT, MESH_STEPS, TRELLIS_MESH_NOTE, demoMesh, requestSaladMesh, type SavedMesh } from '@/src/lib/mesh';
+import { DEMO_MESH_NOTE, MESH_LIMIT, MESH_STEPS, PICTURE_SERVER_MESH_MESSAGE, TRELLIS_MESH_NOTE, demoMesh, meshPlan, requestSaladMesh, type SavedMesh } from '@/src/lib/mesh';
 import { composeSheet } from '@/src/lib/sheet';
 import { loadMeshes, loadTurnarounds, persistPng, readApiKey, readPng, readSaladKey, saveMeshes } from '@/src/lib/storage';
 import { useStudio } from '@/src/studio';
@@ -96,11 +96,30 @@ export default function MeshScreen() {
         return;
       }
       if (!front) {
-        throw new Error('Draw the turnaround first. TRELLIS needs the front view.');
+        throw new Error('Draw the turnaround first. The front view is what a 3D mesh is built from.');
+      }
+      if (meshPlan(studio.settings.meshEndpoint) === 'stand-in') {
+        setStep(1);
+        const result = demoMesh(character);
+        parseGlb(result.glb);
+        setStep(MESH_STEPS.length);
+        const glbUri = await persistPng(`${character.id}-mesh-${Date.now()}.glb`, result.glb);
+        await remember(
+          {
+            characterId: character.id,
+            createdAt: Date.now(),
+            glbUri,
+            note: result.note,
+            model: result.model,
+            mode: result.mode,
+          },
+          result.glb,
+        );
+        throw new Error(PICTURE_SERVER_MESH_MESSAGE);
       }
       setStep(1);
       const [saladKey] = await Promise.all([readSaladKey(), readApiKey()]);
-      const endpoint = studio.settings.meshEndpoint.trim() || studio.settings.saladEndpoint.trim();
+      const endpoint = studio.settings.meshEndpoint.trim();
       const frontPng = await readPng(front.imageUri);
       const book = books.find((item) => item.characterId === character.id);
       const views = [];
@@ -109,6 +128,7 @@ export default function MeshScreen() {
       }
       setStatus('Waiting on the mesh container. The first boot downloads TRELLIS and can take several minutes. The gateway gives up after about 100 seconds, so wait until the group is Ready.');
       const result = await requestSaladMesh({ endpoint, apiKey: saladKey ?? '', frontPng, views });
+      parseGlb(result.glb);
       setStep(3);
       const glbUri = await persistPng(`${character.id}-mesh-${Date.now()}.glb`, result.glb);
       setStep(MESH_STEPS.length);
@@ -243,7 +263,7 @@ export default function MeshScreen() {
           <View style={styles.empty}>
             <Text style={styles.emptyTitle}>No mesh yet.</Text>
             <Text style={styles.body}>
-              Make 3D builds a textured GLB you can spin and export. On Salad it is Microsoft TRELLIS, from the front view. In the demo it is a stand-in figure so the viewer still works.
+              Make 3D builds a textured GLB you can spin and export. A TRELLIS gateway in the 3D URL uses the front view. Without that URL, Yume opens a stand-in figure and says this picture cloud cannot build meshes.
             </Text>
           </View>
         )}

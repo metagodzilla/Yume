@@ -37,7 +37,7 @@ export default function WatchScreen() {
           <Pressable onPress={() => studio.openViewer({ images: item.imageUris, index: 0, prompt: item.finalPrompt, title: item.styleName, filename: `${item.id}.png` })}>
             <Text style={styles.link}>Save / share</Text>
           </Pressable>
-          <Pressable onPress={() => router.push('/(tabs)/cast')}>
+          <Pressable onPress={() => router.push('/cast')}>
             <Text style={styles.link}>Send to 3D</Text>
           </Pressable>
         </View>
