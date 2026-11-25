@@ -1,7 +1,10 @@
 import io
 import json
 import os
+import subprocess
+import sys
 import tarfile
+import time
 from pathlib import Path
 
 import pytest
@@ -12,6 +15,7 @@ os.environ.setdefault("YUME_API_KEY", "test-key")
 os.environ.setdefault("YUME_MODEL_DIR", "/tmp/yume-model-cache")
 
 from yume_runtime.codepack import apply_update, install_tree, pick_release, safe_extract, sha256_bytes  # noqa: E402
+from yume_runtime.supervisor import wait_bounded  # noqa: E402
 from yume_server.main import app  # noqa: E402
 from yume_server.version import SERVER_CODE_VERSION  # noqa: E402
 
@@ -31,6 +35,25 @@ def test_pick_release_ignores_app_tags() -> None:
     assert pick_release(releases, "latest")["tag_name"] == "server-v1.5.4"
     assert pick_release(releases, "server-v1.5.2")["tag_name"] == "server-v1.5.2"
     assert pick_release(releases, "server-v9") is None
+
+
+def test_latest_skips_prerelease_server_code() -> None:
+    releases = [
+        {"tag_name": "server-v1.5.5", "prerelease": True},
+        {"tag_name": "server-v1.5.4", "prerelease": False},
+    ]
+    assert pick_release(releases, "latest")["tag_name"] == "server-v1.5.4"
+    assert pick_release(releases, "server-v1.5.5")["tag_name"] == "server-v1.5.5"
+    assert pick_release([{"tag_name": "server-v1.5.5", "prerelease": True}], "latest") is None
+
+
+def test_fetch_deadline_kills_a_hung_process() -> None:
+    proc = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(30)"], start_new_session=True)
+    started = time.monotonic()
+    with pytest.raises(TimeoutError):
+        wait_bounded(proc, 0.4)
+    assert time.monotonic() - started < 3
+    assert proc.poll() is not None
 
 
 def test_install_checks_sha_and_leaves_models(tmp_path: Path) -> None:
