@@ -1,5 +1,6 @@
 import base64
 import os
+import time
 
 os.environ.setdefault("YUME_MOCK", "1")
 os.environ.setdefault("YUME_API_KEY", "test-key")
@@ -80,6 +81,17 @@ def test_panels_and_bubbles() -> None:
     assert scale_rects([(10, 10, 20, 20)], 100, 100, 200, 200) == [(20, 20, 40, 40)]
 
 
+def test_upscale_pixels_are_a_writable_copy() -> None:
+    import numpy as np
+
+    from yume_server.upscale import image_array
+
+    source = np.zeros((2, 2, 3), dtype=np.uint8)
+    source.setflags(write=False)
+    copied = image_array(source)
+    assert copied.flags.writeable and copied is not source
+
+
 def test_lineart_loads_the_fp16_safetensors_not_a_missing_bin() -> None:
     line = controlnet_kwargs(LINEART_REPO)
     assert line["variant"] == "fp16" and line["use_safetensors"] is True
@@ -92,6 +104,22 @@ def test_lineart_loads_the_fp16_safetensors_not_a_missing_bin() -> None:
     assert message == "The lineart ControlNet could not be loaded. The picture was not changed."
 
 
+def _wait(client: TestClient, response, headers: dict[str, str]):
+    assert response.status_code == 200, response.text
+    body = response.json()
+    if "image" in body or "images" in body:
+        return body
+    job_id = body["id"]
+    status = {}
+    for _ in range(40):
+        status = client.get(f"/jobs/{job_id}", headers=headers).json()
+        if status["status"] in {"done", "failed"}:
+            break
+        time.sleep(0.02)
+    assert status["status"] == "done", status
+    return client.get(f"/jobs/{job_id}/result", headers=headers).json()
+
+
 def test_a_failed_manga_edit_is_an_error_not_the_original_page(monkeypatch) -> None:
     def boom(*_args, **_kwargs):
         raise OSError("TheMistoAI/MistoLine does not appear to have a file named diffusion_pytorch_model.bin")
@@ -102,10 +130,19 @@ def test_a_failed_manga_edit_is_an_error_not_the_original_page(monkeypatch) -> N
     image = _picture(32, 48)
     with TestClient(app) as client:
         failed = client.post("/manga", headers=headers, json={"image": image, "job": "edit", "preset": "2k"})
-    assert failed.status_code == 500, failed.text
-    body = failed.json()
-    assert body["detail"] == "The lineart ControlNet could not be loaded. The picture was not changed."
-    assert "image" not in body
+    assert failed.status_code == 200, failed.text
+    job_id = failed.json()["id"]
+    status = {}
+    for _ in range(40):
+        status = client.get(f"/jobs/{job_id}", headers=headers).json()
+        if status["status"] in {"done", "failed"}:
+            break
+        time.sleep(0.02)
+    assert status["status"] == "failed", status
+    assert status["error"] == "The lineart ControlNet could not be loaded. The picture was not changed."
+    result = client.get(f"/jobs/{job_id}/result", headers=headers)
+    assert result.status_code == 409
+    assert "image" not in result.json()
 
 
 def test_upscale_and_manga_are_separate_endpoints() -> None:
@@ -114,16 +151,15 @@ def test_upscale_and_manga_are_separate_endpoints() -> None:
     with TestClient(app) as client:
         assert client.post("/upscale", json={"image": image}).status_code == 401
         plain = client.post("/upscale", headers=headers, json={"image": image, "preset": "2k"})
-        assert plain.status_code == 200, plain.text
-        body = plain.json()
-        assert body["mode"] == "esrgan" and body["height"] == 2048 and body["face_pass"] is False
+        body = _wait(client, plain, headers)
+        assert body["mode"] == "enhance" and body["height"] == 2048 and body["face_pass"] is False
+        assert "tile" in body["controlnet"] and "sharp focus" in body["prompt"] and body["denoise"] > 0
         repair = client.post(
             "/upscale",
             headers=headers,
             json={"image": image, "preset": "4k", "references": [image], "character_tags": "pink hair", "loras": [{"name": "momo", "weight": 0.8}], "repair": 1},
         )
-        assert repair.status_code == 200, repair.text
-        fixed = repair.json()
+        fixed = _wait(client, repair, headers)
         assert fixed["mode"] == "repair" and fixed["face_pass"] is True and fixed["ip_adapter"] == "plus-face"
         assert "tile" in fixed["controlnet"] and "momo" in fixed["loras"] and fixed["denoise"] == 0.65
         assert 3840 <= max(fixed["width"], fixed["height"]) <= 4096
@@ -132,8 +168,7 @@ def test_upscale_and_manga_are_separate_endpoints() -> None:
             headers=headers,
             json={"image": image, "preset": "2k", "colorize": True, "hints": "Momo: pink hair, blue eyes", "redraw": 0},
         )
-        assert page.status_code == 200, page.text
-        manga = page.json()
+        manga = _wait(client, page, headers)
         assert manga["mode"] == "manga" and manga["colorize"] is True
         assert "lineart" in manga["controlnet"] and "tile" in manga["controlnet"]
         assert "pink hair" in manga["prompt"] and "monochrome" not in manga["prompt"]
@@ -155,8 +190,7 @@ def test_upscale_and_manga_are_separate_endpoints() -> None:
                 "colorize": False,
             },
         )
-        assert edit.status_code == 200, edit.text
-        swapped = edit.json()
+        swapped = _wait(client, edit, headers)
         assert swapped["mode"] == "edit"
         assert swapped["controlnet"] == ["pose", "lineart"]
         assert "momo" in swapped["loras"] and swapped["outfit"] == "original" and "same outfit" in swapped["prompt"]

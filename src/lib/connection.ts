@@ -6,6 +6,7 @@ export type HealthInfo = {
   vramTotalMb?: number | null;
   model?: string;
   ready?: boolean;
+  bootId?: string;
 };
 
 export type Probe = {

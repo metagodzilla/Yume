@@ -19,6 +19,22 @@ def client() -> TestClient:
         yield test
 
 
+def finish_generate(client: TestClient, response, headers: dict[str, str]):
+    assert response.status_code == 200, response.text
+    body = response.json()
+    if "images" in body:
+        return body
+    job_id = body["id"]
+    status = {}
+    for _ in range(40):
+        status = client.get(f"/jobs/{job_id}", headers=headers).json()
+        if status["status"] in {"done", "failed"}:
+            break
+        time.sleep(0.02)
+    assert status["status"] == "done", status
+    return client.get(f"/jobs/{job_id}/result", headers=headers).json()
+
+
 def test_use_switches_the_loaded_checkpoint_by_id(client: TestClient) -> None:
     headers = {"Authorization": "Bearer test-key"}
     installed = client.post("/models/install", headers=headers, json={"versionId": 77})
@@ -35,15 +51,15 @@ def test_use_switches_the_loaded_checkpoint_by_id(client: TestClient) -> None:
         headers=headers,
         json={"prompt": "a shrine", "model": "1337429", "width": 512, "height": 512, "steps": 1, "scheduler": "euler_a"},
     )
-    assert current.status_code == 200, current.text
-    assert current.json()["model"] == "Animagine XL 4.0"
+    current_body = finish_generate(client, current, headers)
+    assert current_body["model"] == "Animagine XL 4.0"
     early = client.post(
         "/generate",
         headers=headers,
         json={"prompt": "a shrine", "model": "77", "width": 512, "height": 512, "steps": 1, "scheduler": "euler_a"},
     )
-    assert early.status_code == 200, early.text
-    assert early.json()["model"] == "Civitai 77" and early.json()["switched"] is True
+    early_body = finish_generate(client, early, headers)
+    assert early_body["model"] == "Civitai 77" and early_body["switched"] is True
     use = client.post("/models/use", headers=headers, json={"versionId": 77})
     assert use.status_code == 200, use.text
     loaded = use.json()
@@ -59,14 +75,23 @@ def test_use_switches_the_loaded_checkpoint_by_id(client: TestClient) -> None:
         headers=headers,
         json={"prompt": "a shrine", "model": "77", "width": 512, "height": 512, "steps": 1, "scheduler": "euler_a"},
     )
-    assert switched.status_code == 200, switched.text
-    assert switched.json()["model"] == "Civitai 77"
+    switched_body = finish_generate(client, switched, headers)
+    assert switched_body["model"] == "Civitai 77"
     missing = client.post(
         "/generate",
         headers=headers,
         json={"prompt": "a shrine", "model": "999999", "width": 512, "height": 512, "steps": 1, "scheduler": "euler_a"},
     )
-    assert missing.status_code == 400
+    assert missing.status_code == 200, missing.text
+    missing_id = missing.json()["id"]
+    missing_status = {}
+    for _ in range(40):
+        missing_status = client.get(f"/jobs/{missing_id}", headers=headers).json()
+        if missing_status["status"] in {"done", "failed"}:
+            break
+        time.sleep(0.02)
+    assert missing_status["status"] == "failed"
+    assert "not installed" in missing_status["error"].lower()
     removed = client.delete("/models/77", headers=headers)
     assert removed.status_code == 200, removed.text
     fallback = removed.json().get("job")
@@ -288,8 +313,8 @@ def test_v_prediction_is_detected_and_clip_skip_is_indexed() -> None:
 def test_negative_seed_is_random_and_distinct(client: TestClient) -> None:
     headers = {"Authorization": "Bearer test-key"}
     payload = {"prompt": "a shrine", "width": 512, "height": 512, "count": 2, "steps": 1, "seed": -1, "scheduler": "euler_a"}
-    first = client.post("/generate", headers=headers, json=payload).json()["seeds"]
-    second = client.post("/generate", headers=headers, json=payload).json()["seeds"]
+    first = finish_generate(client, client.post("/generate", headers=headers, json=payload), headers)["seeds"]
+    second = finish_generate(client, client.post("/generate", headers=headers, json=payload), headers)["seeds"]
     assert len(first) == 2 and first[0] != first[1] and min(first) >= 0
     assert first != second
 
@@ -372,8 +397,7 @@ def test_generate_returns_pngs_seed_scheduler_and_loras(client: TestClient) -> N
             "loras": [{"name": "ribbon.safetensors", "weight": 0.6}],
         },
     )
-    assert response.status_code == 200, response.text
-    body = response.json()
+    body = finish_generate(client, response, {"Authorization": "Bearer test-key"})
     assert body["seeds"] == [42, 43]
     assert body["scheduler"] == "dpm_2m_karras"
     assert body["model"] == "Animagine XL 4.0"
@@ -407,8 +431,7 @@ def test_reference_image_is_img2img_in_mock_mode(client: TestClient) -> None:
             "mode": "img2img",
         },
     )
-    assert response.status_code == 200, response.text
-    body = response.json()
+    body = finish_generate(client, response, {"Authorization": "Bearer test-key"})
     assert body["consistency"] == "img2img"
     assert body["seeds"] == [3]
 
@@ -484,8 +507,8 @@ def test_default_checkpoint_is_installed_and_metadata_is_written(client: TestCli
             "loras": [{"name": "ribbon", "weight": 0.8}],
         },
     )
-    assert generated.status_code == 200, generated.text
-    raw = base64.b64decode(generated.json()["images"][0])
+    body = finish_generate(client, generated, headers)
+    raw = base64.b64decode(body["images"][0])
     assert b"parameters" in raw
     assert b"Euler a" in raw
     assert b"1d5b43ff75" in raw

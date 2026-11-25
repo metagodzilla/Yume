@@ -160,7 +160,7 @@ def run_segment(body: Any) -> dict[str, Any]:
     return {"box": [left, top, box_w, box_h], "panel": list(found["panel"]), "mask": _mask_png(found["mask"], width, height), "segmenter": "ink"}
 
 
-def run_edit(body: Any) -> dict[str, Any]:
+def run_edit(body: Any, progress: Any = None) -> dict[str, Any]:
     from yume_server.upscale import _png, _tags_from, mock_mode
 
     raw = base64.b64decode(body.image, validate=False)
@@ -235,6 +235,7 @@ def run_edit(body: Any) -> dict[str, Any]:
             scale_rects(bubbles, width, height, planned["width"], planned["height"]),
             pose,
             holes,
+            progress=progress,
         )
     ).decode("ascii")
     return payload

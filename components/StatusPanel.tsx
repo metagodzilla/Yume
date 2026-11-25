@@ -21,6 +21,7 @@ import { queueAction, useQueue } from '@/src/lib/queuestore';
 import { endpointDiffersFromLive, LIVE_GATEWAY_URL, normalizeEndpoint, redactSecrets } from '@/src/lib/salad';
 import { groupStatusOf, instanceCounts, normalizeSaladKey, pickActiveInstance, pullPercent, readSaladInstances, reallocateTarget } from '@/src/lib/saladCloud';
 import { setCloudGate, useCloudGate } from '@/src/lib/cloudGate';
+import { cloudPollMs, shouldRestoreBoot } from '@/src/lib/cloudPoll';
 import { requestPhoneGenerate } from '@/src/lib/cloudRedo';
 import { cloudIsWaiting } from '@/src/lib/phoneFallback';
 import { progressFromLogs, readLogEntries, type LogProgress } from '@/src/lib/saladLogs';
@@ -93,6 +94,8 @@ export function StatusPanel({ preview = '' }: { preview?: string }) {
   const [pullSamples, setPullSamples] = useState<{ at: number; percent: number }[]>([]);
   const cloudStart = useRef<number | null>(null);
   const logCache = useRef<{ at: number; progress: LogProgress | null }>({ at: 0, progress: null });
+  const readyCloud = useRef(false);
+  const restoredBoot = useRef('');
   const capped = useRef(false);
   const tally = counts(queue);
   const job = queue.jobs.find((item) => item.status === 'running' || item.status === 'paused' || item.status === 'waiting');
@@ -191,7 +194,10 @@ export function StatusPanel({ preview = '' }: { preview?: string }) {
       const statsUrl = saved ? `${saved}/stats` : '';
       const health = saved ? await probe(healthUrl, { headers }, 8000) : undefined;
       const ready = saved ? await probe(readyUrl, { headers }, 8000) : undefined;
-      const startup = saved ? await probe(`${saved}/startup`, { headers }, 8000) : undefined;
+      const cloudReady = health?.status === 200 && ready?.status === 200;
+      readyCloud.current = Boolean(cloudReady);
+      const bootId = typeof health?.body?.bootId === 'string' ? health.body.bootId : '';
+      const startup = saved && !cloudReady ? await probe(`${saved}/startup`, { headers }, 8000) : undefined;
       const startupBody = startup?.body as { bytesDone?: number; bytesTotal?: number; bytesPerSecond?: number; etaSeconds?: number | null; message?: string } | undefined;
       const gatewayClosed = health?.status !== 200;
       let logProgress = logCache.current.progress;
@@ -226,7 +232,8 @@ export function StatusPanel({ preview = '' }: { preview?: string }) {
       const probeError = [groupError, health?.error, ready?.error].filter(Boolean).join(' ');
       let restoreTotal = 0;
       let restorePercent: number | null = null;
-      if (saved && key && health?.ok) {
+      if (saved && key && health?.ok && shouldRestoreBoot(bootId, restoredBoot.current)) {
+        restoredBoot.current = bootId;
         const token = await readCivitaiToken().catch(() => null);
         const restored = await restoreMissingModels({ endpoint: saved, apiKey: key, civitaiToken: token }).catch(() => null);
         const jobs = await fetchInstalls(saved, key).catch(() => []);
@@ -239,7 +246,7 @@ export function StatusPanel({ preview = '' }: { preview?: string }) {
         restoreTotal = summary.total;
         restorePercent = summary.percent;
         setRestoreLines(lines.map((item) => `${item.name} ${item.percent ?? 0}%`));
-      } else {
+      } else if (!health?.ok) {
         setRestoreLines([]);
       }
       const view = cloudChecklist({
@@ -444,13 +451,21 @@ export function StatusPanel({ preview = '' }: { preview?: string }) {
   useFocusEffect(
     useCallback(() => {
       if (preview === 'model') return undefined;
-      void refresh();
-      const timer = setInterval(() => void refresh(), 5_000);
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      let stop = false;
+      const tick = () => {
+        void refresh().finally(() => {
+          if (stop) return;
+          timer = setTimeout(tick, cloudPollMs(readyCloud.current));
+        });
+      };
+      tick();
       const sub = AppState.addEventListener('change', (state) => {
         if (state === 'active') void refresh();
       });
       return () => {
-        clearInterval(timer);
+        stop = true;
+        if (timer) clearTimeout(timer);
         sub.remove();
       };
     }, [preview, refresh, studio.loading, throttle.refreshMs]),

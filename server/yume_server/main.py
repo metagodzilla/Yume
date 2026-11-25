@@ -70,7 +70,7 @@ class MeshIn(BaseModel):
 class UpscaleIn(BaseModel):
     image: str = Field(min_length=1)
     preset: str = "2k"
-    enhance: bool = False
+    enhance: bool = True
     detail: float = 0.35
     repair: float = 0.45
     prompt: str = ""
@@ -350,6 +350,7 @@ def health() -> dict[str, Any]:
         "vramTotalMb": stats["vramTotalMb"],
         "model": loaded_model_name(),
         "ready": state["ready"] and not state["error"],
+        "bootId": stats.get("bootId") or "",
         "startup": progress,
     }
     if health_failed():
@@ -700,24 +701,13 @@ def _picture_job(kind: str, body: Any) -> dict[str, Any]:
         base64.b64decode(body.image, validate=False)
     except Exception as exc:
         raise HTTPException(status_code=400, detail="That picture could not be read.") from exc
-    needs_model = kind == "manga" or bool(getattr(body, "enhance", False) or body.references or body.character_tags or body.loras)
+    needs_model = kind == "manga" or bool(getattr(body, "enhance", True) or body.references or body.character_tags or body.loras)
     if needs_model and not state["ready"]:
         raise HTTPException(status_code=503, detail="Model is still loading.")
-    try:
-        return run_manga(body) if kind == "manga" else run_upscale(body)
-    except HTTPException:
-        raise
-    except LoraInstalling as exc:
-        raise HTTPException(status_code=409, detail=str(exc)) from exc
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-    except RuntimeError as exc:
-        raise HTTPException(status_code=503, detail=str(exc)) from exc
-    except Exception as exc:
-        from yume_server.upscale import picture_failure
+    def task(payload: Any, progress: Any) -> dict[str, Any]:
+        return run_manga(payload, progress=progress) if kind == "manga" else run_upscale(payload, progress=progress)
 
-        _LOG.exception("%s failed", kind)
-        raise HTTPException(status_code=500, detail=picture_failure(exc)) from exc
+    return submit_job(kind, body, task)
 
 
 @app.post("/upscale")
@@ -752,27 +742,13 @@ def generate(body: GenerateIn, request: Request) -> dict[str, Any]:
     token = request.headers.get("x-civitai-token", "").strip() or None
     try:
         prepare_loras(body, token)
-        images, seeds, model, consistency, switched = generate_images(body)
     except LoraInstalling as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     except FileNotFoundError as exc:
         raise HTTPException(status_code=400, detail=friendly_lora_error(str(exc))) from exc
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-    except RuntimeError as exc:
-        _LOG.exception("generate could not run")
-        raise HTTPException(status_code=503, detail=str(exc)) from exc
-    except Exception as exc:
-        _LOG.exception("generate failed")
-        raise HTTPException(status_code=400, detail=str(exc) or "The picture could not be drawn.") from exc
-    return {
-        "images": images,
-        "seeds": seeds,
-        "model": model,
-        "scheduler": body.scheduler,
-        "consistency": consistency,
-        "switched": switched,
-    }
+    return submit_job("generate", body)
 
 
 @app.post("/tag")

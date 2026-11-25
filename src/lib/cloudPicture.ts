@@ -1,4 +1,5 @@
 import { bytesToBase64, base64ToBytes } from '@/src/lib/base64';
+import { followJob, type JobView } from '@/src/lib/cloudJob';
 import { normalizeEndpoint } from '@/src/lib/salad';
 import type { Generation } from '@/src/lib/types';
 import { captureShot } from '@/src/lib/taste';
@@ -16,9 +17,29 @@ export async function cloudPost(endpoint: string, key: string, path: string, bod
     },
     body: JSON.stringify(body),
   });
-  const payload = (await response.json().catch(() => ({}))) as { detail?: string; image?: string; mask?: string; width?: number; height?: number; prompt?: string; mode?: string; page?: string; bubbles?: number };
+  const payload = (await response.json().catch(() => ({}))) as JobView & { detail?: string };
   if (!response.ok) throw new Error(payload.detail || 'The cloud could not finish that picture.');
-  return { image: payload.image, mask: payload.mask, width: payload.width || 0, height: payload.height || 0, prompt: payload.prompt, mode: payload.mode, page: payload.page, bubbles: payload.bubbles };
+  const finished = payload.id && !payload.image && !payload.mask && !payload.images
+    ? await followJob({
+        id: payload.id,
+        read: () => readJob(`${root}/jobs/${payload.id}`, key),
+        result: () => readJob(`${root}/jobs/${payload.id}/result`, key),
+      })
+    : payload;
+  return { image: finished.image, mask: finished.mask, width: finished.width || 0, height: finished.height || 0, prompt: finished.prompt, mode: finished.mode, page: finished.page, bubbles: finished.bubbles };
+}
+
+async function readJob(url: string, key: string): Promise<JobView> {
+  let response: Response;
+  try {
+    response = await fetch(url, { headers: { Authorization: `Bearer ${key}`, 'Salad-Api-Key': key, 'X-Api-Key': key } });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'fetch failed';
+    throw new Error(message);
+  }
+  const payload = (await response.json().catch(() => ({}))) as JobView & { detail?: string };
+  if (!response.ok) throw new Error(payload.detail || payload.error || `HTTP ${response.status}`);
+  return payload;
 }
 
 export function pictureRecord(input: { id: string; uri: string; uris?: string[]; originalUri?: string; prompt: string; negative: string; model: string; width: number; height: number; provider: Generation['provider'] }): Generation {

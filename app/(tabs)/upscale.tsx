@@ -18,7 +18,7 @@ export default function UpscaleScreen() {
   const [bytes, setBytes] = useState<Uint8Array | null>(null);
   const [preview, setPreview] = useState<string | null>(null);
   const [preset, setPreset] = useState<FramePreset>('2k');
-  const [enhance, setEnhance] = useState(false);
+  const [enhance, setEnhance] = useState(true);
   const [detail, setDetail] = useState(0.35);
   const [repair, setRepair] = useState(0.45);
   const [prompt, setPrompt] = useState('');
@@ -52,7 +52,7 @@ export default function UpscaleScreen() {
       if (!result.image) throw new Error('The cloud did not return a picture.');
       if (result.image === imageField(bytes)) throw new Error('The cloud returned the original picture. It was not changed.');
       setResults((current) => [...current, `data:image/png;base64,${result.image}`]);
-      setNote(identity ? 'Repaired with the character reference.' : enhance ? 'Enhanced.' : 'Upscaled without changing the picture.');
+      setNote(identity ? 'Repaired with the character reference.' : enhance ? 'Sharpened with a detail pass.' : 'Upscaled without the detail pass.');
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : 'The upscale failed.');
     } finally {
@@ -88,7 +88,7 @@ export default function UpscaleScreen() {
       <AppBar />
       <ScrollView contentContainerStyle={styles.scroll}>
         <Text style={styles.title}>Upscale</Text>
-        <Text style={styles.body}>2K is a 2048 long edge. 4K is 3840. The cloud chains the anime upscaler, then scales to that size. It does not run on the phone.</Text>
+        <Text style={styles.body}>2K is a 2048 long edge. 4K is 3840. Every upscale restores blur with the anime upscaler, then a light detail pass so lines, eyes, and hair stay crisp. It does not run on the phone.</Text>
         <PictureSource label="Choose a picture" uri={preview} onPick={(next, shown) => { setBytes(next); setPreview(shown); setResults([]); setError(null); }} />
         <View style={styles.row}>
           {(['2k', '4k'] as FramePreset[]).map((item) => (
@@ -99,7 +99,7 @@ export default function UpscaleScreen() {
         </View>
         {target ? <Text style={styles.hint}>{target.width} × {target.height} · {target.passes} upscaler pass{target.passes === 1 ? '' : 'es'}</Text> : null}
         <Pressable testID="enhance-toggle" onPress={() => setEnhance((value) => !value)}>
-          <Text style={styles.link}>{enhance ? 'AI enhance on' : 'AI enhance off'}</Text>
+          <Text style={styles.link}>{enhance ? 'Detail pass on' : 'Detail pass off'}</Text>
         </Pressable>
         {enhance ? <Stepper testID="detail" label={`Detail ${detailDenoise(detail).toFixed(2)}`} value={detail} onChange={setDetail} /> : null}
         <TextInput value={prompt} onChangeText={setPrompt} placeholder="Optional prompt" placeholderTextColor={colors.faint} style={styles.input} />

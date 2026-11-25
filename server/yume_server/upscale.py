@@ -41,7 +41,30 @@ def controlnet_kwargs(repo: str) -> dict[str, Any]:
 def load_controlnet(repo: str, dtype: Any) -> Any:
     from diffusers import ControlNetModel
 
-    return ControlNetModel.from_pretrained(repo, torch_dtype=dtype, **controlnet_kwargs(repo))
+    kwargs = controlnet_kwargs(repo)
+    _LOG.info("loading controlnet %s %s", repo, kwargs)
+    _log_rss(f"before {repo}")
+    model = ControlNetModel.from_pretrained(repo, torch_dtype=dtype, **kwargs)
+    _LOG.info("loaded controlnet %s", repo)
+    _log_rss(f"after {repo}")
+    return model
+
+
+def image_array(image: Any) -> Any:
+    """Copy the pixels. A PIL view is not writable and PyTorch warns on it."""
+    import numpy as np
+
+    return np.array(image, dtype=np.uint8, copy=True)
+
+
+def _log_rss(label: str) -> None:
+    try:
+        import resource
+
+        rss_kb = int(resource.getrusage(resource.RUSAGE_SELF).ru_maxrss)
+        _LOG.info("%s rss_mb=%s", label, rss_kb // 1024)
+    except Exception:
+        _LOG.info("%s", label)
 
 
 def picture_failure(exc: BaseException) -> str:
@@ -230,6 +253,9 @@ def scale_rects(rects: list[tuple[int, int, int, int]], src_w: int, src_h: int, 
 
 def compose_prompt(*, kind: str, prompt: str, hints: str, tags: str, colorize: bool) -> str:
     user = ", ".join(part.strip() for part in (tags, prompt, hints) if part and part.strip())
+    if kind == "upscale":
+        sharp = "sharp focus, crisp lineart, detailed eyes, detailed hair strands, clean texture"
+        return ", ".join(part for part in (sharp, user) if part)
     if kind == "manga" and not colorize:
         mono = "monochrome, greyscale, manga page, clean lineart, screentone, black and white"
         return ", ".join(part for part in (mono, user) if part)
@@ -325,19 +351,19 @@ def schedule_upscale_weights() -> None:
     threading.Thread(target=run, name="yume-upscale-weights", daemon=True).start()
 
 
-def run_upscale(body: Any) -> dict[str, Any]:
-    return _run(body, kind="upscale")
+def run_upscale(body: Any, progress: Any = None) -> dict[str, Any]:
+    return _run(body, kind="upscale", progress=progress)
 
 
-def run_manga(body: Any) -> dict[str, Any]:
+def run_manga(body: Any, progress: Any = None) -> dict[str, Any]:
     if str(getattr(body, "job", "") or "") == "edit":
         from yume_server.manga_edit import run_edit
 
-        return run_edit(body)
-    return _run(body, kind="manga")
+        return run_edit(body, progress=progress)
+    return _run(body, kind="manga", progress=progress)
 
 
-def _run(body: Any, *, kind: str) -> dict[str, Any]:
+def _run(body: Any, *, kind: str, progress: Any = None) -> dict[str, Any]:
     raw = base64.b64decode(getattr(body, "image"), validate=False)
     width, height, pixels = load_rgb(raw)
     preset = str(getattr(body, "preset", "2k") or "2k")
@@ -379,7 +405,7 @@ def _run(body: Any, *, kind: str) -> dict[str, Any]:
     control = []
     if mode == "manga":
         control = ["lineart", "tile"]
-    elif mode == "repair":
+    elif mode in {"repair", "enhance"}:
         control = ["tile"]
     payload = {
         "width": planned["width"],
@@ -406,12 +432,15 @@ def _run(body: Any, *, kind: str) -> dict[str, Any]:
         from yume_server.generate import prepare_loras
 
         prepare_loras(body, None)
-    image = _gpu(raw, references, planned, mode, denoise, used, loras, scale_rects(bubbles, width, height, planned["width"], planned["height"]))
+    image = _gpu(raw, references, planned, mode, denoise, used, loras, scale_rects(bubbles, width, height, planned["width"], planned["height"]), progress=progress)
     payload["image"] = base64.b64encode(image).decode("ascii")
     return payload
 
 
-def _gpu(raw: bytes, references: list[bytes], planned: dict[str, int], mode: str, denoise: float, prompt: str, loras: list[Any], bubbles: list[tuple[int, int, int, int]], pose: Any = None, holes: list[tuple[int, int, int, int]] | None = None) -> bytes:
+def _gpu(raw: bytes, references: list[bytes], planned: dict[str, int], mode: str, denoise: float, prompt: str, loras: list[Any], bubbles: list[tuple[int, int, int, int]], pose: Any = None, holes: list[tuple[int, int, int, int]] | None = None, progress: Any = None) -> bytes:
+    _LOG.info("picture start mode=%s size=%sx%s passes=%s", mode, planned["width"], planned["height"], planned["passes"])
+    if progress:
+        progress("Preparing the picture", 0.05)
     ensure_upscale_weights()
     from PIL import Image
 
@@ -420,11 +449,15 @@ def _gpu(raw: bytes, references: list[bytes], planned: dict[str, int], mode: str
         image = _esrgan_pass(image)
     image = image.resize((planned["width"], planned["height"]), Image.Resampling.LANCZOS)
     if mode == "esrgan":
+        if progress:
+            progress("Upscale finished", 1)
         return _encode(image)
+    if progress:
+        progress("Refining the picture", 0.35)
     faithful = image.copy()
     reference = Image.open(io.BytesIO(references[0])).convert("RGB") if references else None
     pose_image = Image.open(io.BytesIO(pose)).convert("RGB").resize(image.size) if pose else None
-    refined = _refine(image, reference, mode, denoise, prompt, loras, pose_image)
+    refined = _refine(image, reference, mode, denoise, prompt, loras, pose_image, progress=progress)
     if holes:
         refined = _fill_holes(refined, holes)
     if mode in {"manga", "edit"} and bubbles:
@@ -459,7 +492,7 @@ def _esrgan_pass(image: Any) -> Any:
     device = "cuda" if torch.cuda.is_available() else "cpu"
     model.to(device).eval()
     scale = int(getattr(model, "scale", 4) or 4)
-    array = np.asarray(image)
+    array = image_array(image)
     height, width = array.shape[:2]
     out = np.zeros((height * scale, width * scale, 3), dtype=np.float32)
     cover = np.zeros((height * scale, width * scale, 1), dtype=np.float32)
@@ -494,7 +527,7 @@ def _ink(image: Any) -> Any:
     return gray.point(lambda pixel: 0 if pixel < 180 else 255).convert("RGB")
 
 
-def _refine(image: Any, reference: Any, mode: str, denoise: float, prompt: str, loras: list[Any], pose: Any = None) -> Any:
+def _refine(image: Any, reference: Any, mode: str, denoise: float, prompt: str, loras: list[Any], pose: Any = None, progress: Any = None) -> Any:
     from diffusers import StableDiffusionXLControlNetImg2ImgPipeline, StableDiffusionXLImg2ImgPipeline
 
     from yume_server.generate import _apply_loras, _clear_loras, loaded_pipe
@@ -524,8 +557,14 @@ def _refine(image: Any, reference: Any, mode: str, denoise: float, prompt: str, 
     elif mode == "repair":
         controls = [load_controlnet(TILE_REPO, pipe.unet.dtype)]
         scales = [max(0.45, 0.9 - denoise)]
+    elif mode == "enhance":
+        controls = [load_controlnet(TILE_REPO, pipe.unet.dtype)]
+        scales = [0.65]
     adapters: list[str] = []
     if controls:
+        _LOG.info("building controlnet pipeline mode=%s count=%s", mode, len(controls))
+        if progress:
+            progress("Building the ControlNet pipeline", 0.45)
         runner = StableDiffusionXLControlNetImg2ImgPipeline(**pipe.components, controlnet=controls if len(controls) > 1 else controls[0])
     else:
         runner = StableDiffusionXLImg2ImgPipeline(**pipe.components)
@@ -535,7 +574,11 @@ def _refine(image: Any, reference: Any, mode: str, denoise: float, prompt: str, 
     try:
         adapters = _apply_loras(runner, loras)
         canvas = image.copy()
-        for x0, y0, x1, y1 in tile_boxes(image.width, image.height, 768, 64):
+        boxes = tile_boxes(image.width, image.height, 768, 64)
+        for index, (x0, y0, x1, y1) in enumerate(boxes, start=1):
+            _LOG.info("refine tile %s/%s mode=%s", index, len(boxes), mode)
+            if progress:
+                progress(f"Tile {index}/{len(boxes)}", 0.5 + 0.45 * index / max(1, len(boxes)))
             crop = image.crop((x0, y0, x1, y1))
             kwargs: dict[str, Any] = {
                 "prompt": prompt or "anime illustration",
