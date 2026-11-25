@@ -351,8 +351,20 @@ class _ClipSkipEncoder:
         return output
 
 
-def _use_clip_skip(pipe: Any, clip_skip: int) -> None:
+def unwrap_clip_skip(pipe: Any) -> None:
+    """Put the real CLIP modules back so LoRA load and unload can see their attention blocks."""
+    for attr in ("text_encoder", "text_encoder_2"):
+        encoder = getattr(pipe, attr, None)
+        if isinstance(encoder, _ClipSkipEncoder):
+            setattr(pipe, attr, encoder._inner)
+
+
+def _wrap_clip_skip(pipe: Any, clip_skip: int) -> None:
     skip = max(1, min(4, int(clip_skip or 2)))
+    # SDXL already reads hidden_states[-2], which is clip skip 2. Leave the modules alone.
+    if skip == 2:
+        unwrap_clip_skip(pipe)
+        return
     for attr in ("text_encoder", "text_encoder_2"):
         encoder = getattr(pipe, attr, None)
         if isinstance(encoder, _ClipSkipEncoder):
@@ -361,6 +373,22 @@ def _use_clip_skip(pipe: Any, clip_skip: int) -> None:
         if encoder is None:
             continue
         setattr(pipe, attr, _ClipSkipEncoder(encoder, skip))
+
+
+class _clip_skip_applied:
+    """Wrap only while drawing. Load and unload run outside this, on the real encoders."""
+
+    def __init__(self, pipe: Any, clip_skip: int) -> None:
+        self.pipe = pipe
+        self.clip_skip = clip_skip
+
+    def __enter__(self) -> Any:
+        unwrap_clip_skip(self.pipe)
+        _wrap_clip_skip(self.pipe, self.clip_skip)
+        return self.pipe
+
+    def __exit__(self, *exc: object) -> None:
+        unwrap_clip_skip(self.pipe)
 
 
 class LoraInstalling(RuntimeError):
@@ -549,47 +577,51 @@ def generate_images(body: Any, on_progress: Any = None) -> tuple[list[str], list
         requested_prediction not in {"epsilon", "eps"} and bool(getattr(_PIPE, "_yume_vpred", False))
     )
     _apply_scheduler(_PIPE, A1111_SAMPLERS.get(body.scheduler, body.scheduler), v_prediction)
-    _use_clip_skip(_PIPE, int(getattr(body, "clip_skip", 2) or 2))
+    # LoRA must see the real CLIP modules. Clip skip is applied only for the draw.
+    unwrap_clip_skip(_PIPE)
     adapters = _apply_loras(_PIPE, body.loras)
     images: list[str] = []
     strength = float(getattr(body, "strength", 0.45) or 0.45)
     try:
-        for seed in seeds:
-            import torch
-
-            generator = torch.Generator(device="cuda").manual_seed(seed)
-            import inspect
-
-            common = {
-                "prompt": body.prompt,
-                "negative_prompt": body.negative_prompt or None,
-                "num_inference_steps": body.steps,
-                "guidance_scale": body.cfg,
-                "generator": generator,
-            }
-            if "clip_skip" in inspect.signature(_PIPE.__call__).parameters:
-                common["clip_skip"] = getattr(body, "clip_skip", 2)
-            if consistency == "ip-adapter":
-                if not getattr(_PIPE, "_yume_ip", False):
-                    _PIPE.load_ip_adapter("h94/IP-Adapter", subfolder="sdxl_models", weight_name="ip-adapter_sdxl.bin")
-                    _PIPE.set_ip_adapter_scale(0.6)
-                    _PIPE._yume_ip = True
-                result = _PIPE(**common, width=body.width, height=body.height, ip_adapter_image=_open_reference(body))
-            elif consistency == "img2img":
-                from diffusers import StableDiffusionXLImg2ImgPipeline
-
-                img2img = StableDiffusionXLImg2ImgPipeline(**_PIPE.components)
-                result = img2img(**common, image=_open_reference(body), strength=max(0.05, min(0.95, strength)))
-            else:
-                result = _draw_with_hires(_PIPE, common, body)
-            from io import BytesIO
-
-            buffer = BytesIO()
-            result.images[0].save(buffer, format="PNG")
-            images.append(base64.b64encode(buffer.getvalue()).decode("ascii"))
+        with _clip_skip_applied(_PIPE, int(getattr(body, "clip_skip", 2) or 2)):
+            images = _draw_seeds(_PIPE, body, seeds, consistency, strength)
     finally:
+        unwrap_clip_skip(_PIPE)
         _clear_loras(_PIPE, adapters)
     return images, seeds, chosen, consistency, switched
+
+
+def _draw_seeds(pipe: Any, body: Any, seeds: list[int], consistency: str, strength: float) -> list[str]:
+    import torch
+    from io import BytesIO
+
+    images: list[str] = []
+    for seed in seeds:
+        generator = torch.Generator(device="cuda").manual_seed(seed)
+        common = {
+            "prompt": body.prompt,
+            "negative_prompt": body.negative_prompt or None,
+            "num_inference_steps": body.steps,
+            "guidance_scale": body.cfg,
+            "generator": generator,
+        }
+        if consistency == "ip-adapter":
+            if not getattr(pipe, "_yume_ip", False):
+                pipe.load_ip_adapter("h94/IP-Adapter", subfolder="sdxl_models", weight_name="ip-adapter_sdxl.bin")
+                pipe.set_ip_adapter_scale(0.6)
+                pipe._yume_ip = True
+            result = pipe(**common, width=body.width, height=body.height, ip_adapter_image=_open_reference(body))
+        elif consistency == "img2img":
+            from diffusers import StableDiffusionXLImg2ImgPipeline
+
+            img2img = StableDiffusionXLImg2ImgPipeline(**pipe.components)
+            result = img2img(**common, image=_open_reference(body), strength=max(0.05, min(0.95, strength)))
+        else:
+            result = _draw_with_hires(pipe, common, body)
+        buffer = BytesIO()
+        result.images[0].save(buffer, format="PNG")
+        images.append(base64.b64encode(buffer.getvalue()).decode("ascii"))
+    return images
 
 
 def _draw_with_hires(pipe: Any, common: dict[str, Any], body: Any) -> Any:
