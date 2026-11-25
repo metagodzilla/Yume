@@ -128,10 +128,7 @@ async def lifespan(app: FastAPI):
         try:
             await asyncio.to_thread(ensure_default)
             await asyncio.to_thread(ensure_jobs_loaded)
-            if mock_mode():
-                mark_default_loaded()
-            else:
-                await asyncio.to_thread(start_model)
+            await asyncio.to_thread(start_model)
             state["ready"] = True
         except Exception as exc:  # noqa: BLE001 - surface the load error on /ready
             state["error"] = str(exc)
@@ -267,7 +264,7 @@ def diagnostics(request: Request) -> dict[str, Any]:
     return {
         "checks": [
             {"name": "GPU", "status": "warn" if body["source"] == "mock" else "pass", "detail": body["gpu"]},
-            {"name": "Default model", "status": "pass" if default and default.get("name") == "Animagine XL 4.0" else "fail", "detail": (default or {}).get("name") or "missing"},
+            {"name": "Default model", "status": "pass" if default and "Animagine" in str(default.get("name") or "") else "fail", "detail": (default or {}).get("name") or "missing"},
             {"name": "Disk", "status": "pass" if disk_free > 2048 else "warn", "detail": f"{disk_free} MB free"},
             {"name": "Installed", "status": "pass", "detail": f"{len(models)} in the cache"},
         ],

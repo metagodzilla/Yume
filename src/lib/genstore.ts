@@ -1,6 +1,7 @@
 import { useSyncExternalStore } from 'react';
 
 import type { ContentFilter } from '@/src/lib/civitai';
+import { ANIME_STUDIO_CHECKPOINT, STUDIO_APPLIED, type StudioStyleId } from '@/src/lib/animeStudio';
 import { settingsForCheckpoint, type RecommendedSettings } from '@/src/lib/checkpoints';
 import { DEFAULT_CHECKPOINT } from '@/src/lib/defaultModel';
 
@@ -49,6 +50,8 @@ export type GeneratorState = {
   nsfw: boolean;
   installed: InstalledResource[];
   vPrediction: boolean;
+  studioStyle: StudioStyleId;
+  studioApplied?: string;
 };
 
 export const defaultResource = (): InstalledResource => ({
@@ -65,23 +68,37 @@ export const defaultResource = (): InstalledResource => ({
   isDefault: true,
 });
 
+export const studioResource = (): InstalledResource => ({
+  versionId: ANIME_STUDIO_CHECKPOINT.versionId,
+  modelId: ANIME_STUDIO_CHECKPOINT.modelId,
+  name: ANIME_STUDIO_CHECKPOINT.name,
+  version: ANIME_STUDIO_CHECKPOINT.version,
+  type: ANIME_STUDIO_CHECKPOINT.type,
+  baseModel: ANIME_STUDIO_CHECKPOINT.baseModel,
+  filename: ANIME_STUDIO_CHECKPOINT.filename,
+  hash: ANIME_STUDIO_CHECKPOINT.hash,
+  sha256: ANIME_STUDIO_CHECKPOINT.sha256,
+  triggers: [],
+  isDefault: true,
+});
+
 export const initialGenerator = (): GeneratorState => ({
   prompt: '',
-  quality: DEFAULT_CHECKPOINT.quality,
+  quality: ANIME_STUDIO_CHECKPOINT.quality,
   extraPrompt: '',
-  negative: DEFAULT_CHECKPOINT.negative,
-  sampler: DEFAULT_CHECKPOINT.sampler,
-  steps: DEFAULT_CHECKPOINT.steps,
-  cfg: DEFAULT_CHECKPOINT.cfg,
+  negative: ANIME_STUDIO_CHECKPOINT.negative,
+  sampler: ANIME_STUDIO_CHECKPOINT.sampler,
+  steps: ANIME_STUDIO_CHECKPOINT.steps,
+  cfg: ANIME_STUDIO_CHECKPOINT.cfg,
   seed: '1',
   seedRandom: true,
-  width: DEFAULT_CHECKPOINT.width,
-  height: DEFAULT_CHECKPOINT.height,
-  clipSkip: DEFAULT_CHECKPOINT.clipSkip,
+  width: ANIME_STUDIO_CHECKPOINT.width,
+  height: ANIME_STUDIO_CHECKPOINT.height,
+  clipSkip: ANIME_STUDIO_CHECKPOINT.clipSkip,
   count: 1,
   qualityTags: true,
   triggers: true,
-  checkpointId: DEFAULT_CHECKPOINT.versionId,
+  checkpointId: ANIME_STUDIO_CHECKPOINT.versionId,
   loras: [],
   embeddings: '',
   vae: '',
@@ -94,8 +111,10 @@ export const initialGenerator = (): GeneratorState => ({
   denoise: 0.55,
   nsfw: false,
   contentFilter: 'sfw',
-  installed: [defaultResource()],
+  installed: [{ ...defaultResource(), isDefault: false }, studioResource()],
   vPrediction: false,
+  studioStyle: 'anime',
+  studioApplied: STUDIO_APPLIED,
 });
 
 let state = initialGenerator();
@@ -286,7 +305,29 @@ export async function hydrateFromDisk() {
         : parsed.nsfw
           ? 'all'
           : 'sfw';
-    state = { ...initialGenerator(), ...parsed, installed, contentFilter, nsfw: contentFilter !== 'sfw' };
+    const fresh = initialGenerator();
+    state = { ...fresh, ...parsed, installed, contentFilter, nsfw: contentFilter !== 'sfw' };
+    if (parsed.studioApplied !== STUDIO_APPLIED) {
+      if (!state.installed.some((item) => item.versionId === ANIME_STUDIO_CHECKPOINT.versionId)) {
+        state.installed = [studioResource(), ...state.installed.map((item) => ({ ...item, isDefault: false }))];
+      }
+      state = {
+        ...state,
+        studioStyle: 'anime',
+        studioApplied: STUDIO_APPLIED,
+        quality: fresh.quality,
+        negative: fresh.negative,
+        sampler: fresh.sampler,
+        steps: fresh.steps,
+        cfg: fresh.cfg,
+        width: fresh.width,
+        height: fresh.height,
+        clipSkip: fresh.clipSkip,
+        hires: false,
+        qualityTags: true,
+        checkpointId: ANIME_STUDIO_CHECKPOINT.versionId,
+      };
+    }
     emit();
   } catch {
     state = initialGenerator();

@@ -262,6 +262,7 @@ def test_hires_vae_and_loaded_name() -> None:
 
     assert clip_skip_index(1) == -1 and clip_skip_index(2) == -2
     assert needs_fixed_vae("Illustrious") and needs_fixed_vae("Pony") and not needs_fixed_vae("SD 1.5")
+    assert needs_fixed_vae("SDXL 1.0", "animagine-xl-4.0-opt.safetensors") is False
 
     class Body:
         hires_scale = 1.5
@@ -305,7 +306,7 @@ def test_startup_answers_before_ready(client: TestClient) -> None:
 def test_health_and_ready(client: TestClient) -> None:
     health = client.get("/health").json()
     assert health["status"] == "ok"
-    assert health["model"] == "Animagine XL 4.0"
+    assert "Animagine" in health["model"]
     assert "gpu" in health
     assert client.get("/ready").status_code == 200
 
@@ -419,10 +420,11 @@ def test_default_checkpoint_is_installed_and_metadata_is_written(client: TestCli
     listed = client.get("/models", headers=headers)
     assert listed.status_code == 200, listed.text
     models = listed.json()["models"]
-    default = next(item for item in models if item["versionId"] == 1337429)
-    assert default["name"] == "Animagine XL 4.0"
-    assert default["isDefault"] is True
-    assert default["hash"] == "1d5b43ff75"
+    classic = next(item for item in models if item["versionId"] == 1337429)
+    assert classic["name"] == "Animagine XL 4.0"
+    assert classic["hash"] == "1d5b43ff75"
+    opt = next((item for item in models if item["versionId"] == 1408658), None)
+    assert opt and opt["name"] == "Animagine XL 4.0 Opt"
     installed = client.post("/models/install", headers=headers, json={"versionId": 42})
     assert installed.status_code == 200, installed.text
     job = installed.json()
@@ -470,7 +472,7 @@ def test_stats_diagnostics_and_jobs(client: TestClient) -> None:
     stats = client.get("/stats", headers=headers)
     assert stats.status_code == 200, stats.text
     body = stats.json()
-    assert body["model"] == "Animagine XL 4.0"
+    assert "Animagine" in body["model"]
     assert "gpu" in body and "diskFreeMb" in body
     assert body["powerWatts"] is None
     diag = client.get("/diagnostics", headers=headers)
@@ -579,6 +581,19 @@ def test_errors_hide_secrets_and_keep_a_client_report(client: TestClient, tmp_pa
     assert "salad_cloud_user_secret" not in blob
     assert any(item.get("source") == "client" for item in listed.json()["errors"])
     assert client.get("/errors").status_code == 401
+
+
+def test_anime_studio_opt_boots_without_the_fixed_vae(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("YUME_MODEL_DIR", str(tmp_path))
+    monkeypatch.setenv("YUME_MOCK", "1")
+    from yume_server.catalog import ensure_opt_default
+    from yume_server.generate import loaded_model_name, needs_fixed_vae, start_model
+
+    record = ensure_opt_default()
+    assert record["versionId"] == 1408658 and record["isDefault"] is True
+    start_model()
+    assert loaded_model_name() == "Animagine XL 4.0 Opt"
+    assert needs_fixed_vae("SDXL 1.0", "animagine-xl-4.0-opt.safetensors") is False
 
 
 def test_default_name_uses_the_loaded_pipeline(tmp_path, monkeypatch) -> None:

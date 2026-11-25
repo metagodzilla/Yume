@@ -32,7 +32,7 @@ jobs:
           push: true
           tags: |
             ghcr.io/metagodzilla/yume-server:latest
-            ghcr.io/metagodzilla/yume-server:1.5.1
+            ghcr.io/metagodzilla/yume-server:1.5.2
       - name: Record the image digest
         run: echo "digest=${{ steps.build.outputs.digest }}"
       - name: Make the GHCR package public
