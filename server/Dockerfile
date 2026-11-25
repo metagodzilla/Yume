@@ -14,8 +14,8 @@ WORKDIR /opt/wheels
 COPY requirements.txt requirements-gpu.txt ./
 RUN pip install --prefix=/opt/py --no-cache-dir \
         --index-url https://download.pytorch.org/whl/cu124 \
-        torch==2.5.1 \
-    && pip install --prefix=/opt/py --no-cache-dir -r requirements.txt -r requirements-gpu.txt \
+        --extra-index-url https://pypi.org/simple \
+        -r requirements.txt -r requirements-gpu.txt \
     && python -c "import pathlib,shutil; root=pathlib.Path('/opt/py'); \
 [shutil.rmtree(p, ignore_errors=True) for p in list(root.rglob('__pycache__'))]; \
 [shutil.rmtree(p, ignore_errors=True) for p in list(root.rglob('tests')) if p.is_dir()]" \
