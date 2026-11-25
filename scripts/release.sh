@@ -6,14 +6,14 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 bash scripts/build-apk.sh
-APK="dist/yume-1.5.13.apk"
+APK="dist/yume-1.5.14.apk"
 SHA="$(sha256sum "$APK" | awk '{print $1}')"
 URL="${YUME_APK_URL:-}"
 mkdir -p releases
 cat > releases/latest.json <<EOF
 {
-  "version": "1.5.13",
-  "versionCode": 28,
+  "version": "1.5.14",
+  "versionCode": 29,
   "apkUrl": "${URL}",
   "sha256": "${SHA}",
   "notes": "Salad setup wizard, one Connect screen, and auto-stop for an idle GPU."

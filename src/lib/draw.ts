@@ -5,6 +5,7 @@ import { DEFAULT_CHECKPOINT } from '@/src/lib/defaultModel';
 import type { GeneratorState } from '@/src/lib/genstore';
 import { embedParameters } from '@/src/lib/pngmeta';
 import { renderDemoFrames } from '@/src/lib/render';
+import { followJob, jobIdFromPictureResponse } from '@/src/lib/cloudJob';
 import { classifyGatewayInput, generateUrl, saladErrorMessage } from '@/src/lib/salad';
 import { expandSeeds } from '@/src/lib/seeds';
 import { normalizeSaladKey } from '@/src/lib/saladCloud';
@@ -392,8 +393,29 @@ export async function drawFrames(input: {
   }
   const raw = await response.text();
   if (!response.ok) throw new Error(saladErrorMessage({ aborted: false, status: response.status, body: raw, url: target }));
-  const body = JSON.parse(raw) as { images?: string[]; seeds?: number[] };
+  let body = JSON.parse(raw) as { id?: string; status?: string; images?: string[]; seeds?: number[] };
+  const jobId = jobIdFromPictureResponse(body);
+  if (jobId) {
+    const done = await followJob({
+      id: jobId,
+      read: () => readGenerateJob(`${endpoint}/jobs/${jobId}`, apiKey),
+      result: () => readGenerateJob(`${endpoint}/jobs/${jobId}/result`, apiKey),
+    });
+    body = done;
+  }
   if (!body.images?.length) throw new Error('Salad returned no images.');
   const returned = Array.isArray(body.seeds) ? body.seeds.filter((seed) => typeof seed === 'number' && seed >= 0) : [];
   return { pngs: body.images.map((item) => base64ToBytes(item)), parameters, seeds: returned.length ? returned : seeds };
+}
+
+async function readGenerateJob(url: string, apiKey: string): Promise<{ id?: string; status?: string; images?: string[]; seeds?: number[]; error?: string; detail?: string }> {
+  let response: Response;
+  try {
+    response = await fetch(url, { headers: { Authorization: `Bearer ${apiKey}`, 'X-Api-Key': apiKey, 'Salad-Api-Key': apiKey } });
+  } catch (error) {
+    throw new Error(error instanceof Error ? error.message : 'fetch failed');
+  }
+  const payload = (await response.json().catch(() => ({}))) as { id?: string; status?: string; images?: string[]; seeds?: number[]; error?: string; detail?: string };
+  if (!response.ok) throw new Error(payload.detail || payload.error || `HTTP ${response.status}`);
+  return payload;
 }

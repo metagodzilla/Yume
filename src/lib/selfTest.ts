@@ -3,6 +3,7 @@ import { PermissionsAndroid, Platform } from 'react-native';
 import { containerGroupUrl, liveContainerGroup } from '@/src/lib/cloudActions';
 import { CLOUD_STOP_CHECK } from '@/src/lib/cloudRun';
 import { civitaiModelUrl, filterModels, getCivitaiModel, modelPasses, pickPreview, searchCivitai, thumbnailUrl } from '@/src/lib/civitai';
+import { followJob, jobIdFromPictureResponse, type JobView } from '@/src/lib/cloudJob';
 import { classifyGatewayInput, friendlyGatewayMessage, normalizeEndpoint } from '@/src/lib/salad';
 import { normalizeSaladKey, pullPercent } from '@/src/lib/saladCloud';
 import { readPhone } from '@/src/lib/device';
@@ -95,8 +96,34 @@ export async function runCloudCheck(input: { endpoint: string; apiKey: string })
       90_000,
       secrets,
     );
-    const image = firstImage(generated.json);
-    if (generated.ok && image) {
+    let picture: unknown = generated.json;
+    let reported = false;
+    const jobId = generated.ok ? jobIdFromPictureResponse(generated.json) : null;
+    if (jobId) {
+      try {
+        picture = await followJob({
+          id: jobId,
+          read: async () => {
+            const status = await callJson(`${endpoint}/jobs/${jobId}`, { headers }, 20_000, secrets);
+            if (!status.ok) throw new Error(status.message || 'No job with that id.');
+            return status.json as JobView;
+          },
+          result: async () => {
+            const result = await callJson(`${endpoint}/jobs/${jobId}/result`, { headers }, 20_000, secrets);
+            if (!result.ok) throw new Error(result.message || 'The result is not ready.');
+            return result.json as JobView;
+          },
+        });
+      } catch (error) {
+        rows.push(row('Cloud', 'Generate', 'fail', generated.ms, error instanceof Error ? error.message : 'The test picture failed.', { http: generated.status, settings: settingsLine(), url: `${endpoint}/generate` }));
+        picture = null;
+        reported = true;
+      }
+    }
+    const image = firstImage(picture);
+    if (reported) {
+      // The job poll already recorded the failure.
+    } else if (generated.ok && image) {
       rows.push(
         row('Cloud', 'Generate', 'pass', generated.ms, `Test image returned in ${(generated.ms / 1000).toFixed(1)}s.`, {
           http: generated.status,

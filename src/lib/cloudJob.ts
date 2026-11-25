@@ -33,6 +33,24 @@ export function jobFinished(view: JobView): boolean {
   return view.status === 'done' || view.status === 'failed' || view.ready === true;
 }
 
+/** A queued job id is not an empty picture. Sync responses that already contain images stay as they are. */
+export function jobIdFromPictureResponse(payload: unknown): string | null {
+  if (!payload || typeof payload !== 'object') return null;
+  const body = payload as { id?: unknown; status?: unknown; images?: unknown; image?: unknown };
+  const images = Array.isArray(body.images) ? body.images.filter((item) => typeof item === 'string' && item.length > 0) : [];
+  if (images.length > 0) return null;
+  if (typeof body.image === 'string' && body.image.length > 0) return null;
+  if (typeof body.id !== 'string' || !body.id.trim()) return null;
+  if (body.status == null) return null;
+  return body.id.trim();
+}
+
+export function emptyImagesMessage(payload: unknown): string | null {
+  if (jobIdFromPictureResponse(payload)) return null;
+  const images = payload && typeof payload === 'object' && Array.isArray((payload as { images?: unknown }).images) ? (payload as { images: unknown[] }).images : [];
+  return images.some((item) => typeof item === 'string' && item.length > 0) ? null : 'Salad returned no images.';
+}
+
 export async function sleep(ms: number): Promise<void> {
   await new Promise((resolve) => setTimeout(resolve, ms));
 }

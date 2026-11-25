@@ -60,7 +60,7 @@ import { fileLine, filesForPhase, formatReadyIn, overallEtaSeconds, softwareDeta
 import { getCloudSnapshot, setCloudGate } from '@/src/lib/cloudGate';
 import { compareDirection } from '@/src/lib/compare';
 import { cloudPollMs, shouldRestoreBoot } from '@/src/lib/cloudPoll';
-import { isTransientNetwork, retryDelayMs } from '@/src/lib/cloudJob';
+import { emptyImagesMessage, isTransientNetwork, jobIdFromPictureResponse, retryDelayMs } from '@/src/lib/cloudJob';
 import { cloudIsWaiting, phoneDropNote, shouldUsePhone } from '@/src/lib/phoneFallback';
 import { areaCounts } from '@/src/lib/checkRows';
 import { classifyHeat, estimatePowerWatts, shouldKeepScreenAwake, throttleFor, throttleSteps } from '@/src/lib/phonePower';
@@ -694,6 +694,10 @@ assert(cloudIsWaiting('slow') && phoneDropNote({ loras: 1, reference: true }).in
 assert(compareDirection(390) === 'column' && compareDirection(800) === 'row', 'a narrow screen stacks the original above the results');
 assert(cloudPollMs(true) === 60_000 && cloudPollMs(false) === 5_000 && !shouldRestoreBoot('boot-1', 'boot-1') && shouldRestoreBoot('boot-2', 'boot-1'), 'a ready cloud restores once per boot and polls slowly');
 assert(isTransientNetwork('fetch failed: java.net.UnknownHostException: Unable to resolve host persimmon.salad.cloud') && retryDelayMs(0) === 1000 && retryDelayMs(8) === 15_000, 'a phone DNS blip retries the poll');
+const queuedPicture = { id: 'jobabc', status: 'queued', progress: 0, images: [] as string[] };
+assert(jobIdFromPictureResponse(queuedPicture) === 'jobabc' && emptyImagesMessage(queuedPicture) === null, 'a job id is not an empty picture');
+assert(jobIdFromPictureResponse({ images: ['abc'], id: 'old', status: 'done' }) === null && emptyImagesMessage({ images: ['abc'] }) === null, 'a finished image response is used as-is');
+assert(emptyImagesMessage({ images: [] }) === 'Salad returned no images.', 'only a body with no job and no images is empty');
 const moving = cloudChecklist({ hasEndpoint: true, healthStatus: 503, readyStatus: 503, readyDetail: 'Cloud has no internet - moving to a new machine', startupMessage: 'Cloud has no internet - moving to a new machine' });
 assert(moving.liveTitle === 'Cloud has no internet - moving to a new machine' && moving.pill === 'Moving', 'dead network tells the phone the machine is moving');
 const locked = cloudChecklist({ hasEndpoint: true, healthStatus: 403, readyStatus: 403 });

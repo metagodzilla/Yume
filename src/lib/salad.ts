@@ -1,5 +1,5 @@
 import { base64ToBytes, bytesToBase64 } from '@/src/lib/base64';
-import { followJob, type JobView } from '@/src/lib/cloudJob';
+import { followJob, jobIdFromPictureResponse, type JobView } from '@/src/lib/cloudJob';
 import { summarizeHttpBody } from '@/src/lib/reportText';
 import { normalizeSaladKey } from '@/src/lib/saladCloud';
 import type { LoraSpec, SamplerId } from '@/src/lib/types';
@@ -270,11 +270,12 @@ export async function generateSalad(
     throw new Error('Salad answered, but not with image data. Check that the endpoint is the Yume container.');
   }
   const queued = parsed as SaladResponse & JobView;
-  if (queued.id && (!Array.isArray(parsed.images) || parsed.images.length === 0)) {
+  const jobId = jobIdFromPictureResponse(queued);
+  if (jobId) {
     const done = await followJob({
-      id: queued.id,
-      read: () => readSaladJob(`${endpoint}/jobs/${queued.id}`, apiKey, fetchImpl),
-      result: () => readSaladJob(`${endpoint}/jobs/${queued.id}/result`, apiKey, fetchImpl),
+      id: jobId,
+      read: () => readSaladJob(`${endpoint}/jobs/${jobId}`, apiKey, fetchImpl),
+      result: () => readSaladJob(`${endpoint}/jobs/${jobId}/result`, apiKey, fetchImpl),
     });
     parsed = done;
   }

@@ -1,5 +1,5 @@
 import { bytesToBase64, base64ToBytes } from '@/src/lib/base64';
-import { followJob, type JobView } from '@/src/lib/cloudJob';
+import { followJob, jobIdFromPictureResponse, type JobView } from '@/src/lib/cloudJob';
 import { normalizeEndpoint } from '@/src/lib/salad';
 import type { Generation } from '@/src/lib/types';
 import { captureShot } from '@/src/lib/taste';
@@ -19,11 +19,12 @@ export async function cloudPost(endpoint: string, key: string, path: string, bod
   });
   const payload = (await response.json().catch(() => ({}))) as JobView & { detail?: string };
   if (!response.ok) throw new Error(payload.detail || 'The cloud could not finish that picture.');
-  const finished = payload.id && !payload.image && !payload.mask && !payload.images
+  const jobId = jobIdFromPictureResponse(payload);
+  const finished = jobId
     ? await followJob({
-        id: payload.id,
-        read: () => readJob(`${root}/jobs/${payload.id}`, key),
-        result: () => readJob(`${root}/jobs/${payload.id}/result`, key),
+        id: jobId,
+        read: () => readJob(`${root}/jobs/${jobId}`, key),
+        result: () => readJob(`${root}/jobs/${jobId}/result`, key),
       })
     : payload;
   return { image: finished.image, mask: finished.mask, width: finished.width || 0, height: finished.height || 0, prompt: finished.prompt, mode: finished.mode, page: finished.page, bubbles: finished.bubbles };
