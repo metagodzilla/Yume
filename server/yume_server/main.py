@@ -158,7 +158,9 @@ async def lifespan(app: FastAPI):
         return
 
     from yume_server.peft_setup import ensure_peft
+    from yume_server.selfheal import start_watch
 
+    start_watch()
     threading.Thread(target=ensure_peft, name="peft-setup", daemon=True).start()
     task = asyncio.create_task(prepare())
     yield
@@ -274,9 +276,11 @@ def admin_update(body: UpdateIn, request: Request) -> dict[str, Any]:
 
 @app.get("/health")
 def health() -> dict[str, Any]:
+    from yume_server.selfheal import SELF_HEAL_MESSAGE, health_failed
+
     stats = collect_stats()
     progress = startup_snapshot()
-    return {
+    body = {
         "status": "ok",
         "gpu": stats["gpu"],
         "vramUsedMb": stats["vramUsedMb"],
@@ -285,6 +289,10 @@ def health() -> dict[str, Any]:
         "ready": state["ready"] and not state["error"],
         "startup": progress,
     }
+    if health_failed():
+        body["status"] = "moving"
+        raise HTTPException(status_code=503, detail=progress.get("message") or SELF_HEAL_MESSAGE)
+    return body
 
 
 @app.get("/startup")
@@ -295,8 +303,15 @@ def startup() -> dict[str, Any]:
 
 @app.get("/ready")
 def ready() -> dict[str, str]:
+    from yume_server.selfheal import SELF_HEAL_MESSAGE
+
+    progress = startup_snapshot()
     if os.environ.get("YUME_READY", "1") == "0":
         raise HTTPException(status_code=503, detail="Model is still downloading.")
+    if progress.get("stage") == "relocating":
+        raise HTTPException(status_code=503, detail=str(progress.get("message") or SELF_HEAL_MESSAGE))
+    if progress.get("stage") == "error" and progress.get("message"):
+        raise HTTPException(status_code=503, detail=str(progress["message"]))
     if state["error"]:
         raise HTTPException(status_code=503, detail=state["error"])
     if not state["ready"]:

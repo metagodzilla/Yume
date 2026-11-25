@@ -228,6 +228,7 @@ def ensure_anime_upscaler() -> str | None:
 
 
 def start_model() -> None:
+    from yume_server.selfheal import retry_startup
     from yume_server.startup import mark
 
     record = boot_checkpoint()
@@ -236,7 +237,8 @@ def start_model() -> None:
         note_loaded(version)
         mark("ready", "Ready", done=1, total=1)
         return
-    try:
+
+    def _once() -> None:
         mark("downloading", "Downloading the fixed VAE")
         ensure_fixed_vae()
         ensure_anime_upscaler()
@@ -261,10 +263,8 @@ def start_model() -> None:
             _load_single_file(record)
         note_loaded(version)
         mark("ready", "Ready", done=1, total=1)
-    except Exception as exc:
-        mark("error", str(exc))
-        _LOG.exception("model startup failed")
-        raise
+
+    retry_startup(_once)
 
 
 def looks_v_prediction(record: dict[str, Any] | None, path: str = "") -> bool:

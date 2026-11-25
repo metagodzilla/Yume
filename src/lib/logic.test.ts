@@ -593,6 +593,8 @@ const downloading = cloudChecklist({
 });
 assert(downloading.phase === 'starting' && downloading.steps[4]?.state === 'current' && downloading.steps[3]?.state === 'done', 'model download step');
 assert(downloading.liveTitle.toLowerCase().includes('downloading model'), 'model download title');
+const moving = cloudChecklist({ hasEndpoint: true, healthStatus: 503, readyStatus: 503, readyDetail: 'Cloud has no internet - moving to a new machine', startupMessage: 'Cloud has no internet - moving to a new machine' });
+assert(moving.liveTitle === 'Cloud has no internet - moving to a new machine' && moving.pill === 'Moving', 'dead network tells the phone the machine is moving');
 const locked = cloudChecklist({ hasEndpoint: true, healthStatus: 403, readyStatus: 403 });
 assert(locked.authBlocked && locked.steps[0]?.state === 'done' && locked.steps[1]?.state === 'current', 'gateway 403 needs the key');
 const readyCloud = cloudChecklist({ hasEndpoint: true, readyStatus: 200, healthStatus: 200 });

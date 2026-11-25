@@ -33,10 +33,28 @@ def snapshot() -> dict[str, Any]:
         done = int(_STATE["bytesDone"] or 0)
         total = int(_STATE["bytesTotal"] or 0)
         percent = int(done * 100 / total) if total > 0 else None
-        return {
+        body = {
             "stage": _STATE["stage"],
             "bytesDone": done,
             "bytesTotal": total,
             "percent": percent,
             "message": _STATE["message"],
         }
+    try:
+        from yume_server.selfheal import public_status
+
+        heal = public_status()
+    except Exception:
+        heal = {}
+    if heal.get("error"):
+        body["error"] = heal["error"]
+    if heal.get("network"):
+        body["network"] = heal["network"]
+    if heal.get("selfHeal"):
+        body["selfHeal"] = heal["selfHeal"]
+    if heal.get("healthFail"):
+        body["stage"] = "relocating"
+        body["message"] = heal.get("message") or body["message"]
+        body["network"] = "unreachable"
+        body["selfHeal"] = "reallocate"
+    return body

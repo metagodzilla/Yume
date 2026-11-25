@@ -161,6 +161,16 @@ def download_resumable(
         request = urllib.request.Request(url, headers=request_headers)
         try:
             response = _urlopen(request, timeout=120)
+        except urllib.error.URLError as exc:
+            from yume_server.selfheal import record_network_error
+
+            record_network_error(exc)
+            attempt += 1
+            if attempt > attempts:
+                raise
+            _sleep(retry_delay(attempt))
+            done = os.path.getsize(partial) if os.path.exists(partial) else 0
+            continue
         except urllib.error.HTTPError as exc:
             if exc.code in {401, 403}:
                 raise RuntimeError(

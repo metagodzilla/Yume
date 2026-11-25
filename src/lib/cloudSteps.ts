@@ -87,6 +87,7 @@ export function cloudChecklist(input: {
   readyStatus?: number;
   healthReady?: boolean;
   readyDetail?: string;
+  startupMessage?: string;
   probeError?: string;
   pullPercent?: number | null;
   modelDone?: number | null;
@@ -114,6 +115,11 @@ export function cloudChecklist(input: {
   if (ready) {
     const steps = paint(CHECKLIST.length - 1, input);
     return { phase: 'running', pill: 'Running', liveTitle: 'Ready', steps, authBlocked: false, overall: 100 };
+  }
+  const offline = /no internet|moving to a new machine/i.test(`${input.readyDetail || ''} ${input.startupMessage || ''}`);
+  if (offline) {
+    const steps = paint(4, input);
+    return { phase: 'starting', pill: 'Moving', liveTitle: 'Cloud has no internet - moving to a new machine', steps, authBlocked: false, overall: overallPercent(steps) };
   }
   if (!input.hasEndpoint && !input.groupStatus) {
     const steps = paint(-1, input);

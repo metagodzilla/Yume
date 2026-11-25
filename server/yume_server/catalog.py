@@ -435,6 +435,9 @@ def _run_install(job_id: str, version_id: int, token: str | None, hint: dict[str
         _LOG.warning("install refused for %s: %s", version_id, exc)
         _set_install(job_id, state="error", error=str(exc))
     except Exception as exc:
+        from yume_server.selfheal import record_network_error
+
+        record_network_error(exc)
         _LOG.exception("install failed for version %s", version_id)
         _set_install(job_id, state="error", error=str(exc) or "The download failed.")
 
