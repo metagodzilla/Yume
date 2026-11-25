@@ -1,6 +1,6 @@
 import * as Clipboard from 'expo-clipboard';
-import { router } from 'expo-router';
-import { useEffect, useRef, useState } from 'react';
+import { router, useFocusEffect } from 'expo-router';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { Image } from 'expo-image';
 import { Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
@@ -35,15 +35,23 @@ import { persistPng, readApiKey, readCivitaiToken, readPng, readSaladKey } from 
 import { pickLocalImages } from '@/src/lib/fromImage';
 import { bytesToBase64 } from '@/src/lib/base64';
 import { bodySizeFromHeight, type BodySize } from '@/src/lib/referencePicture';
+import { useCloudGate } from '@/src/lib/cloudGate';
+import { cloudIsWaiting, phoneDropNote, shouldUsePhone } from '@/src/lib/phoneFallback';
+import { consumeCloudRedo, consumePhoneGenerate } from '@/src/lib/cloudRedo';
 import { captureShot, suggestedSettings } from '@/src/lib/taste';
 import { useTasteProfile } from '@/src/lib/tasteStore';
 import { uid } from '@/src/lib/id';
+import { addJob, applyThermal, finishJob, reportJob } from '@/src/lib/queuestore';
+import { readPhone } from '@/src/lib/device';
+import { classifyHeat, throttleSteps } from '@/src/lib/phonePower';
+import { getThrottle } from '@/src/lib/thermalState';
 import { useStudio } from '@/src/studio';
 import { colors, font } from '@/src/theme';
 import type { Generation } from '@/src/lib/types';
 
 export default function GenerateScreen() {
   const studio = useStudio();
+  const cloud = useCloudGate();
   const gen = useGenerator();
   const [loraSheet, setLoraSheet] = useState(false);
   const [status, setStatus] = useState<string | null>(null);
@@ -234,8 +242,14 @@ export default function GenerateScreen() {
     }
   }
 
-  async function generate() {
+  async function generate(forcedPhone = false) {
     if (busy) return;
+    const onPhone = shouldUsePhone({
+      provider: studio.settings.provider,
+      gate: cloud.gate,
+      auto: studio.settings.autoPhoneWhileCloud !== false,
+      forced: forcedPhone,
+    });
     const prompt = composeGenerationPrompt(gen, character ? characterClause(character) : '');
     if (!prompt.trim()) {
       setError('Write a prompt. Quality tags can be turned off if you want the box to be the whole prompt.');
@@ -244,12 +258,22 @@ export default function GenerateScreen() {
     setBusy(true);
     setError(null);
     const started = Date.now();
-    setStatus(studio.settings.provider === 'salad' ? 'Sending it to Salad…' : 'Drawing on this phone…');
+    const phoneNote = onPhone ? phoneDropNote({ loras: gen.loras.filter((lora) => lora.name.trim()).length, reference: Boolean(gen.referencePose || gen.referenceCopy || gen.referenceStyle) }) : '';
+    setStatus(onPhone ? 'Drawing on this phone…' : studio.settings.provider === 'salad' ? 'Sending it to Salad…' : 'Drawing on this phone…');
+    const phoneJob = onPhone ? addJob('offline-generate', `On this phone · ${(gen.prompt || 'picture').slice(0, 42)}`) : null;
     try {
+      if (onPhone) {
+        const reading = await readPhone();
+        const heat = classifyHeat({ tempC: reading.tempC, thermalStatus: reading.thermalStatus, lowPower: studio.settings.lowPower });
+        if (heat === 'hot' || getThrottle().pauseQueue) {
+          applyThermal('pause');
+          throw new Error('Phone is hot. The queue is paused until it cools.');
+        }
+      }
       const chosen = chooseSeeds({ locked: !gen.seedRandom, seedText: gen.seed, count: gen.count });
       const seed = chosen.requestSeed;
       const [saladKey] = await Promise.all([readSaladKey(), readApiKey()]);
-      if (studio.settings.provider === 'salad') {
+      if (studio.settings.provider === 'salad' && !onPhone) {
         const endpoint = normalizeEndpoint(studio.settings.saladEndpoint);
         const token = await readCivitaiToken().catch(() => null);
         if (endpoint && saladKey) {
@@ -262,12 +286,15 @@ export default function GenerateScreen() {
           });
         }
       }
-      const initPng = referenceUri && (gen.referencePose || gen.referenceCopy || gen.referenceStyle) ? await readPng(referenceUri) : null;
+      const phoneState = onPhone
+        ? { ...gen, loras: [], referencePose: false, referenceCopy: false, referenceStyle: false, ...throttleSteps(gen.steps, gen.count, getThrottle()) }
+        : gen;
+      const initPng = !onPhone && referenceUri && (gen.referencePose || gen.referenceCopy || gen.referenceStyle) ? await readPng(referenceUri) : null;
       const result = await drawFrames({
-        state: gen,
+        state: phoneState,
         prompt,
         seed,
-        provider: studio.settings.provider,
+        provider: onPhone ? 'demo' : studio.settings.provider,
         endpoint: normalizeEndpoint(studio.settings.saladEndpoint),
         apiKey: saladKey,
         character,
@@ -318,9 +345,11 @@ export default function GenerateScreen() {
         characterId: character?.id ?? null,
         characterName: character?.name ?? null,
         imageUris,
-        source: studio.settings.provider === 'salad' ? 'salad' : 'demo',
+        source: onPhone || studio.settings.provider !== 'salad' ? 'demo' : 'salad',
         model: params.model,
-        provider: studio.settings.provider === 'salad' ? 'salad' : 'demo',
+        provider: onPhone || studio.settings.provider !== 'salad' ? 'demo' : 'salad',
+        phoneRan: onPhone,
+        warning: [phoneNote, result.warning].filter(Boolean).join(' '),
         enhance: false,
         seed: (result.seeds[0] ?? chosen.seeds[0]) ?? null,
         seeds: result.seeds.length ? result.seeds : chosen.seeds,
@@ -330,22 +359,23 @@ export default function GenerateScreen() {
         width: gen.width,
         height: gen.height,
         saladModel: checkpoint?.filename ?? '',
-        loras: gen.loras.map((lora, index) => ({
+        loras: onPhone ? [] : gen.loras.map((lora, index) => ({
           id: `${lora.name}-${index}`,
           name: lora.name,
           weight: lora.weight,
           ...(lora.modelId ? { modelId: lora.modelId } : {}),
           ...(lora.versionId ? { versionId: lora.versionId } : {}),
         })),
-        warning: result.warning,
         durationMs: Date.now() - started,
       };
       await studio.rememberGeneration(record);
       const used = result.seeds.length ? result.seeds : chosen.seeds;
       setLastSeeds(used);
-      setStatus(`${result.warning ? `${result.warning} ` : ''}Seed ${used.join(', ')}.`);
+      if (phoneJob) finishJob(phoneJob.id);
+      setStatus(`${phoneNote ? `${phoneNote} ` : ''}${result.warning ? `${result.warning} ` : ''}Seed ${used.join(', ')}.`);
     } catch (caught) {
       const message = friendlyLoraMessage(caught instanceof Error ? caught.message : 'The image could not be drawn.');
+      if (phoneJob) reportJob(phoneJob.id, 0, message, 'failed');
       setError(message);
       const endpoint = normalizeEndpoint(studio.settings.saladEndpoint);
       rememberFault({ time: Date.now(), source: 'generate', message, endpoint });
@@ -355,6 +385,23 @@ export default function GenerateScreen() {
       setBusy(false);
     }
   }
+
+  const generateRef = useRef(generate);
+  generateRef.current = generate;
+  useFocusEffect(
+    useCallback(() => {
+      if (consumePhoneGenerate()) {
+        void generateRef.current(true);
+        return;
+      }
+      if (!consumeCloudRedo()) return;
+      if (cloud.gate !== 'ready') {
+        setError('The cloud is not ready yet. New pictures stay on the phone until it is.');
+        return;
+      }
+      void generateRef.current(false);
+    }, [cloud.gate]),
+  );
 
   return (
     <SafeAreaView style={styles.safe} edges={['top']}>
@@ -788,6 +835,12 @@ export default function GenerateScreen() {
         {gen.referenceStyle ? <Strength testID="style-strength" value={gen.referenceStyleStrength ?? 0.55} onChange={(referenceStyleStrength) => patchGenerator({ referenceStyleStrength })} /> : null}
         <Text style={styles.hint}>Pose, the whole picture, and art style can be on together. Clothes, the character, and the LoRAs still apply. The skeleton is the pose after it is fitted.</Text>
         <TasteRow />
+        {cloud.toast ? <Text testID="cloud-toast" style={styles.ok}>{cloud.toast}</Text> : null}
+        {studio.settings.provider === 'salad' && cloudIsWaiting(cloud.gate) ? (
+          <Pressable testID="generate-on-phone" style={styles.chipButton} onPress={() => void generate(true)}>
+            <Text style={styles.chipText}>Generate on my phone now</Text>
+          </Pressable>
+        ) : null}
         <Pressable testID="gen-generate" style={styles.go} disabled={busy} onPress={() => void generate()}>
           <Text style={styles.goText}>{busy ? 'Drawing…' : `Generate ${gen.count}`}</Text>
         </Pressable>

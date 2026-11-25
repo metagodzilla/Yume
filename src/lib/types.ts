@@ -129,6 +129,8 @@ export type Generation = {
   warning?: string;
   durationMs?: number;
   favoriteIndexes?: number[];
+  /** This picture was drawn on the phone while the cloud was not ready. */
+  phoneRan?: boolean;
   /** Settings stored with a like or dislike. Stays on this phone. */
   shot?: import('@/src/lib/taste').ImageShot;
 };
@@ -164,6 +166,8 @@ export type Settings = {
   serverUpdateCheck: boolean;
   /** Move a Salad machine that stops making progress. On unless turned off. */
   autoFixStuckCloud?: boolean;
+  /** Draw on the phone while Salad is still starting. On unless turned off. */
+  autoPhoneWhileCloud?: boolean;
 };
 
 export type Session = {
@@ -221,6 +225,7 @@ export const DEFAULT_SETTINGS: Settings = {
   lowPower: false,
   serverUpdateCheck: true,
   autoFixStuckCloud: true,
+  autoPhoneWhileCloud: true,
 };
 
 export const DEFAULT_SESSION: Session = {

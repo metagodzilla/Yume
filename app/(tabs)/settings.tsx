@@ -142,6 +142,9 @@ export default function SettingsScreen() {
           <Pressable testID="auto-fix-stuck" onPress={() => void studio.updateSettings({ autoFixStuckCloud: studio.settings.autoFixStuckCloud === false })}>
             <Text style={styles.link}>{studio.settings.autoFixStuckCloud === false ? 'Auto-fix stuck cloud off' : 'Auto-fix stuck cloud on'}</Text>
           </Pressable>
+          <Pressable testID="auto-phone-cloud" onPress={() => void studio.updateSettings({ autoPhoneWhileCloud: studio.settings.autoPhoneWhileCloud === false })}>
+            <Text style={styles.link}>{studio.settings.autoPhoneWhileCloud === false ? 'Auto-use phone while cloud starts off' : 'Auto-use phone while cloud starts on'}</Text>
+          </Pressable>
         </View>
 
         <View style={styles.card}>

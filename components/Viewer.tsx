@@ -9,6 +9,7 @@ import { TasteButtons } from '@/components/TasteButtons';
 import { metadataLines, reusePatch } from '@/src/lib/gallery';
 import { confirmAction } from '@/src/lib/confirm';
 import { patchGenerator } from '@/src/lib/genstore';
+import { requestCloudRedo } from '@/src/lib/cloudRedo';
 import { copyText, saveImageToLibrary, shareImage } from '@/src/lib/media';
 import { useStudio } from '@/src/studio';
 import { colors, font } from '@/src/theme';
@@ -141,6 +142,26 @@ export function Viewer() {
                 label={favorite ? 'Favorited' : 'Favorite'}
                 onPress={() => void studio.toggleFavorite(generation.id, imageIndex)}
               />
+              {generation.phoneRan ? (
+                <Action
+                  icon="cloud-upload-outline"
+                  label="Redo on cloud"
+                  onPress={() => {
+                    patchGenerator({
+                      prompt: generation.userPrompt,
+                      clothes: generation.shot?.clothes || '',
+                      negative: generation.negative,
+                      loras: generation.loras.map((lora) => ({ name: lora.name, weight: lora.weight, ...(lora.versionId ? { versionId: lora.versionId } : {}) })),
+                      referencePose: Boolean(generation.shot?.reference.pose),
+                      referenceCopy: Boolean(generation.shot?.reference.copy),
+                      referenceStyle: Boolean(generation.shot?.reference.style),
+                    });
+                    requestCloudRedo();
+                    closeViewer();
+                    router.push('/(tabs)/create');
+                  }}
+                />
+              ) : null}
               <Action
                 icon="refresh-outline"
                 label="Reuse"

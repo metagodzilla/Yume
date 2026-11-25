@@ -55,6 +55,7 @@ import type { Generation } from '@/src/lib/types';
 import { pullPercent, readSaladInstances, reallocateTarget } from '@/src/lib/saladCloud';
 import { emptyCloudWatch, observeCloud, STUCK_QUIET_MS } from '@/src/lib/stuckCloud';
 import { fileLine, filesForPhase, formatReadyIn, overallEtaSeconds, softwareDetail } from '@/src/lib/startupEta';
+import { cloudIsWaiting, phoneDropNote, shouldUsePhone } from '@/src/lib/phoneFallback';
 import { areaCounts } from '@/src/lib/checkRows';
 import { classifyHeat, estimatePowerWatts, shouldKeepScreenAwake, throttleFor, throttleSteps } from '@/src/lib/phonePower';
 import { composeSheet, decodePng } from '@/src/lib/sheet';
@@ -614,6 +615,8 @@ assert(slowWatch.kind === 'slow' && !slowWatch.autoMove, 'a slow moving pull is 
 const weights = filesForPhase(5, [{ name: 'Tile ControlNet', type: 'ControlNet', versionId: null, bytesDone: 10, bytesTotal: 20, speed: 1024 * 1024, state: 'downloading', etaSeconds: 90 }, { name: 'WAI', type: 'Checkpoint', versionId: 1, bytesDone: 1, bytesTotal: 2, speed: 1, state: 'done', etaSeconds: null }]);
 assert(weights.length === 1 && weights[0]?.name === 'Tile ControlNet' && fileLine(weights[0]!).includes('MB') && fileLine({ ...weights[0]!, state: 'waiting' }) === 'waiting', 'each weight file has its own line');
 assert(formatReadyIn(overallEtaSeconds(2, 120, 0)).startsWith('Ready in ~'), 'overall estimate is a ready-in line');
+assert(shouldUsePhone({ provider: 'salad', gate: 'starting', auto: true }) && !shouldUsePhone({ provider: 'salad', gate: 'ready', auto: true }) && shouldUsePhone({ provider: 'salad', gate: 'stopped', auto: false, forced: true }), 'phone fallback only while the cloud is not ready');
+assert(cloudIsWaiting('slow') && phoneDropNote({ loras: 1, reference: true }).includes('LoRA') && phoneDropNote({ loras: 1, reference: true }).includes('clothes prompt'), 'phone keeps the prompt and says what the cloud must do');
 const moving = cloudChecklist({ hasEndpoint: true, healthStatus: 503, readyStatus: 503, readyDetail: 'Cloud has no internet - moving to a new machine', startupMessage: 'Cloud has no internet - moving to a new machine' });
 assert(moving.liveTitle === 'Cloud has no internet - moving to a new machine' && moving.pill === 'Moving', 'dead network tells the phone the machine is moving');
 const locked = cloudChecklist({ hasEndpoint: true, healthStatus: 403, readyStatus: 403 });

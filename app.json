@@ -2,7 +2,7 @@
   "expo": {
     "name": "Yume",
     "slug": "yume",
-    "version": "1.5.9",
+    "version": "1.5.10",
     "orientation": "portrait",
     "icon": "./assets/images/icon.png",
     "scheme": "yume",
@@ -10,11 +10,11 @@
     "ios": {
       "supportsTablet": true,
       "bundleIdentifier": "app.yume.studio",
-      "buildNumber": "24"
+      "buildNumber": "25"
     },
     "android": {
       "package": "app.yume.studio",
-      "versionCode": 24,
+      "versionCode": 25,
       "permissions": ["INTERNET", "CAMERA", "POST_NOTIFICATIONS", "REQUEST_INSTALL_PACKAGES", "FOREGROUND_SERVICE", "FOREGROUND_SERVICE_DATA_SYNC", "RECEIVE_BOOT_COMPLETED"],
       "softwareKeyboardLayoutMode": "resize",
       "adaptiveIcon": {

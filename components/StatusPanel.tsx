@@ -20,6 +20,9 @@ import { counts } from '@/src/lib/queue';
 import { queueAction, useQueue } from '@/src/lib/queuestore';
 import { endpointDiffersFromLive, LIVE_GATEWAY_URL, normalizeEndpoint, redactSecrets } from '@/src/lib/salad';
 import { groupStatusOf, instanceCounts, normalizeSaladKey, pickActiveInstance, pullPercent, readSaladInstances, reallocateTarget } from '@/src/lib/saladCloud';
+import { setCloudGate, useCloudGate } from '@/src/lib/cloudGate';
+import { requestPhoneGenerate } from '@/src/lib/cloudRedo';
+import { cloudIsWaiting } from '@/src/lib/phoneFallback';
 import { emptyCloudWatch, noteCloudMove, observeCloud, type CloudWatchView } from '@/src/lib/stuckCloud';
 import { fileLine, filesForPhase, formatReadyIn, overallEtaSeconds, parseProgressFiles, phaseDetail, softwareDetail, type WeightFile } from '@/src/lib/startupEta';
 import { areaCounts, type CheckRow } from '@/src/lib/checkRows';
@@ -53,6 +56,7 @@ function clock(ms: number): string {
 
 export function StatusPanel({ preview = '' }: { preview?: string }) {
   const studio = useStudio();
+  const cloud = useCloudGate();
   const queue = useQueue();
   const [stats, setStats] = useState<CloudStats>(emptyStats());
   const [phone, setPhone] = useState<PhoneReading | null>(null);
@@ -263,6 +267,8 @@ export function StatusPanel({ preview = '' }: { preview?: string }) {
       setWatchView(observed);
       setPullSamples(observed.watch.samples);
       if (observed.autoMove) void moveMachine(true, observed.banner);
+      const readyNow = view.phase === 'running' && ready?.status === 200;
+      setCloudGate(readyNow ? 'ready' : observed.kind === 'stuck' ? 'stuck' : observed.kind === 'slow' ? 'slow' : view.phase === 'stopped' ? 'stopped' : view.phase === 'starting' ? 'starting' : 'unknown');
       setSteps(view.steps);
       if (view.liveTitle !== stepLabel.current) {
         stepLabel.current = view.liveTitle;
@@ -567,6 +573,17 @@ export function StatusPanel({ preview = '' }: { preview?: string }) {
         <View testID="live-card" style={styles.live}>
           <Text style={styles.kicker}>LIVE</Text>
           <Text style={styles.liveTitle}>{liveTitle}</Text>
+          {cloud.toast ? <Text testID="cloud-toast" style={styles.detail}>{cloud.toast}</Text> : null}
+          {studio.settings.provider === 'salad' && cloudIsWaiting(cloud.gate) ? (
+            <Pressable
+              testID="generate-on-phone-card"
+              onPress={() => {
+                requestPhoneGenerate();
+                router.push('/(tabs)/create');
+              }}>
+              <Text style={styles.link}>Generate on my phone now</Text>
+            </Pressable>
+          ) : null}
           <Text style={styles.help}>{DISK_RESET_NOTE}</Text>
           {steps.map((step, index) => {
             const current = step.state === 'current';
