@@ -7,6 +7,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { ChipField } from '@/components/ChipField';
 import { confirmAction } from '@/src/lib/confirm';
 import { blankCharacter } from '@/src/lib/id';
+import { fromCm, toCm, type MeasureUnit } from '@/src/lib/measurements';
 import { TRAIT_GROUPS } from '@/src/lib/presets';
 import { characterClause, characterSummary } from '@/src/lib/prompt';
 import { useStudio } from '@/src/studio';
@@ -71,6 +72,7 @@ export default function CharacterScreen() {
           <Text style={styles.summary}>{summary || 'Pick a few traits and the sheet fills itself in.'}</Text>
           <Text style={styles.private}>The name stays on this phone. Traits are what get drawn.</Text>
         </View>
+        <MeasureFields draft={draft} setDraft={setDraft} />
 
         {TRAIT_GROUPS.map((group) => (
           <ChipField
@@ -126,6 +128,58 @@ export default function CharacterScreen() {
   );
 }
 
+function MeasureFields({ draft, setDraft }: { draft: Character; setDraft: (next: Character) => void }) {
+  const unit: MeasureUnit = draft.measurements?.unit === 'in' ? 'in' : 'cm';
+  const fields = [
+    ['bustCm', 'Bust'],
+    ['waistCm', 'Waist'],
+    ['hipCm', 'Hip'],
+    ['heightCm', 'Height'],
+  ] as const;
+
+  function shown(key: (typeof fields)[number][0]): string {
+    const cm = draft.measurements?.[key];
+    return cm && cm > 0 ? String(fromCm(cm, unit)) : '';
+  }
+
+  function change(key: (typeof fields)[number][0], text: string) {
+    const parsed = Number(text.replace(/[^0-9.]/g, ''));
+    const cm = text.trim() && Number.isFinite(parsed) && parsed > 0 ? toCm(parsed, unit) : undefined;
+    setDraft({
+      ...draft,
+      measurements: { ...draft.measurements, unit, [key]: cm },
+    });
+  }
+
+  return (
+    <View style={styles.preview} testID="three-sizes">
+      <View style={styles.saveRow}>
+        <Text style={styles.saveTitle}>Three sizes</Text>
+        <Pressable testID="measure-unit" onPress={() => setDraft({ ...draft, measurements: { ...draft.measurements, unit: unit === 'in' ? 'cm' : 'in' } })}>
+          <Text style={styles.private}>{unit === 'in' ? 'Inches' : 'Centimeters'}</Text>
+        </Pressable>
+      </View>
+      <Text style={styles.private}>Optional. Stored in centimeters and added as adult body-shape tags when she is drawn.</Text>
+      <View style={styles.sizeGrid}>
+        {fields.map(([key, label]) => (
+          <View key={key} style={styles.sizeField}>
+            <Text style={styles.private}>{label}</Text>
+            <TextInput
+              testID={`measure-${key}`}
+              value={shown(key)}
+              onChangeText={(text) => change(key, text)}
+              keyboardType="decimal-pad"
+              placeholder={unit}
+              placeholderTextColor={colors.faint}
+              style={styles.sizeInput}
+            />
+          </View>
+        ))}
+      </View>
+    </View>
+  );
+}
+
 const styles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: colors.bg },
   top: {
@@ -167,6 +221,17 @@ const styles = StyleSheet.create({
   },
   summary: { color: colors.muted, fontFamily: font.semibold, fontSize: 14, lineHeight: 20 },
   private: { color: colors.faint, fontFamily: font.semibold, fontSize: 12, lineHeight: 17 },
+  sizeGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
+  sizeField: { width: '47%', gap: 4 },
+  sizeInput: {
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: colors.line,
+    color: colors.text,
+    fontFamily: font.semibold,
+    paddingHorizontal: 10,
+    paddingVertical: 8,
+  },
   saveRow: { flexDirection: 'row', gap: 12, alignItems: 'center' },
   saveTitle: { color: colors.text, fontFamily: font.black, fontSize: 16 },
   danger: { color: colors.danger, fontFamily: font.black, fontSize: 14 },

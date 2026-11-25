@@ -85,6 +85,12 @@ export type Character = {
   lighting: string;
   /** Latest plain-language correction. The name still stays on the phone. */
   notes?: string;
+  /** Bust, waist, hip, and height stored in centimeters. */
+  measurements?: import('@/src/lib/measurements').Measurements | null;
+  /** Adult body-shape tags from a photo or from the measurements. */
+  bodyTags?: string[];
+  fromImage?: boolean;
+  referenceUri?: string;
   updatedAt: number;
 };
 

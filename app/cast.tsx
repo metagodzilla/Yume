@@ -3,14 +3,44 @@ import { router } from 'expo-router';
 import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
+import { useState } from 'react';
+
 import { confirmAction } from '@/src/lib/confirm';
+import { characterFromAppearance, pickLocalImage, requestAppearance } from '@/src/lib/fromImage';
 import { characterSummary } from '@/src/lib/prompt';
+import { readSaladKey } from '@/src/lib/storage';
 import { useStudio } from '@/src/studio';
 import { colors, font } from '@/src/theme';
 
 export default function CastScreen() {
-  const { characters, deleteCharacter, selectCharacter, selectedCharacterId } = useStudio();
+  const studio = useStudio();
+  const { characters, deleteCharacter, selectCharacter, selectedCharacterId, commitCharacter } = studio;
   const saved = characters.filter((character) => character.saved);
+  const [tagStatus, setTagStatus] = useState<string | null>(null);
+  const [tagError, setTagError] = useState<string | null>(null);
+
+  async function fromImage() {
+    setTagError(null);
+    setTagStatus(null);
+    try {
+      const picked = await pickLocalImage();
+      if (!picked) return;
+      setTagStatus('Reading her appearance…');
+      const key = await readSaladKey();
+      const appearance = await requestAppearance({
+        endpoint: studio.settings.saladEndpoint,
+        apiKey: key ?? '',
+        png: picked.bytes,
+      });
+      const character = characterFromAppearance(appearance);
+      await commitCharacter(character);
+      setTagStatus('Saved to the cast. Add three sizes on her profile if you want.');
+      router.push({ pathname: '/character', params: { id: character.id } });
+    } catch (caught) {
+      setTagStatus(null);
+      setTagError(caught instanceof Error ? caught.message : 'That photo could not be read.');
+    }
+  }
 
   return (
     <SafeAreaView style={styles.safe} edges={['top']}>
@@ -20,10 +50,19 @@ export default function CastScreen() {
         <Text style={styles.body}>
           Build a character once. Hair, eyes, the coat they always wear. Pick them on Create and Yume keeps the look.
         </Text>
-        <Pressable style={styles.add} onPress={() => router.push('/character')}>
-          <Ionicons name="add" size={18} color={colors.ink} />
-          <Text style={styles.addText}>New character</Text>
-        </Pressable>
+        <View style={styles.actions}>
+          <Pressable style={styles.add} onPress={() => router.push('/character')}>
+            <Ionicons name="add" size={18} color={colors.ink} />
+            <Text style={styles.addText}>New character</Text>
+          </Pressable>
+          <Pressable testID="from-image" style={styles.addAlt} onPress={() => void fromImage()}>
+            <Ionicons name="image-outline" size={18} color={colors.sakura} />
+            <Text style={styles.addAltText}>From image</Text>
+          </Pressable>
+        </View>
+        <Text style={styles.body}>From image sends the photo to the cloud tagger and saves her as an adult character.</Text>
+        {tagStatus ? <Text style={styles.using}>{tagStatus}</Text> : null}
+        {tagError ? <Text style={styles.error}>{tagError}</Text> : null}
 
         {saved.length === 0 ? (
           <View style={styles.empty}>
@@ -42,18 +81,22 @@ export default function CastScreen() {
                     <Text style={styles.meta}>{characterSummary(character) || 'No traits yet'}</Text>
                     {on ? <Text style={styles.using}>Using on the next drawing</Text> : null}
                   </Pressable>
-                <View style={styles.links}>
+                <View style={styles.featureRow}>
                   <Pressable
                     testID={`open-turnaround-${character.id}`}
-                    accessibilityLabel={`Turnaround for ${character.name}`}
+                    accessibilityLabel={`Different views for ${character.name}`}
+                    style={styles.feature}
                     onPress={() => router.push({ pathname: '/turnaround', params: { id: character.id } })}>
-                    <Text style={styles.turn}>Turnaround</Text>
+                    <Text style={styles.turn}>Different views</Text>
+                    <Text style={styles.featureHint}>Flat sheet: front, 3/4, side, back</Text>
                   </Pressable>
                   <Pressable
                     testID={`open-mesh-${character.id}`}
-                    accessibilityLabel={`Make 3D for ${character.name}`}
+                    accessibilityLabel={`3D turnaround for ${character.name}`}
+                    style={styles.feature}
                     onPress={() => router.push({ pathname: '/mesh', params: { id: character.id } })}>
-                    <Text style={styles.mesh}>Make 3D</Text>
+                    <Text style={styles.mesh}>3D turnaround</Text>
+                    <Text style={styles.featureHint}>Rotating model, separate from the sheet</Text>
                   </Pressable>
                 </View>
                 </View>
@@ -111,6 +154,23 @@ const styles = StyleSheet.create({
     paddingVertical: 10,
   },
   addText: { color: colors.ink, fontFamily: font.black, fontSize: 14 },
+  actions: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
+  addAlt: {
+    alignSelf: 'flex-start',
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    borderRadius: 999,
+    borderWidth: 1,
+    borderColor: colors.sakura,
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+  },
+  addAltText: { color: colors.sakura, fontFamily: font.black, fontSize: 14 },
+  error: { color: colors.danger, fontFamily: font.semibold, fontSize: 14, lineHeight: 20 },
+  featureRow: { gap: 8, marginTop: 8 },
+  feature: { gap: 2 },
+  featureHint: { color: colors.faint, fontFamily: font.semibold, fontSize: 12 },
   empty: {
     marginTop: 12,
     borderRadius: 20,

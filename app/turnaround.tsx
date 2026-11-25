@@ -347,7 +347,7 @@ export default function TurnaroundScreen() {
   if (!studio.ready || !ready) {
     return (
       <SafeAreaView style={styles.safe}>
-        <Text style={styles.kicker}>Turnaround</Text>
+        <Text style={styles.kicker}>Different views</Text>
       </SafeAreaView>
     );
   }
@@ -357,7 +357,7 @@ export default function TurnaroundScreen() {
       <SafeAreaView style={styles.safe} edges={['top']}>
         <Pressable accessibilityLabel="Back" onPress={() => router.back()} style={styles.back}>
           <Ionicons name="chevron-back" size={26} color={colors.text} />
-          <Text style={styles.kicker}>Turnaround</Text>
+          <Text style={styles.kicker}>Different views</Text>
         </Pressable>
         <Text style={styles.body}>That character is not on this phone anymore.</Text>
       </SafeAreaView>
@@ -371,12 +371,10 @@ export default function TurnaroundScreen() {
           <Ionicons name="chevron-back" size={26} color={colors.text} />
         </Pressable>
         <View style={{ flex: 1 }}>
-          <Text style={styles.kicker}>Turnaround</Text>
+          <Text style={styles.kicker}>Different views</Text>
           <Text style={styles.title}>{character.name}</Text>
         </View>
-        <Pressable testID="open-mesh" onPress={() => router.push({ pathname: '/mesh', params: { id: character.id } })}>
-          <Text style={styles.meshLink}>Make 3D</Text>
-        </Pressable>
+        <Text style={styles.meshLink}>Flat sheet</Text>
       </View>
       <ScrollView style={styles.flex} contentContainerStyle={styles.scroll} keyboardShouldPersistTaps="handled">
         <Text testID="consistency-note" style={styles.note}>

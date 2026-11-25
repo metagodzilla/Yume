@@ -16,6 +16,7 @@ import {
   parseBundle,
 } from '@/src/lib/library';
 import { ASPECTS, STYLES } from '@/src/lib/presets';
+import { bodyShapeTags, isChildTag } from '@/src/lib/measurements';
 import { buildEnhancedPrompt, characterClause } from '@/src/lib/prompt';
 import { buildMockGlb, parseGlb } from '@/src/lib/glb';
 import { encodePng } from '@/src/lib/png';
@@ -118,6 +119,10 @@ for (const style of STYLES) {
 
 const empty: Character = { ...character, hairColor: '', hairStyle: '', eyeColor: '', outfit: '', expression: '', pose: '', setting: '', lighting: '' };
 assert(characterClause(empty) === '', 'empty sheet should not invent a character');
+const shaped = bodyShapeTags({ bustCm: 92, waistCm: 62, hipCm: 98, heightCm: 172 });
+assert(shaped.includes('narrow waist') && shaped.includes('wide hips') && shaped.includes('curvy') && shaped.includes('tall') && shaped.every((tag) => !isChildTag(tag)), 'measurements become adult body tags');
+const withSizes = characterClause({ ...character, measurements: { bustCm: 92, waistCm: 62, hipCm: 98 } });
+assert(withSizes.includes('adult') && withSizes.includes('mature female') && withSizes.includes('narrow waist') && !withSizes.toLowerCase().includes('loli'), 'a cast character stays adult');
 
 const roundtrip = new Uint8Array([0, 1, 2, 250, 255, 127]);
 const decoded = base64ToBytes(bytesToBase64(roundtrip));

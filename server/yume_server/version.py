@@ -6,7 +6,7 @@ import json
 import os
 from typing import Any
 
-SERVER_CODE_VERSION = "1.5.4"
+SERVER_CODE_VERSION = "1.5.5"
 
 
 def version_payload() -> dict[str, Any]:
