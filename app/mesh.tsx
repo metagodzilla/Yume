@@ -6,6 +6,7 @@ import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { MeshStage, type MeshStageHandle } from '@/components/MeshStage';
+import { referenceImages } from '@/src/lib/fromImage';
 import { parseGlb } from '@/src/lib/glb';
 import { saveImageToLibrary, shareFile } from '@/src/lib/media';
 import { DEMO_MESH_NOTE, MESH_LIMIT, MESH_STEPS, TRIPOSR_MESH_NOTE, demoMesh, requestPictureMesh, type SavedMesh } from '@/src/lib/mesh';
@@ -95,12 +96,14 @@ export default function MeshScreen() {
         setStatus('Demo studio does not turn pixels into a mesh. Connect the picture server to build a real GLB.');
         return;
       }
-      const photo = character.referenceUri ? await readPng(character.referenceUri) : null;
+      const refs = referenceImages(character);
+      const photo = refs[0] ? await readPng(refs[0]) : null;
       const frontPng = front ? await readPng(front.imageUri) : null;
       const source = photo ?? frontPng;
-      if (!source) throw new Error('Add a photo with From image, or draw Different views first.');
+      if (!source) throw new Error('Add reference photos on the casting sheet, or draw Different views first.');
       const book = books.find((item) => item.characterId === character.id);
       const views = [];
+      for (const extra of refs.slice(1)) views.push({ angle: 'reference', png: await readPng(extra) });
       for (const view of book?.versions[0]?.views ?? []) {
         if (photo && view.angle === 'front' && view.imageUri === front?.imageUri) continue;
         views.push({ angle: view.angle, png: await readPng(view.imageUri) });
@@ -132,7 +135,7 @@ export default function MeshScreen() {
         },
         result.glb,
       );
-      setStatus(photo ? 'TripoSR used the From-image photo.' : 'TripoSR used the front view.');
+      setStatus(photo ? 'TripoSR used the front reference photo.' : 'TripoSR used the front view.');
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : 'The mesh could not be built.');
     } finally {

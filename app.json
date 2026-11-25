@@ -48,6 +48,13 @@
         }
       ],
       "expo-sharing",
+      [
+        "expo-image-picker",
+        {
+          "photosPermission": "Yume reads the character photos you choose so it can build her casting sheet.",
+          "microphonePermission": false
+        }
+      ],
       "expo-image",
       [
         "expo-notifications",

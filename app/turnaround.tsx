@@ -16,6 +16,7 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
+import { referenceImages } from '@/src/lib/fromImage';
 import { saveImageToLibrary } from '@/src/lib/media';
 import { pixelsForAspect, snapSize } from '@/src/lib/library';
 import { hashSeed } from '@/src/lib/render';
@@ -136,9 +137,10 @@ export default function TurnaroundScreen() {
     const warnings: string[] = [];
     const fresh = new Map<TurnaroundAngle, TurnaroundView>();
     let photo: Uint8Array | null = null;
-    if (who.referenceUri) {
+    const frontReference = referenceImages(who)[0];
+    if (frontReference) {
       try {
-        photo = await readPng(who.referenceUri);
+        photo = await readPng(frontReference);
       } catch {
         photo = null;
       }

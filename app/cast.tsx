@@ -6,7 +6,8 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { useState } from 'react';
 
 import { confirmAction } from '@/src/lib/confirm';
-import { characterFromAppearance, pickLocalImage, requestAppearance } from '@/src/lib/fromImage';
+import { applyAppearance, assignReferences, mergeAppearances, pickFrontIndex, pickLocalImages, requestAppearance, type Appearance } from '@/src/lib/fromImage';
+import { blankCharacter } from '@/src/lib/id';
 import { characterSummary } from '@/src/lib/prompt';
 import { persistPng, readSaladKey } from '@/src/lib/storage';
 import { useStudio } from '@/src/studio';
@@ -23,19 +24,29 @@ export default function CastScreen() {
     setTagError(null);
     setTagStatus(null);
     try {
-      const picked = await pickLocalImage();
-      if (!picked) return;
-      setTagStatus('Reading her appearance…');
+      const picked = await pickLocalImages();
+      if (!picked?.length) return;
+      setTagStatus(picked.length === 1 ? 'Reading her appearance…' : `Reading ${picked.length} photos…`);
       const key = await readSaladKey();
-      const appearance = await requestAppearance({
-        endpoint: studio.settings.saladEndpoint,
-        apiKey: key ?? '',
-        png: picked.bytes,
-      });
-      const character = characterFromAppearance(appearance);
-      character.referenceUri = await persistPng(`${character.id}-ref.png`, picked.bytes);
+      const appearances: Appearance[] = [];
+      for (let index = 0; index < picked.length; index += 1) {
+        setTagStatus(`Reading photo ${index + 1} of ${picked.length}…`);
+        try {
+          appearances.push(await requestAppearance({ endpoint: studio.settings.saladEndpoint, apiKey: key ?? '', png: picked[index]!.bytes }));
+        } catch (caught) {
+          setTagError(caught instanceof Error ? caught.message : 'One photo could not be read.');
+        }
+      }
+      const blank = blankCharacter();
+      const base = appearances.length ? applyAppearance({ ...blank, saved: true }, mergeAppearances(appearances)) : { ...blank, saved: true, fromImage: true };
+      const uris: string[] = [];
+      for (let index = 0; index < picked.length; index += 1) {
+        uris.push(await persistPng(`${base.id}-ref-${Date.now()}-${index}.jpg`, picked[index]!.bytes));
+      }
+      const character = assignReferences(base, uris, uris[pickFrontIndex(picked)]);
+      character.saved = true;
       await commitCharacter(character);
-      setTagStatus('Saved to the cast. Add three sizes on her profile if you want.');
+      setTagStatus(appearances.length ? 'Saved to the cast. The front photo is marked on her sheet.' : 'Photos saved. Open her sheet after the cloud can read them.');
       router.push({ pathname: '/character', params: { id: character.id } });
     } catch (caught) {
       setTagStatus(null);
@@ -61,7 +72,7 @@ export default function CastScreen() {
             <Text style={styles.addAltText}>From image</Text>
           </Pressable>
         </View>
-        <Text style={styles.body}>From image sends the photo to the cloud tagger and saves her as an adult character.</Text>
+        <Text style={styles.body}>From image opens the gallery. Pick up to 6 photos of the same character. You can also add them on her casting sheet.</Text>
         {tagStatus ? <Text style={styles.using}>{tagStatus}</Text> : null}
         {tagError ? <Text style={styles.error}>{tagError}</Text> : null}
 

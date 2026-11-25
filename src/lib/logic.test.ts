@@ -26,6 +26,8 @@ import { describeUpdateError, downloadLabel } from '@/src/lib/apkInstall';
 import { baseFamily, baseLabel, defaultsForBase, familyPreset, illustriousOffer, settingsForCheckpoint, modelCardPress, routeLeavesCreate } from '@/src/lib/checkpoints';
 import { modelsToRestore, modelPresence } from '@/src/lib/keptModels';
 import { friendlyLoraMessage, loraChoices, loraStem, missingSelectedLoras } from '@/src/lib/loraGate';
+import { applyAppearance, assignReferences, mergeAppearances, pickFrontIndex, referenceImages } from '@/src/lib/fromImage';
+import { blankCharacter } from '@/src/lib/id';
 import { meshPlan, PICTURE_SERVER_MESH_MESSAGE } from '@/src/lib/mesh';
 import { newerServerRelease, serverUpdateCall } from '@/src/lib/serverUpdate';
 import { CAST_ROUTE, castRouteOpensScreen } from '@/src/lib/routes';
@@ -754,6 +756,14 @@ assert(scaleLoraStack(studioState.loras).every((item) => item.weight <= 0.68) &&
 assert(ANIME_STUDIO_CHECKPOINT.versionId === 1408658 && ANIME_STUDIO_CHECKPOINT.steps === 26 && ANIME_STUDIO_CHECKPOINT.width === 896, 'anime studio checkpoint');
 assert(CAST_ROUTE === '/cast' && castRouteOpensScreen('/cast') && !castRouteOpensScreen('/(tabs)/cast'), 'cast is a real screen, not a hidden tab');
 assert(meshPlan('') === 'picture' && meshPlan('  ') === 'picture' && meshPlan('https://mesh.example') === 'separate' && PICTURE_SERVER_MESH_MESSAGE.includes('picture server'), 'an empty 3d url uses the picture server');
+const mergedRefs = mergeAppearances([
+  { model: 'a', tags: ['pink hair', 'loli'], hairColor: 'pink', hairStyle: 'long', eyeColor: 'blue', outfit: 'hoodie', accessories: '', body: 'slim', adult: true },
+  { model: 'a', tags: ['blue eyes', 'adult'], hairColor: 'pink', hairStyle: 'bob', eyeColor: 'blue', outfit: '', accessories: 'ribbon', body: 'slim', adult: true },
+]);
+assert(!mergedRefs.tags.some((tag) => tag.includes('loli')) && mergedRefs.tags.includes('pink hair') && mergedRefs.tags.includes('blue eyes') && mergedRefs.hairColor === 'pink', 'reference photos merge tags and drop child tags');
+assert(pickFrontIndex([{ width: 1000, height: 400, name: 'wide.jpg' }, { width: 800, height: 1200, name: 'front-face.jpg' }]) === 1, 'front photo is the portrait');
+const referenceSheet = assignReferences(applyAppearance(blankCharacter('c1'), mergedRefs), ['a', 'b', 'a'], 'b');
+assert(referenceSheet.referenceUri === 'b' && referenceSheet.referenceUris?.length === 2 && referenceImages(referenceSheet)[0] === 'b' && referenceSheet.bodyTags?.includes('adult') && referenceSheet.name === 'From photo', 'front reference is first and tags land on the sheet');
 assert(familyPreset('Pony').quality.startsWith('score_9'), 'pony uses score tags');
 assert(familyPreset('NoobAI', 'NoobAI XL v-pred').vPrediction && familyPreset('Illustrious').vPrediction === false, 'v-pred is detected from the name');
 assert(sentPositiveText(previewState).includes('masterpiece') && sentPositiveText(previewState).includes('1girl') && sentPositiveText(previewState).includes('shiny eyes') && sentPositiveText(previewState).includes('<lora:ribbon:0.8>'), 'final prompt matches the request');
