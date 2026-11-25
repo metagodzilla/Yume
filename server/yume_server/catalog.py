@@ -17,6 +17,8 @@ from yume_server.downloads import DownloadCancelled, DownloadPaused, download_re
 
 DEFAULT_VERSION = 1337429
 OPT_VERSION = 1408658
+WAI_VERSION = 2883731
+RETIRED_DEFAULTS = {DEFAULT_VERSION, OPT_VERSION}
 HF_ANIMAGINE_URL = "https://huggingface.co/cagliostrolab/animagine-xl-4.0/resolve/main/animagine-xl-4.0.safetensors"
 HF_OPT_URL = "https://huggingface.co/cagliostrolab/animagine-xl-4.0/resolve/main/animagine-xl-4.0-opt.safetensors"
 
@@ -104,6 +106,74 @@ OPT_RECORD: dict[str, Any] = {
 }
 
 
+def env_default_version() -> int | None:
+    raw = os.environ.get("YUME_DEFAULT_VERSION_ID", "").strip()
+    return int(raw) if raw.isdigit() else None
+
+
+def wai_record() -> dict[str, Any]:
+    return {
+        "versionId": WAI_VERSION,
+        "modelId": 827184,
+        "name": "WAI-illustrious-SDXL",
+        "version": "v17.0",
+        "type": "Checkpoint",
+        "baseModel": "Illustrious",
+        "filename": "WAI-Nsfw-Illustrious-17.safetensors",
+        "hash": "",
+        "sha256": "",
+        "triggers": [],
+        "isDefault": True,
+        "bytes": 6_946_000_000,
+    }
+
+
+def ensure_version_default(version_id: int) -> dict[str, Any]:
+    """Mark one checkpoint as the persisted default, creating the WAI record when that is the id."""
+    data = load_catalog()
+    found = next((item for item in data["models"] if int(item.get("versionId") or 0) == version_id), None)
+    if found is None:
+        found = wai_record() if version_id == WAI_VERSION else {
+            "versionId": version_id,
+            "modelId": 0,
+            "name": f"Civitai {version_id}",
+            "version": "",
+            "type": "Checkpoint",
+            "baseModel": "",
+            "filename": f"civitai-{version_id}.safetensors",
+            "hash": "",
+            "sha256": "",
+            "triggers": [],
+            "isDefault": True,
+        }
+        data["models"].insert(0, found)
+    for item in data["models"]:
+        if (item.get("type") or "Checkpoint") == "Checkpoint":
+            item["isDefault"] = int(item.get("versionId") or 0) == version_id
+    found["isDefault"] = True
+    save_catalog(data)
+    return found
+
+
+def ensure_boot_default() -> dict[str, Any]:
+    """Env YUME_DEFAULT_VERSION_ID wins. Otherwise keep a persisted default that is not retired Animagine."""
+    forced = env_default_version()
+    if forced is not None:
+        return ensure_version_default(forced)
+    data = load_catalog()
+    current = next(
+        (
+            item
+            for item in data["models"]
+            if item.get("isDefault") and (item.get("type") or "Checkpoint") == "Checkpoint" and int(item.get("versionId") or 0) not in RETIRED_DEFAULTS
+        ),
+        None,
+    )
+    if current:
+        return current
+    return ensure_version_default(WAI_VERSION)
+
+
 def ensure_default() -> dict[str, Any]:
     """Register Animagine without downloading the single-file checkpoint.
 
@@ -138,6 +208,13 @@ def ensure_opt_default() -> dict[str, Any]:
     return record
 
 
+def materialize_checkpoint(record: dict[str, Any]) -> dict[str, Any]:
+    """Download a checkpoint that is not already on disk. Uses YUME_CIVITAI_TOKEN when the request has none."""
+    _materialize(record, civitai_token(None))
+    _store_record(record)
+    return record
+
+
 def materialize_opt() -> dict[str, Any]:
     """Download the Anime Studio single-file checkpoint. Its own VAE stays in the file."""
     record = dict(ensure_opt_default())
@@ -156,7 +233,8 @@ def materialize_opt() -> dict[str, Any]:
 
 
 def civitai_token(explicit: str | None) -> str | None:
-    value = (explicit or os.environ.get("CIVITAI_TOKEN") or "").strip()
+    """Request token, then YUME_CIVITAI_TOKEN, then CIVITAI_TOKEN. The value is never logged."""
+    value = (explicit or os.environ.get("YUME_CIVITAI_TOKEN") or os.environ.get("CIVITAI_TOKEN") or "").strip()
     return value or None
 
 
@@ -648,16 +726,19 @@ def delete_version(version_id: int) -> None:
     if target is None:
         raise FileNotFoundError("That model is not installed.")
     remaining = [item for item in data["models"] if item.get("versionId") != version_id]
-    checkpoints = [item for item in remaining if item.get("type") == "Checkpoint"]
-    if target.get("type") == "Checkpoint" and not checkpoints:
+    checkpoints = [item for item in remaining if (item.get("type") or "Checkpoint") == "Checkpoint"]
+    retired = int(version_id) in RETIRED_DEFAULTS
+    if (target.get("type") or "Checkpoint") == "Checkpoint" and not checkpoints and not retired:
         raise ValueError("Keep at least one checkpoint installed.")
     if target.get("isDefault") and checkpoints:
         checkpoints[0]["isDefault"] = True
     path = target.get("path")
-    if path and os.path.exists(path) and not str(path).endswith(DEFAULT_RECORD["filename"]):
+    if path and os.path.exists(path):
         os.remove(path)
     data["models"] = remaining
     save_catalog(data)
+    if not checkpoints:
+        ensure_boot_default()
 
 
 def set_default(version_id: int) -> dict[str, Any]:

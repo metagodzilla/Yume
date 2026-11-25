@@ -31,6 +31,10 @@ export type GeneratorState = {
   /** When true, Positive is filled with supporting tags from the same description. */
   positiveAuto: boolean;
   autoPositive?: string;
+  /** Outfit tags. Filled from Describe when clothesAuto is on, or from the selected character. */
+  clothes: string;
+  clothesAuto: boolean;
+  autoClothes?: string;
   quality: string;
   qualityEdited: boolean;
   /** @deprecated Merged into positive. Kept so a 1.4.9 save still loads. */
@@ -102,22 +106,25 @@ export const initialGenerator = (): GeneratorState => ({
   positive: '',
   positiveAuto: true,
   autoPositive: '',
-  quality: ANIME_STUDIO_CHECKPOINT.quality,
+  clothes: '',
+  clothesAuto: true,
+  autoClothes: '',
+  quality: DEFAULT_CHECKPOINT.quality,
   qualityEdited: false,
   extraPrompt: '',
-  negative: ANIME_STUDIO_CHECKPOINT.negative,
-  sampler: ANIME_STUDIO_CHECKPOINT.sampler,
-  steps: ANIME_STUDIO_CHECKPOINT.steps,
-  cfg: ANIME_STUDIO_CHECKPOINT.cfg,
+  negative: DEFAULT_CHECKPOINT.negative,
+  sampler: DEFAULT_CHECKPOINT.sampler,
+  steps: DEFAULT_CHECKPOINT.steps,
+  cfg: DEFAULT_CHECKPOINT.cfg,
   seed: '1',
   seedRandom: true,
-  width: ANIME_STUDIO_CHECKPOINT.width,
-  height: ANIME_STUDIO_CHECKPOINT.height,
-  clipSkip: ANIME_STUDIO_CHECKPOINT.clipSkip,
+  width: DEFAULT_CHECKPOINT.width,
+  height: DEFAULT_CHECKPOINT.height,
+  clipSkip: DEFAULT_CHECKPOINT.clipSkip,
   count: 1,
   qualityTags: true,
   triggers: true,
-  checkpointId: ANIME_STUDIO_CHECKPOINT.versionId,
+  checkpointId: DEFAULT_CHECKPOINT.versionId,
   loras: [],
   embeddings: '',
   vae: '',
@@ -130,7 +137,7 @@ export const initialGenerator = (): GeneratorState => ({
   denoise: 0.55,
   nsfw: false,
   contentFilter: 'sfw',
-  installed: [{ ...defaultResource(), isDefault: false }, studioResource()],
+  installed: [defaultResource()],
   vPrediction: false,
   studioStyle: 'anime',
   studioApplied: STUDIO_APPLIED,
@@ -297,10 +304,9 @@ export function setDefaultCheckpoint(versionId: number) {
 }
 
 export function removeLocal(versionId: number) {
-  if (versionId === DEFAULT_CHECKPOINT.versionId) return;
   const installed = state.installed.filter((item) => item.versionId !== versionId);
   const fallback = installed.find((item) => item.isDefault && item.type === 'Checkpoint') ?? installed.find((item) => item.type === 'Checkpoint');
-  patchGenerator({ installed, checkpointId: fallback?.versionId ?? DEFAULT_CHECKPOINT.versionId });
+  patchGenerator({ installed: fallback ? installed : [defaultResource(), ...installed], checkpointId: fallback?.versionId ?? DEFAULT_CHECKPOINT.versionId });
   void import('@/src/lib/restoreModels').then(({ dropKept }) => dropKept(versionId));
 }
 
@@ -317,7 +323,9 @@ export async function hydrateFromDisk() {
     if (!raw) return;
     const parsed = JSON.parse(raw) as Partial<GeneratorState>;
     const installed = Array.isArray(parsed.installed) && parsed.installed.length ? parsed.installed : [defaultResource()];
-    if (!installed.some((item) => item.versionId === DEFAULT_CHECKPOINT.versionId)) installed.unshift(defaultResource());
+    const retired = new Set([1337429, 1408658]);
+    const keptInstalled = installed.filter((item) => !retired.has(item.versionId));
+    if (!keptInstalled.some((item) => item.versionId === DEFAULT_CHECKPOINT.versionId)) keptInstalled.unshift(defaultResource());
     const contentFilter: ContentFilter =
       parsed.contentFilter === 'all' || parsed.contentFilter === 'sfw' || parsed.contentFilter === 'nsfw'
         ? parsed.contentFilter
@@ -326,26 +334,12 @@ export async function hydrateFromDisk() {
           : 'sfw';
     const fresh = initialGenerator();
     const settled = settleSavedPrompts(parsed);
-    state = { ...fresh, ...parsed, ...settled, installed, contentFilter, nsfw: contentFilter !== 'sfw' };
-    if (parsed.studioApplied !== STUDIO_APPLIED) {
-      if (!state.installed.some((item) => item.versionId === ANIME_STUDIO_CHECKPOINT.versionId)) {
-        state.installed = [studioResource(), ...state.installed.map((item) => ({ ...item, isDefault: false }))];
-      }
+    state = { ...fresh, ...parsed, ...settled, installed: keptInstalled, contentFilter, nsfw: contentFilter !== 'sfw' };
+    if (retired.has(state.checkpointId) || !state.installed.some((item) => item.versionId === state.checkpointId)) {
       state = {
         ...state,
-        studioStyle: 'anime',
-        studioApplied: STUDIO_APPLIED,
-        quality: fresh.quality,
-        negative: fresh.negative,
-        sampler: fresh.sampler,
-        steps: fresh.steps,
-        cfg: fresh.cfg,
-        width: fresh.width,
-        height: fresh.height,
-        clipSkip: fresh.clipSkip,
-        hires: false,
-        qualityTags: true,
-        checkpointId: ANIME_STUDIO_CHECKPOINT.versionId,
+        checkpointId: DEFAULT_CHECKPOINT.versionId,
+        ...(state.qualityEdited ? {} : { quality: fresh.quality, negative: fresh.negative, sampler: fresh.sampler, steps: fresh.steps, cfg: fresh.cfg, width: fresh.width, height: fresh.height, clipSkip: fresh.clipSkip }),
       };
     }
     emit();

@@ -25,7 +25,7 @@ from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel, Field
 
 from yume_mesh.generate import generate_mesh
-from yume_server.catalog import cancel_install, delete_version, ensure_default, ensure_jobs_loaded, install_progress, list_installs, list_models, pause_install, restore_models, resume_install, set_default, start_install
+from yume_server.catalog import RETIRED_DEFAULTS, cancel_install, delete_version, ensure_boot_default, ensure_jobs_loaded, install_progress, list_installs, list_models, pause_install, restore_models, resume_install, set_default, start_install
 from yume_server.errors import add_client_report, list_errors, record_error, sanitize
 from yume_server.generate import A1111_SAMPLERS, LoraInstalling, SCHEDULERS, friendly_lora_error, generate_images, loaded_model_name, loaded_version, mark_default_loaded, mock_mode, prepare_loras, release_loaded, start_model, start_use, use_progress
 from yume_server.jobs import cancel as cancel_job
@@ -145,7 +145,7 @@ def _validate(body: GenerateIn) -> None:
 async def lifespan(app: FastAPI):
     async def prepare() -> None:
         try:
-            await asyncio.to_thread(ensure_default)
+            await asyncio.to_thread(ensure_boot_default)
             await asyncio.to_thread(ensure_jobs_loaded)
             await asyncio.to_thread(start_model)
             state["ready"] = True
@@ -337,7 +337,7 @@ def diagnostics(request: Request) -> dict[str, Any]:
     return {
         "checks": [
             {"name": "GPU", "status": "warn" if body["source"] == "mock" else "pass", "detail": body["gpu"]},
-            {"name": "Default model", "status": "pass" if default and "Animagine" in str(default.get("name") or "") else "fail", "detail": (default or {}).get("name") or "missing"},
+            {"name": "Default model", "status": "pass" if default else "fail", "detail": (default or {}).get("name") or "missing"},
             {"name": "Disk", "status": "pass" if disk_free > 2048 else "warn", "detail": f"{disk_free} MB free"},
             {"name": "Installed", "status": "pass", "detail": f"{len(models)} in the cache"},
         ],
@@ -541,7 +541,7 @@ def remove_model(version_id: int, request: Request) -> dict[str, Any]:
         for item in catalog
         if item.get("versionId") != version_id and (item.get("type") or "Checkpoint") == "Checkpoint"
     ]
-    if (target.get("type") or "Checkpoint") == "Checkpoint" and not others:
+    if (target.get("type") or "Checkpoint") == "Checkpoint" and not others and int(version_id) not in RETIRED_DEFAULTS:
         raise HTTPException(status_code=400, detail="Keep at least one checkpoint installed.")
     if was_active:
         release_loaded()

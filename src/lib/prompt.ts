@@ -13,6 +13,7 @@ import {
   traitPrompt,
 } from '@/src/lib/presets';
 import { adultTags, bodyShapeTags, isChildTag, measurementLine } from '@/src/lib/measurements';
+import { isClothesTag } from '@/src/lib/positiveTags';
 import type { AspectId, Character, StyleId } from '@/src/lib/types';
 
 const QUALITY =
@@ -33,14 +34,13 @@ export function characterClause(character: Character): string {
   const bits = [
     hair ? `with ${hair}` : '',
     traitPrompt(EYE_COLORS, character.eyeColor, (text) => `${text} eyes`),
-    traitPrompt(OUTFITS, character.outfit, (text) => `wearing ${text}`),
     traitPrompt(EXPRESSIONS, character.expression, (text) => text),
     traitPrompt(POSES, character.pose, (text) => text),
     traitPrompt(SETTINGS, character.setting, (text) => `in ${text}`),
     traitPrompt(LIGHTING, character.lighting, (text) => `under ${text}`),
     character.notes?.trim() ?? '',
   ].filter(Boolean);
-  const shape = [...bodyShapeTags(character.measurements), ...(character.bodyTags ?? [])].filter((tag) => !isChildTag(tag));
+  const shape = [...bodyShapeTags(character.measurements), ...(character.bodyTags ?? [])].filter((tag) => !isChildTag(tag) && !isClothesTag(tag));
   if (!bits.length && !shape.length) return '';
   return `Character: an anime character ${[...bits, ...shape, ...adultTags()].join(', ')}`;
 }

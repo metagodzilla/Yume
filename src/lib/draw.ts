@@ -8,6 +8,7 @@ import { renderDemoFrames } from '@/src/lib/render';
 import { classifyGatewayInput, generateUrl, saladErrorMessage } from '@/src/lib/salad';
 import { expandSeeds } from '@/src/lib/seeds';
 import { normalizeSaladKey } from '@/src/lib/saladCloud';
+import { characterOutfitTags, isClothesTag } from '@/src/lib/positiveTags';
 import type { Character, SamplerId } from '@/src/lib/types';
 
 export function embeddingTokens(state: GeneratorState): string[] {
@@ -68,6 +69,54 @@ export function triggerGroups(triggers: string[] | undefined): string[][] {
   return (triggers ?? []).map((group) => splitPromptTags(group)).filter((group) => group.length > 0);
 }
 
+/** Prefer a trained-word group that does not force an outfit. Otherwise keep the name and drop the clothes. */
+export function pickCleanTriggerGroup(groups: string[][]): string[] {
+  const scored = groups.map((group) => {
+    const clean = group.filter((tag) => !isClothesTag(tag));
+    return { clean, clothes: group.length - clean.length };
+  });
+  const free = scored.filter((item) => item.clothes === 0 && item.clean.length > 0);
+  const pool = free.length ? free : scored.filter((item) => item.clean.length > 0);
+  if (!pool.length) return [];
+  pool.sort((left, right) => left.clean.length - right.clean.length || left.clothes - right.clothes);
+  return pool[0]!.clean;
+}
+
+export function defaultOutfitTags(character: Character | null | undefined, loras: { triggers?: string[] }[]): string[] {
+  const tags = [...characterOutfitTags(character)];
+  const seen = new Set(tags.map((tag) => tag.toLowerCase()));
+  for (const lora of loras) {
+    for (const group of triggerGroups(lora.triggers)) {
+      for (const tag of group) {
+        const key = normTag(tag);
+        if (!key || !isClothesTag(tag) || seen.has(key)) continue;
+        seen.add(key);
+        tags.push(tag.trim());
+      }
+    }
+  }
+  return tags;
+}
+
+export function outfitNegative(base: string, defaults: string[], clothes: string): string {
+  const used = new Set(splitPromptTags(clothes).map(normTag));
+  const existing = new Set(
+    splitPromptTags(base).map((tag) => normTag(tag.replace(/^\(+/, '').replace(/\)+$/, '').split(':')[0] || '')),
+  );
+  const adds: string[] = [];
+  for (const tag of defaults) {
+    const key = normTag(tag);
+    if (!key || used.has(key) || existing.has(key)) continue;
+    existing.add(key);
+    adds.push(`(${tag}:0.4)`);
+  }
+  return [base.trim(), ...adds].filter(Boolean).join(', ');
+}
+
+export function sentNegative(state: GeneratorState, character: Character | null = null): string {
+  return outfitNegative(state.negative, defaultOutfitTags(character, state.loras), state.clothes || '');
+}
+
 export function loraTriggerTags(
   lora: { triggers?: string[]; triggerGroup?: number },
   match: { triggers?: string[] } | undefined,
@@ -76,7 +125,8 @@ export function loraTriggerTags(
 ): string[] {
   const own = triggerGroups(lora.triggers);
   const groups = own.length ? own : triggerGroups(match?.triggers);
-  const group = groups[lora.triggerGroup ?? 0] ?? groups[0] ?? [];
+  const selected = groups[lora.triggerGroup ?? 0] ?? groups[0] ?? [];
+  const group = selected.some((tag) => isClothesTag(tag)) ? pickCleanTriggerGroup(groups) : selected.filter((tag) => !isClothesTag(tag));
   const tags: string[] = [];
   for (const tag of group) {
     const key = normTag(tag);
@@ -92,7 +142,7 @@ export function composeGenerationPrompt(state: GeneratorState, characterText = '
   const checkpoint = state.installed.find((item) => item.versionId === state.checkpointId);
   const style = state.studioStyle && state.studioStyle !== 'off' ? studioSuffix(state.studioStyle) : '';
   const typed = new Set(
-    [state.prompt, positiveText(state), state.extraPrompt || ''].flatMap((part) => splitPromptTags(part).map(normTag)),
+    [state.prompt, state.clothes || '', positiveText(state), state.extraPrompt || ''].flatMap((part) => splitPromptTags(part).map(normTag)),
   );
   const reserved = new Set<string>([
     ...typed,
@@ -114,19 +164,19 @@ export function composeGenerationPrompt(state: GeneratorState, characterText = '
     characterText.trim(),
     embeddingTokens(state).join(', '),
   ];
-  const head = [state.prompt.trim(), loraTriggers, positiveText(state), (state.extraPrompt || '').trim(), style, ...afterStyle]
+  const head = [state.prompt.trim(), loraTriggers, (state.clothes || '').trim(), positiveText(state), (state.extraPrompt || '').trim(), style, ...afterStyle]
     .filter(Boolean)
     .join(', ');
   const quality = (state.quality || '').trim();
   return [head, quality].filter(Boolean).join(', ');
 }
 
-export function generationParams(state: GeneratorState, prompt: string, seed: number): GenerationParams {
+export function generationParams(state: GeneratorState, prompt: string, seed: number, character: Character | null = null): GenerationParams {
   const checkpoint = state.installed.find((item) => item.versionId === state.checkpointId);
   const loras = namedLoras(state, prompt);
   return {
     prompt,
-    negative: state.negative,
+    negative: sentNegative(state, character),
     steps: state.steps,
     sampler: state.sampler,
     cfg: state.cfg,
@@ -190,11 +240,12 @@ export function buildSaladGenerateBody(
   seed: number,
   initPng?: Uint8Array | null,
   maskPng?: Uint8Array | null,
+  character: Character | null = null,
 ): SaladGenerateBody {
-  const params = generationParams(state, prompt, seed);
+  const params = generationParams(state, prompt, seed, character);
   return {
     prompt,
-    negative_prompt: state.negative,
+    negative_prompt: sentNegative(state),
     width: state.width,
     height: state.height,
     count: state.count,
@@ -250,7 +301,7 @@ export async function drawFrames(input: {
   maskPng?: Uint8Array | null;
 }): Promise<{ pngs: Uint8Array[]; parameters: string; seeds: number[]; warning?: string }> {
   const seeds = input.seed < 0 ? expandSeeds(Math.floor(Math.random() * 2_147_483_647), input.state.count) : expandSeeds(input.seed, input.state.count);
-  const params = generationParams(input.state, input.prompt, seeds[0] ?? 0);
+  const params = generationParams(input.state, input.prompt, seeds[0] ?? 0, input.character);
   const parameters = formatParameters(params);
   if (input.provider !== 'salad') {
     const pngs = renderDemoFrames({
@@ -293,7 +344,7 @@ export async function drawFrames(input: {
         'X-Api-Key': apiKey,
         'Salad-Api-Key': apiKey,
       },
-      body: JSON.stringify(buildSaladGenerateBody(input.state, input.prompt, input.seed, input.initPng, input.maskPng)),
+      body: JSON.stringify(buildSaladGenerateBody(input.state, input.prompt, input.seed, input.initPng, input.maskPng, input.character)),
     });
   } catch (error) {
     const aborted = error instanceof Error && error.name === 'AbortError';

@@ -160,25 +160,10 @@ def lora_directories() -> list[str]:
 
 
 def boot_checkpoint() -> dict[str, Any]:
-    """The catalog default, or Animagine Opt when that file is not on disk."""
-    from yume_server.catalog import ensure_opt_default, list_models
+    """Persisted catalog default, or YUME_DEFAULT_VERSION_ID, otherwise WAI-illustrious."""
+    from yume_server.catalog import ensure_boot_default
 
-    ensure_opt_default()
-    models = [item for item in list_models() if (item.get("type") or "Checkpoint") == "Checkpoint"]
-    chosen = next((item for item in models if item.get("isDefault")), None) or next(
-        (item for item in models if item.get("versionId") == DEFAULT_VERSION),
-        None,
-    )
-    if chosen is None:
-        return ensure_opt_default()
-    version = int(chosen.get("versionId") or 0)
-    path = str(chosen.get("path") or "")
-    diffusers = chosen.get("source") == "diffusers" or (version == DEFAULT_VERSION and not path)
-    if diffusers or (path and os.path.exists(path) and os.path.getsize(path) > 1_000_000) or version == 1408658:
-        return chosen
-    if path and not mock_mode():
-        _LOG.warning("default checkpoint %s is not on disk; loading Animagine Opt", chosen.get("name"))
-    return ensure_opt_default()
+    return ensure_boot_default()
 
 
 def cache_dir() -> str:
@@ -239,29 +224,23 @@ def start_model() -> None:
         return
 
     def _once() -> None:
+        from yume_server.catalog import materialize_checkpoint
+
         mark("downloading", "Downloading the fixed VAE")
         ensure_fixed_vae()
         ensure_anime_upscaler()
-        name = str(record.get("name") or "Animagine XL 4.0")
+        name = str(record.get("name") or "WAI-illustrious-SDXL")
         path = str(record.get("path") or "")
-        if version == 1408658:
-            from yume_server.catalog import materialize_opt
-
-            mark("downloading", "Downloading Animagine Opt")
-            record = materialize_opt()
-            mark("loading", "Loading Animagine XL 4.0 Opt")
-            _load_single_file(record)
-            note_loaded(version)
-            mark("ready", "Ready", done=1, total=1)
-            return
         diffusers = record.get("source") == "diffusers" or (version == DEFAULT_VERSION and not path)
         if diffusers:
             mark("downloading", "Downloading model")
             _load_default_diffusers()
         else:
+            mark("downloading", f"Downloading {name}")
+            saved = materialize_checkpoint(dict(record))
             mark("loading", f"Loading {name}")
-            _load_single_file(record)
-        note_loaded(version)
+            _load_single_file(saved)
+        note_loaded(int(record.get("versionId") or version))
         mark("ready", "Ready", done=1, total=1)
 
     retry_startup(_once)

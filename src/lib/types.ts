@@ -89,6 +89,8 @@ export type Character = {
   measurements?: import('@/src/lib/measurements').Measurements | null;
   /** Adult body-shape tags from a photo or from the measurements. */
   bodyTags?: string[];
+  /** Outfit tags for this character. A non-empty value replaces the default clothes. */
+  clothesPrompt?: string;
   fromImage?: boolean;
   /** Front photo. Different views and 3D use this one. */
   referenceUri?: string;
