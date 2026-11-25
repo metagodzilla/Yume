@@ -135,6 +135,14 @@ export default function TurnaroundScreen() {
       keptFront && !angles.some((angle) => angle.id === 'front') ? await readPng(keptFront.imageUri) : null;
     const warnings: string[] = [];
     const fresh = new Map<TurnaroundAngle, TurnaroundView>();
+    let photo: Uint8Array | null = null;
+    if (who.referenceUri) {
+      try {
+        photo = await readPng(who.referenceUri);
+      } catch {
+        photo = null;
+      }
+    }
 
     for (const angle of angles) {
       setBusy(`Drawing ${angle.label}…`);
@@ -163,7 +171,7 @@ export default function TurnaroundScreen() {
         platform: Platform.OS,
         variant: TURNAROUND_ANGLES.findIndex((item) => item.id === angle.id),
         angle: angle.id,
-        referencePng: angle.id === 'front' ? null : frontBytes,
+        referencePng: angle.id === 'front' ? photo : frontBytes,
       });
       const uri = await persistPng(`${who.id}-${angle.id}-${Date.now()}.png`, result.pngs[0]);
       const view: TurnaroundView = { angle: angle.id, label: angle.label, prompt, imageUri: uri };

@@ -8,7 +8,7 @@ import { useState } from 'react';
 import { confirmAction } from '@/src/lib/confirm';
 import { characterFromAppearance, pickLocalImage, requestAppearance } from '@/src/lib/fromImage';
 import { characterSummary } from '@/src/lib/prompt';
-import { readSaladKey } from '@/src/lib/storage';
+import { persistPng, readSaladKey } from '@/src/lib/storage';
 import { useStudio } from '@/src/studio';
 import { colors, font } from '@/src/theme';
 
@@ -33,6 +33,7 @@ export default function CastScreen() {
         png: picked.bytes,
       });
       const character = characterFromAppearance(appearance);
+      character.referenceUri = await persistPng(`${character.id}-ref.png`, picked.bytes);
       await commitCharacter(character);
       setTagStatus('Saved to the cast. Add three sizes on her profile if you want.');
       router.push({ pathname: '/character', params: { id: character.id } });
