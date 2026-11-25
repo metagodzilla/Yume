@@ -229,6 +229,16 @@ export type SaladGenerateBody = {
   hires_steps: number;
   mode: GeneratorState['mode'];
   strength: number;
+  pose: boolean;
+  pose_strength: number;
+  pose_fit: boolean;
+  pose_body: 'petite' | 'average' | 'tall';
+  pose_height_cm: number | null;
+  pose_bust_cm: number | null;
+  pose_hip_cm: number | null;
+  copy_picture: boolean;
+  style: boolean;
+  style_strength: number;
   reference_image: string | null;
   mask: string | null;
   prediction_type: 'epsilon' | 'v_prediction';
@@ -270,8 +280,18 @@ export function buildSaladGenerateBody(
     hires_denoise: state.hiresDenoise,
     hires_upscaler: state.hiresUpscaler,
     hires_steps: state.hiresSteps,
-    mode: state.mode,
-    strength: state.denoise,
+    mode: state.referenceCopy ? 'img2img' : state.mode,
+    strength: state.referenceDenoise ?? 0.6,
+    pose: Boolean(state.referencePose) && Boolean(initPng),
+    pose_strength: state.referencePoseStrength ?? 0.85,
+    pose_fit: state.referenceFit !== false,
+    pose_body: state.referenceBody || 'average',
+    pose_height_cm: character?.measurements?.heightCm ?? null,
+    pose_bust_cm: character?.measurements?.bustCm ?? null,
+    pose_hip_cm: character?.measurements?.hipCm ?? null,
+    copy_picture: Boolean(state.referenceCopy) && Boolean(initPng),
+    style: Boolean(state.referenceStyle) && Boolean(initPng),
+    style_strength: state.referenceStyleStrength ?? 0.55,
     reference_image: initPng ? bytesToBase64(initPng) : null,
     mask: maskPng ? bytesToBase64(maskPng) : null,
     prediction_type: state.vPrediction ? 'v_prediction' : 'epsilon',

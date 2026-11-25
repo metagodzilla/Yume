@@ -629,13 +629,30 @@ def _clear_loras(pipe: Any, adapters: list[str]) -> None:
             _LOG.warning("could not unload LoRA adapters %s", adapters)
 
 
+def _reference_flags(body: Any) -> tuple[bool, bool, bool]:
+    has_image = bool(getattr(body, "reference_image", None))
+    pose = bool(getattr(body, "pose", False)) and has_image
+    copy = bool(getattr(body, "copy_picture", False)) and has_image
+    style = bool(getattr(body, "style", False)) and has_image
+    if has_image and not (pose or copy or style):
+        flag = os.environ.get("YUME_IP_ADAPTER", "").strip().lower()
+        if flag in {"1", "true", "yes"}:
+            style = True
+        elif str(getattr(body, "mode", "") or "") == "img2img":
+            copy = True
+    return pose, copy, style
+
+
 def _consistency(body: Any) -> str:
-    if not getattr(body, "reference_image", None):
-        return "txt2img"
-    flag = os.environ.get("YUME_IP_ADAPTER", "").strip().lower()
-    if flag in {"1", "true", "yes"}:
-        return "ip-adapter"
-    return "img2img"
+    pose, copy, style = _reference_flags(body)
+    parts = []
+    if pose:
+        parts.append("pose")
+    if copy:
+        parts.append("img2img")
+    if style:
+        parts.append("style")
+    return "+".join(parts) or "txt2img"
 
 
 def _seed_list(body: Any) -> list[int]:
@@ -818,23 +835,99 @@ def _draw_seeds(
         else:
             common["prompt"] = body.prompt
             common["negative_prompt"] = body.negative_prompt or None
-        if consistency == "ip-adapter":
-            if not getattr(pipe, "_yume_ip", False):
-                pipe.load_ip_adapter("h94/IP-Adapter", subfolder="sdxl_models", weight_name="ip-adapter_sdxl.bin")
-                pipe.set_ip_adapter_scale(0.6)
-                pipe._yume_ip = True
-            result = pipe(**common, width=body.width, height=body.height, ip_adapter_image=_open_reference(body))
-        elif consistency == "img2img":
-            from diffusers import StableDiffusionXLImg2ImgPipeline
-
-            img2img = StableDiffusionXLImg2ImgPipeline(**pipe.components)
-            result = img2img(**common, image=_open_reference(body), strength=max(0.05, min(0.95, strength)))
+        pose_on, copy_on, style_on = _reference_flags(body)
+        if pose_on or copy_on or style_on:
+            result = _draw_reference(pipe, body, common, strength, pose_on, copy_on, style_on)
         else:
             result = _draw_with_hires(pipe, common, body)
         buffer = BytesIO()
         result.images[0].save(buffer, format="PNG")
         images.append(base64.b64encode(buffer.getvalue()).decode("ascii"))
     return images
+
+
+def _pose_image(body: Any) -> Any:
+    from io import BytesIO
+
+    from PIL import Image
+
+    from yume_server.reference import pose_preview
+
+    preview = pose_preview(
+        base64.b64decode(body.reference_image),
+        fit=bool(getattr(body, "pose_fit", True)),
+        size=str(getattr(body, "pose_body", "average") or "average"),
+        width=int(body.width),
+        height=int(body.height),
+        height_cm=getattr(body, "pose_height_cm", None),
+        bust_cm=getattr(body, "pose_bust_cm", None),
+        hip_cm=getattr(body, "pose_hip_cm", None),
+    )
+    return Image.open(BytesIO(base64.b64decode(preview["skeleton"]))).convert("RGB")
+
+
+def _attach_style(pipe: Any, body: Any) -> None:
+    from yume_server.reference import IP_REPO, IP_SUBFOLDER, IP_WEIGHT, ensure_reference_weights, style_scale
+
+    ensure_reference_weights()
+    if not getattr(pipe, "_yume_style", False):
+        pipe.load_ip_adapter(IP_REPO, subfolder=IP_SUBFOLDER, weight_name=IP_WEIGHT)
+        pipe._yume_style = True
+    strength = float(getattr(body, "style_strength", 0.55) or 0.55)
+    try:
+        pipe.set_ip_adapter_scale(style_scale(strength))
+    except Exception:
+        pipe.set_ip_adapter_scale(max(0.0, min(1.0, strength)) * 0.7)
+
+
+def _draw_reference(pipe: Any, body: Any, common: dict[str, Any], strength: float, pose_on: bool, copy_on: bool, style_on: bool) -> Any:
+    from yume_server.reference import CONTROLNET_REPO, ensure_reference_weights
+
+    image = _open_reference(body)
+    denoise = max(0.05, min(0.95, float(getattr(body, "strength", strength) or strength)))
+    pose_scale = max(0.0, min(1.5, float(getattr(body, "pose_strength", 0.85) or 0.85)))
+    control = _pose_image(body) if pose_on else None
+    if pose_on:
+        ensure_reference_weights()
+        from diffusers import ControlNetModel, StableDiffusionXLControlNetImg2ImgPipeline, StableDiffusionXLControlNetPipeline
+
+        controlnet = ControlNetModel.from_pretrained(CONTROLNET_REPO, torch_dtype=pipe.unet.dtype)
+        if copy_on:
+            runner = StableDiffusionXLControlNetImg2ImgPipeline(**pipe.components, controlnet=controlnet)
+            if style_on:
+                _attach_style(runner, body)
+            result = runner(
+                **common,
+                image=image,
+                control_image=control,
+                controlnet_conditioning_scale=pose_scale,
+                strength=denoise,
+                **({"ip_adapter_image": image} if style_on else {}),
+            )
+        else:
+            runner = StableDiffusionXLControlNetPipeline(**pipe.components, controlnet=controlnet)
+            if style_on:
+                _attach_style(runner, body)
+            result = runner(
+                **common,
+                image=control,
+                controlnet_conditioning_scale=pose_scale,
+                width=body.width,
+                height=body.height,
+                **({"ip_adapter_image": image} if style_on else {}),
+            )
+        return result
+    if copy_on:
+        from diffusers import StableDiffusionXLImg2ImgPipeline
+
+        runner = StableDiffusionXLImg2ImgPipeline(**pipe.components)
+        if style_on:
+            _attach_style(runner, body)
+        return runner(**common, image=image, strength=denoise, **({"ip_adapter_image": image} if style_on else {}))
+    if style_on:
+        _attach_style(pipe, body)
+        return pipe(**common, width=body.width, height=body.height, ip_adapter_image=image)
+    return pipe(**common, width=body.width, height=body.height)
 
 
 def _draw_with_hires(pipe: Any, common: dict[str, Any], body: Any) -> Any:

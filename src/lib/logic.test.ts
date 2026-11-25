@@ -36,6 +36,7 @@ import { redactValue } from '@/src/lib/reportText';
 import { CREATE_PROMPT_FIELDS } from '@/src/lib/createFields';
 import { describeParts, describeToTags, isClothesTag, keepManualTags, namedPeople, settleSavedPrompts, supportTags } from '@/src/lib/positiveTags';
 import { defaultOutfitTags, pickCleanTriggerGroup, sentNegative } from '@/src/lib/draw';
+import { bodySizeFromHeight, referenceGenerateFields } from '@/src/lib/referencePicture';
 import { buildSaladGenerateBody, composeGenerationPrompt, sentPositiveText } from '@/src/lib/draw';
 import { addLora, getGenerator, patchGenerator, resetBuiltPrompt, resetModelDefaults, resetQualityTags, type GeneratorState } from '@/src/lib/genstore';
 import { downloadButtons, downloadKind, downloadPercent, formatEta, formatSpeed, RECONNECTING } from '@/src/lib/downloads';
@@ -695,6 +696,14 @@ const previewState = {
   positiveAuto: true,
   clothes: '',
   clothesAuto: true,
+  referencePose: false,
+  referencePoseStrength: 0.85,
+  referenceFit: true,
+  referenceBody: 'average' as const,
+  referenceCopy: false,
+  referenceDenoise: 0.6,
+  referenceStyle: false,
+  referenceStyleStrength: 0.55,
   extraPrompt: 'shiny eyes',
   vPrediction: false,
   studioStyle: 'off',
@@ -804,6 +813,9 @@ assert(!characterClause(outfitCharacter).includes('school uniform'), 'identity c
 const outfitNegative = sentNegative(outfitState, outfitCharacter);
 assert(outfitNegative.includes('school uniform') && outfitNegative.includes('pleated skirt') && outfitNegative.includes('lowres') && !outfitNegative.includes('red bikini'), `old clothes move to negative: ${outfitNegative}`);
 assert(pickCleanTriggerGroup([['momo', 'school uniform', 'pleated skirt'], ['momo']]).join(',') === 'momo', 'lora trigger group without the outfit wins');
+assert(bodySizeFromHeight(150) === 'petite' && bodySizeFromHeight(164) === 'average' && bodySizeFromHeight(182) === 'tall', 'height picks a body size');
+const referenceFields = referenceGenerateFields({ pose: true, poseStrength: 0.85, fit: true, body: 'tall', copy: true, denoise: 0.6, style: true, styleStrength: 0.55, heightCm: 182 });
+assert(referenceFields.pose === true && referenceFields.copy_picture === true && referenceFields.style === true && referenceFields.pose_fit === true && referenceFields.strength === 0.6 && referenceFields.pose_body === 'tall', 'reference toggles travel with the generate request');
 assert(defaultOutfitTags(outfitCharacter, outfitState.loras).includes('pleated skirt'), 'default outfit is remembered from the character and the lora');
 const keptPositive = keepManualTags('detailed eyes, detailed face', 'detailed eyes, shiny eyes', 'detailed eyes', 'edited');
 hasTag(keptPositive, 'shiny eyes');

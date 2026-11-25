@@ -1,6 +1,7 @@
 import * as Clipboard from 'expo-clipboard';
 import { router } from 'expo-router';
 import { useEffect, useRef, useState } from 'react';
+import { Image } from 'expo-image';
 import { Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
@@ -30,7 +31,10 @@ import { ensureSelectedLoras } from '@/src/lib/ensureLoras';
 import { friendlyLoraMessage } from '@/src/lib/loraGate';
 import { endpointDiffersFromLive, LIVE_GATEWAY_URL, normalizeEndpoint } from '@/src/lib/salad';
 import { chooseSeeds } from '@/src/lib/seeds';
-import { persistPng, readApiKey, readCivitaiToken, readSaladKey } from '@/src/lib/storage';
+import { persistPng, readApiKey, readCivitaiToken, readPng, readSaladKey } from '@/src/lib/storage';
+import { pickLocalImages } from '@/src/lib/fromImage';
+import { bytesToBase64 } from '@/src/lib/base64';
+import { bodySizeFromHeight, type BodySize } from '@/src/lib/referencePicture';
 import { uid } from '@/src/lib/id';
 import { useStudio } from '@/src/studio';
 import { colors, font } from '@/src/theme';
@@ -126,6 +130,9 @@ export default function GenerateScreen() {
     void import('@/src/lib/genstore').then(({ hydrateFromDisk }) => hydrateFromDisk());
   }, []);
 
+  const [referenceUri, setReferenceUri] = useState<string | null>(null);
+  const [skeleton, setSkeleton] = useState<string | null>(null);
+  const [poseNote, setPoseNote] = useState<string | null>(null);
   const clothesOwner = useRef<string | null>(null);
   useEffect(() => {
     if (!character) {
@@ -135,8 +142,60 @@ export default function GenerateScreen() {
     if (clothesOwner.current === character.id) return;
     clothesOwner.current = character.id;
     const seeded = character.clothesPrompt != null ? character.clothesPrompt : defaultOutfitTags(character, gen.loras).join(', ');
-    patchGenerator({ clothes: seeded, clothesAuto: false, autoClothes: seeded });
+    patchGenerator({ clothes: seeded, clothesAuto: false, autoClothes: seeded, referenceBody: bodySizeFromHeight(character.measurements?.heightCm) });
   }, [character?.id]);
+
+  useEffect(() => {
+    if (!gen.referencePose || !referenceUri) {
+      setSkeleton(null);
+      return undefined;
+    }
+    let live = true;
+    const timer = setTimeout(() => {
+      void (async () => {
+        try {
+          const bytes = await readPng(referenceUri);
+          const key = await readSaladKey();
+          const endpoint = normalizeEndpoint(studio.settings.saladEndpoint);
+          if (!endpoint || !key) {
+            if (live) setPoseNote('Connect the cloud to preview the fitted skeleton.');
+            return;
+          }
+          const response = await fetch(`${endpoint}/reference/pose`, {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              Authorization: `Bearer ${key}`,
+              'Salad-Api-Key': key,
+              'X-Api-Key': key,
+            },
+            body: JSON.stringify({
+              image: bytesToBase64(bytes),
+              width: gen.width,
+              height: gen.height,
+              fit: gen.referenceFit,
+              body: gen.referenceBody,
+              height_cm: character?.measurements?.heightCm ?? null,
+              bust_cm: character?.measurements?.bustCm ?? null,
+              hip_cm: character?.measurements?.hipCm ?? null,
+            }),
+          });
+          const payload = (await response.json()) as { skeleton?: string; body?: string; detail?: string };
+          if (!response.ok) throw new Error(payload.detail || 'The pose preview failed.');
+          if (live && payload.skeleton) {
+            setSkeleton(`data:image/png;base64,${payload.skeleton}`);
+            setPoseNote(gen.referenceFit ? `Fitted to a ${payload.body || gen.referenceBody} body.` : 'Original proportions, fitted to the frame.');
+          }
+        } catch (caught) {
+          if (live) setPoseNote(caught instanceof Error ? caught.message : 'The pose preview failed.');
+        }
+      })();
+    }, 300);
+    return () => {
+      live = false;
+      clearTimeout(timer);
+    };
+  }, [gen.referencePose, gen.referenceFit, gen.referenceBody, gen.width, gen.height, referenceUri, character?.id, character?.measurements?.heightCm, character?.measurements?.bustCm, character?.measurements?.hipCm, studio.settings.saladEndpoint]);
 
   async function useWaiIllustrious(offer: 'switch' | 'install') {
     const installed = gen.installed.find((item) => item.type === 'Checkpoint' && baseFamily(item.baseModel) === 'Illustrious');
@@ -201,6 +260,7 @@ export default function GenerateScreen() {
           });
         }
       }
+      const initPng = referenceUri && (gen.referencePose || gen.referenceCopy || gen.referenceStyle) ? await readPng(referenceUri) : null;
       const result = await drawFrames({
         state: gen,
         prompt,
@@ -209,6 +269,7 @@ export default function GenerateScreen() {
         endpoint: normalizeEndpoint(studio.settings.saladEndpoint),
         apiKey: saladKey,
         character,
+        initPng,
       });
       const id = uid('gen');
       const imageUris: string[] = [];
@@ -650,6 +711,55 @@ export default function GenerateScreen() {
           autoCapitalize="none"
           style={styles.input}
         />
+        <Text style={styles.label}>Reference picture</Text>
+        <Pressable
+          testID="reference-pick"
+          style={styles.chipButton}
+          onPress={() => {
+            void (async () => {
+              try {
+                const picked = await pickLocalImages(1);
+                const photo = picked?.[0];
+                if (!photo) return;
+                setReferenceUri(await persistPng(`reference-${Date.now()}.jpg`, photo.bytes));
+                setError(null);
+              } catch (caught) {
+                setError(caught instanceof Error ? caught.message : 'The photo gallery did not open.');
+              }
+            })();
+          }}>
+          <Text style={styles.chipText}>{referenceUri ? 'Change reference picture' : 'Choose reference picture'}</Text>
+        </Pressable>
+        {referenceUri ? <Image source={{ uri: referenceUri }} style={styles.reference} contentFit="cover" /> : null}
+        <Pressable testID="reference-pose" onPress={() => patchGenerator({ referencePose: !gen.referencePose })}>
+          <Text style={styles.link}>{gen.referencePose ? 'Copy pose on' : 'Copy pose off'}</Text>
+        </Pressable>
+        {gen.referencePose ? (
+          <View style={styles.stack}>
+            <Strength testID="pose-strength" value={gen.referencePoseStrength ?? 0.85} onChange={(referencePoseStrength) => patchGenerator({ referencePoseStrength })} />
+            <Pressable testID="pose-fit" onPress={() => patchGenerator({ referenceFit: !gen.referenceFit })}>
+              <Text style={styles.link}>{gen.referenceFit ? "Fit to my character's body" : 'Fit to my character off'}</Text>
+            </Pressable>
+            <View style={styles.row}>
+              {(['petite', 'average', 'tall'] as BodySize[]).map((size) => (
+                <Pressable key={size} testID={`pose-body-${size}`} onPress={() => patchGenerator({ referenceBody: size })} style={[styles.chipButton, gen.referenceBody === size && styles.chipOn]}>
+                  <Text style={styles.chipText}>{size}</Text>
+                </Pressable>
+              ))}
+            </View>
+            {skeleton ? <Image testID="pose-preview" source={{ uri: skeleton }} style={styles.reference} contentFit="contain" /> : null}
+            {poseNote ? <Text style={styles.hint}>{poseNote}</Text> : null}
+          </View>
+        ) : null}
+        <Pressable testID="reference-copy" onPress={() => patchGenerator({ referenceCopy: !gen.referenceCopy })}>
+          <Text style={styles.link}>{gen.referenceCopy ? 'Copy whole picture on' : 'Copy whole picture off'}</Text>
+        </Pressable>
+        {gen.referenceCopy ? <Strength testID="copy-denoise" value={gen.referenceDenoise ?? 0.6} onChange={(referenceDenoise) => patchGenerator({ referenceDenoise })} /> : null}
+        <Pressable testID="reference-style" onPress={() => patchGenerator({ referenceStyle: !gen.referenceStyle })}>
+          <Text style={styles.link}>{gen.referenceStyle ? 'Copy art style on' : 'Copy art style off'}</Text>
+        </Pressable>
+        {gen.referenceStyle ? <Strength testID="style-strength" value={gen.referenceStyleStrength ?? 0.55} onChange={(referenceStyleStrength) => patchGenerator({ referenceStyleStrength })} /> : null}
+        <Text style={styles.hint}>Pose, the whole picture, and art style can be on together. Clothes, the character, and the LoRAs still apply. The skeleton is the pose after it is fitted.</Text>
         <Pressable testID="gen-generate" style={styles.go} disabled={busy} onPress={() => void generate()}>
           <Text style={styles.goText}>{busy ? 'Drawing…' : `Generate ${gen.count}`}</Text>
         </Pressable>
@@ -687,6 +797,21 @@ export default function GenerateScreen() {
         ) : null}
       </ScrollView>
     </SafeAreaView>
+  );
+}
+
+function Strength({ value, onChange, testID }: { value: number; onChange: (next: number) => void; testID: string }) {
+  const shown = Math.round(value * 100) / 100;
+  return (
+    <View style={styles.row}>
+      <Pressable testID={`${testID}-down`} onPress={() => onChange(Math.max(0.05, Math.round((shown - 0.05) * 100) / 100))}>
+        <Text style={styles.link}>−</Text>
+      </Pressable>
+      <Text testID={testID} style={styles.hint}>{shown.toFixed(2)}</Text>
+      <Pressable testID={`${testID}-up`} onPress={() => onChange(Math.min(1, Math.round((shown + 0.05) * 100) / 100))}>
+        <Text style={styles.link}>+</Text>
+      </Pressable>
+    </View>
   );
 }
 
@@ -743,6 +868,8 @@ const styles = StyleSheet.create({
     textAlignVertical: 'top',
   },
   hint: { color: colors.faint, fontFamily: font.semibold, fontSize: 13, lineHeight: 18 },
+  stack: { gap: 8 },
+  reference: { width: '100%', height: 220, borderRadius: 12, backgroundColor: colors.ink },
   row: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, alignItems: 'center' },
   input: {
     borderRadius: 12,

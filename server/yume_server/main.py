@@ -67,6 +67,17 @@ class MeshIn(BaseModel):
     seed: int | None = None
 
 
+class PoseIn(BaseModel):
+    image: str = Field(min_length=1)
+    width: int = 832
+    height: int = 1216
+    fit: bool = True
+    body: str = "average"
+    height_cm: float | None = None
+    bust_cm: float | None = None
+    hip_cm: float | None = None
+
+
 class ThreeDIn(BaseModel):
     image: str = Field(min_length=1)
     views: list[dict[str, str]] = []
@@ -85,8 +96,18 @@ class GenerateIn(BaseModel):
     model: str | None = None
     loras: list[LoraIn] = []
     reference_image: str | None = None
-    strength: float = 0.45
+    strength: float = 0.6
     mode: str = "txt2img"
+    pose: bool = False
+    pose_strength: float = 0.85
+    pose_fit: bool = True
+    pose_body: str = "average"
+    pose_height_cm: float | None = None
+    pose_bust_cm: float | None = None
+    pose_hip_cm: float | None = None
+    copy_picture: bool = False
+    style: bool = False
+    style_strength: float = 0.55
     clip_skip: int = 2
     model_name: str | None = None
     model_hash: str | None = None
@@ -589,6 +610,30 @@ def choose_default(body: DefaultIn, request: Request) -> dict[str, Any]:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.post("/reference/pose")
+def reference_pose(body: PoseIn, request: Request) -> dict[str, Any]:
+    _check_key(request)
+    import base64
+
+    from yume_server.reference import pose_preview
+
+    try:
+        raw = base64.b64decode(body.image, validate=False)
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail="The reference picture could not be read.") from exc
+    preview = pose_preview(
+        raw,
+        fit=body.fit,
+        size=body.body,
+        width=body.width,
+        height=body.height,
+        height_cm=body.height_cm,
+        bust_cm=body.bust_cm,
+        hip_cm=body.hip_cm,
+    )
+    return preview
 
 
 @app.post("/generate")

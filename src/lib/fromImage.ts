@@ -190,16 +190,16 @@ async function imagesFromAssets(assets: { uri: string; base64?: string | null; f
   );
 }
 
-export async function pickLocalImages(): Promise<PickedImage[] | null> {
+export async function pickLocalImages(limit = REFERENCE_LIMIT): Promise<PickedImage[] | null> {
   const { Platform } = await import('react-native');
   if (Platform.OS === 'web' && typeof document !== 'undefined') {
     return new Promise((resolve, reject) => {
       const input = document.createElement('input');
       input.type = 'file';
       input.accept = 'image/png,image/jpeg,image/*';
-      input.multiple = true;
+      input.multiple = limit > 1;
       input.onchange = () => {
-        const files = [...(input.files ?? [])].slice(0, REFERENCE_LIMIT);
+        const files = [...(input.files ?? [])].slice(0, limit);
         if (!files.length) {
           resolve(null);
           return;
@@ -219,8 +219,8 @@ export async function pickLocalImages(): Promise<PickedImage[] | null> {
   const ImagePicker = await import('expo-image-picker');
   const options = {
     mediaTypes: ['images'] as ('images')[],
-    allowsMultipleSelection: true,
-    selectionLimit: REFERENCE_LIMIT,
+    allowsMultipleSelection: limit > 1,
+    selectionLimit: limit,
     quality: 0.5,
     base64: false,
     legacy: false,
