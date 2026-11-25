@@ -1,6 +1,6 @@
 {
   "name": "yume",
-  "version": "1.5.3",
+  "version": "1.5.4",
   "main": "expo-router/entry",
   "dependencies": {
     "@expo-google-fonts/mochiy-pop-one": "^0.4.1",

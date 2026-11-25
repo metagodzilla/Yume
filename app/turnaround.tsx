@@ -17,7 +17,7 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { saveImageToLibrary } from '@/src/lib/media';
-import { pixelsForAspect } from '@/src/lib/library';
+import { pixelsForAspect, snapSize } from '@/src/lib/library';
 import { hashSeed } from '@/src/lib/render';
 import { produceImages } from '@/src/lib/produce';
 import { composeSheet } from '@/src/lib/sheet';
@@ -35,6 +35,8 @@ import {
   type TurnaroundBook,
   type TurnaroundView,
 } from '@/src/lib/turnaround';
+import { samplerId } from '@/src/lib/draw';
+import { getGenerator } from '@/src/lib/genstore';
 import { useStudio } from '@/src/studio';
 import { colors, font } from '@/src/theme';
 import type { Character } from '@/src/lib/types';
@@ -119,6 +121,14 @@ export default function TurnaroundScreen() {
       ? { width: studio.settings.width, height: studio.settings.height }
       : pixelsForAspect(studio.aspectId);
     const [openaiKey, saladKey] = await Promise.all([readApiKey(), readSaladKey()]);
+    const gen = getGenerator();
+    const checkpoint = gen.installed.find((item) => item.versionId === gen.checkpointId);
+    if (studio.settings.provider === 'salad' && !studio.settings.saladEndpoint.trim()) {
+      throw new Error('Add the Salad gateway on Connect before drawing a turnaround in the cloud.');
+    }
+    if (studio.settings.provider === 'salad' && !saladKey) {
+      throw new Error('Add the Salad API key in Connect before drawing a turnaround in the cloud.');
+    }
     const kept = new Map(existing.map((view) => [view.angle, view]));
     const keptFront = kept.get('front') ?? null;
     let frontBytes: Uint8Array | null =
@@ -132,19 +142,19 @@ export default function TurnaroundScreen() {
       const result = await produceImages({
         provider: studio.settings.provider,
         prompt,
-        negative: studio.settings.negative,
+        negative: studio.settings.provider === 'salad' ? gen.negative : studio.settings.negative,
         styleId: studio.styleId,
         aspectId: studio.aspectId,
         character: who,
         count: 1,
-        width: size.width,
-        height: size.height,
-        steps: studio.settings.steps,
-        cfg: studio.settings.cfg,
-        sampler: studio.settings.sampler,
+        width: studio.settings.provider === 'salad' ? snapSize(gen.width) : size.width,
+        height: studio.settings.provider === 'salad' ? snapSize(gen.height) : size.height,
+        steps: studio.settings.provider === 'salad' ? gen.steps : studio.settings.steps,
+        cfg: studio.settings.provider === 'salad' ? gen.cfg : studio.settings.cfg,
+        sampler: studio.settings.provider === 'salad' ? samplerId(gen.sampler) : studio.settings.sampler,
         seedMode: 'fixed',
         seed,
-        saladModel: studio.settings.saladModel,
+        saladModel: checkpoint ? String(checkpoint.versionId) : studio.settings.saladModel,
         loras: studio.settings.loras,
         openaiModel: studio.settings.openaiModel,
         openaiKey,
@@ -263,6 +273,14 @@ export default function TurnaroundScreen() {
     setNotice(null);
     try {
       const [openaiKey, saladKey] = await Promise.all([readApiKey(), readSaladKey()]);
+      const gen = getGenerator();
+      const checkpoint = gen.installed.find((item) => item.versionId === gen.checkpointId);
+      if (studio.settings.provider === 'salad' && !studio.settings.saladEndpoint.trim()) {
+        throw new Error('Add the Salad gateway on Connect before drawing a turnaround in the cloud.');
+      }
+      if (studio.settings.provider === 'salad' && !saladKey) {
+        throw new Error('Add the Salad API key in Connect before drawing a turnaround in the cloud.');
+      }
       const frontBytes = version?.views.find((view) => view.angle === 'front')
         ? await readPng(version.views.find((view) => view.angle === 'front')!.imageUri)
         : null;
@@ -273,19 +291,19 @@ export default function TurnaroundScreen() {
         const result = await produceImages({
           provider: studio.settings.provider,
           prompt,
-          negative: studio.settings.negative,
+          negative: studio.settings.provider === 'salad' ? gen.negative : studio.settings.negative,
           styleId: studio.styleId,
           aspectId: 'avatar',
           character: { ...character, expression: pose.id, pose: 'portrait' },
           count: 1,
-          width: size.width,
-          height: size.height,
-          steps: studio.settings.steps,
-          cfg: studio.settings.cfg,
-          sampler: studio.settings.sampler,
+          width: studio.settings.provider === 'salad' ? snapSize(gen.width) : size.width,
+          height: studio.settings.provider === 'salad' ? snapSize(gen.height) : size.height,
+          steps: studio.settings.provider === 'salad' ? gen.steps : studio.settings.steps,
+          cfg: studio.settings.provider === 'salad' ? gen.cfg : studio.settings.cfg,
+          sampler: studio.settings.provider === 'salad' ? samplerId(gen.sampler) : studio.settings.sampler,
           seedMode: 'fixed',
           seed,
-          saladModel: studio.settings.saladModel,
+          saladModel: checkpoint ? String(checkpoint.versionId) : studio.settings.saladModel,
           loras: studio.settings.loras,
           openaiModel: studio.settings.openaiModel,
           openaiKey,

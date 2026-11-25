@@ -29,7 +29,6 @@ export default function TabLayout() {
       <Tabs.Screen name="queue" options={{ title: 'Queue', tabBarIcon: ({ color, size }) => <Ionicons name="time" color={iconColor(color)} size={size} /> }} />
       <Tabs.Screen name="shelf" options={{ title: 'Library', tabBarIcon: ({ color, size }) => <Ionicons name="library" color={iconColor(color)} size={size} /> }} />
       <Tabs.Screen name="models" options={{ href: null, tabBarItemStyle: { display: 'none' } }} />
-      <Tabs.Screen name="cast" options={{ href: null, tabBarItemStyle: { display: 'none' } }} />
       <Tabs.Screen name="history" options={{ href: null, tabBarItemStyle: { display: 'none' } }} />
       <Tabs.Screen name="settings" options={{ tabBarItemStyle: { display: 'none' } }} />
     </Tabs>

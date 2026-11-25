@@ -25,7 +25,7 @@ export default function LibraryScreen() {
             <Text style={styles.link}>{character.name || 'Unnamed'}</Text>
           </Pressable>
         ))}
-        <Pressable onPress={() => router.push('/(tabs)/cast')}>
+        <Pressable onPress={() => router.push('/cast')}>
           <Text style={styles.link}>Cast and 3D</Text>
         </Pressable>
         <Text style={styles.heading}>Installed models</Text>

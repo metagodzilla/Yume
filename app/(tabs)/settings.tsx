@@ -1,10 +1,12 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { router } from 'expo-router';
 import { Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { confirmAction } from '@/src/lib/confirm';
-import { readCivitaiToken, writeCivitaiToken } from '@/src/lib/storage';
+import { newerServerRelease, serverUpdateCall, type ServerCodeOffer } from '@/src/lib/serverUpdate';
+import { readAdminToken, readCivitaiToken, readSaladKey, writeAdminToken, writeCivitaiToken } from '@/src/lib/storage';
+import { APP_VERSION } from '@/src/lib/version';
 import { useStudio } from '@/src/studio';
 import { colors, font } from '@/src/theme';
 import type { ModelId, ProviderId } from '@/src/lib/types';
@@ -27,10 +29,71 @@ export default function SettingsScreen() {
   const [civitaiDraft, setCivitaiDraft] = useState('');
   const [message, setMessage] = useState<string | null>(null);
   const [messageBad, setMessageBad] = useState(false);
+  const [adminDraft, setAdminDraft] = useState('');
+  const [serverOffer, setServerOffer] = useState<ServerCodeOffer | null>(null);
+  const [serverLabel, setServerLabel] = useState('Cloud version not checked yet.');
 
   function note(text: string, bad = false) {
     setMessage(text);
     setMessageBad(bad);
+  }
+
+  useEffect(() => {
+    if (!studio.settings.serverUpdateCheck || studio.settings.provider !== 'salad' || !studio.settings.saladEndpoint.trim()) return;
+    let live = true;
+    void (async () => {
+      const key = await readSaladKey();
+      if (!live || !key) return;
+      try {
+        const endpoint = studio.settings.saladEndpoint.replace(/\/$/, '');
+        const response = await fetch(`${endpoint}/version`, {
+          headers: { Authorization: `Bearer ${key}`, 'X-Api-Key': key, 'Salad-Api-Key': key },
+        });
+        const body = (await response.json()) as { version?: string };
+        const running = response.ok && body.version ? body.version : APP_VERSION;
+        if (live) setServerLabel(response.ok && body.version ? `Cloud server code ${body.version}` : 'The cloud did not report a version.');
+        const releases = await fetch('https://api.github.com/repos/metagodzilla/Yume/releases?per_page=20');
+        const list = (await releases.json()) as { tag_name?: string; assets?: { name?: string; browser_download_url?: string }[] }[];
+        if (live) setServerOffer(newerServerRelease(Array.isArray(list) ? list : [], running));
+      } catch {
+        if (live) setServerLabel('Could not check the cloud server.');
+      }
+    })();
+    return () => {
+      live = false;
+    };
+  }, [studio.settings.provider, studio.settings.saladEndpoint, studio.settings.serverUpdateCheck]);
+
+  async function updateCloudServer() {
+    const endpoint = studio.settings.saladEndpoint.trim();
+    const key = await readSaladKey();
+    const token = (await readAdminToken()) || adminDraft.trim();
+    if (!endpoint || !key) {
+      note('Connect the cloud before updating the server.', true);
+      return;
+    }
+    if (!token) {
+      note('Save the server update token first. It is the YUME_ADMIN_TOKEN on the container.', true);
+      return;
+    }
+    if (!serverOffer) {
+      note('No newer server code release.', true);
+      return;
+    }
+    try {
+      const shaText = await (await fetch(serverOffer.shaUrl)).text();
+      const sha256 = shaText.trim().split(/\s+/)[0] ?? '';
+      const call = serverUpdateCall({ endpoint, adminToken: token, gatewayKey: key, ref: serverOffer.ref, sha256 });
+      const response = await fetch(call.url, { method: call.method, headers: call.headers, body: call.body });
+      const raw = await response.text();
+      if (!response.ok) {
+        note(raw || `Update failed (HTTP ${response.status}).`, true);
+        return;
+      }
+      note('Server code is reloading. Downloaded models stay on disk.');
+    } catch (caught) {
+      note(caught instanceof Error ? caught.message : 'Could not reach the cloud.', true);
+    }
   }
 
   return (
@@ -72,6 +135,44 @@ export default function SettingsScreen() {
           </Pressable>
           <Pressable testID="low-power" onPress={() => void studio.updateSettings({ lowPower: !studio.settings.lowPower })}>
             <Text style={styles.link}>{studio.settings.lowPower ? 'Low-power mode on' : 'Low-power mode off'}</Text>
+          </Pressable>
+        </View>
+
+        <View style={styles.card}>
+          <Text style={styles.cardTitle}>Cloud server code</Text>
+          <Text style={styles.body}>
+            Update cloud server downloads a published server-code release and reloads the app inside the container. It does not restart Salad, so models already on disk stay there. Set YUME_ADMIN_TOKEN on the container yourself. This button does not change the Salad group.
+          </Text>
+          <Text style={styles.body}>{serverLabel}</Text>
+          <TextInput
+            testID="server-admin-token"
+            value={adminDraft}
+            onChangeText={setAdminDraft}
+            placeholder="Server update token"
+            placeholderTextColor={colors.faint}
+            autoCapitalize="none"
+            autoCorrect={false}
+            secureTextEntry
+            style={styles.input}
+          />
+          <Pressable
+            testID="save-server-admin-token"
+            style={styles.save}
+            onPress={() => {
+              void writeAdminToken(adminDraft.trim() || null)
+                .then(async () => {
+                  setAdminDraft('');
+                  note((await readAdminToken()) ? 'Server update token saved on this phone.' : 'Server update token cleared.');
+                })
+                .catch((caught: unknown) => note(caught instanceof Error ? caught.message : 'Could not save the token.', true));
+            }}>
+            <Text style={styles.saveText}>{adminDraft.trim() ? 'Save update token' : 'Clear update token'}</Text>
+          </Pressable>
+          <Pressable testID="server-update-check" onPress={() => void studio.updateSettings({ serverUpdateCheck: !studio.settings.serverUpdateCheck })}>
+            <Text style={styles.link}>{studio.settings.serverUpdateCheck ? 'Auto-check for server code on' : 'Auto-check for server code off'}</Text>
+          </Pressable>
+          <Pressable testID="update-cloud-server" style={styles.save} onPress={() => void updateCloudServer()}>
+            <Text style={styles.saveText}>{serverOffer ? `Update cloud server (${serverOffer.ref})` : 'Update cloud server'}</Text>
           </Pressable>
         </View>
 

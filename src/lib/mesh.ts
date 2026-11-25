@@ -38,6 +38,14 @@ export type MeshResult = {
   note: string;
 };
 
+export const PICTURE_SERVER_MESH_MESSAGE =
+  'This cloud draws pictures, not 3D meshes. Add a TRELLIS gateway under Connect, in the 3D URL field. A stand-in figure is open so you can still spin the viewer.';
+
+/** An empty 3D URL means the picture server. That server has no TRELLIS, so the phone shows a stand-in instead of a silent 503. */
+export function meshPlan(meshEndpoint: string): 'stand-in' | 'trellis' {
+  return meshEndpoint.trim() ? 'trellis' : 'stand-in';
+}
+
 export function demoMesh(character: Character): MeshResult {
   return {
     glb: buildMockGlb({ hair: character.hairColor, outfit: character.outfit, eye: character.eyeColor }),

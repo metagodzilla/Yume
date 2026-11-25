@@ -193,8 +193,9 @@ export function instanceCounts(payload: unknown): { allocating: number; creating
   return { allocating, creating, running };
 }
 
-export function buildYumeContainerGroup(input: { apiKey: string; gpuClassId: string; image?: string; name?: string }): Record<string, unknown> {
+export function buildYumeContainerGroup(input: { apiKey: string; gpuClassId: string; image?: string; name?: string; adminToken?: string }): Record<string, unknown> {
   const key = input.apiKey.trim();
+  const adminToken = input.adminToken?.trim() ?? '';
   return {
     name: input.name ?? YUME_GROUP,
     display_name: 'Yume',
@@ -210,6 +211,8 @@ export function buildYumeContainerGroup(input: { apiKey: string; gpuClassId: str
         YUME_MODEL_DIR: '/models',
         YUME_LORA_DIR: '/loras',
         HF_HOME: '/models',
+        YUME_SERVER_REF: 'latest',
+        ...(adminToken ? { YUME_ADMIN_TOKEN: adminToken } : {}),
       },
       resources: {
         cpu: 4,

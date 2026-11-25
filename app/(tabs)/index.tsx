@@ -4,6 +4,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { Image } from 'expo-image';
 
 import { AppBar } from '@/components/AppBar';
+import { CAST_ROUTE } from '@/src/lib/routes';
 import { StatusPanel } from '@/components/StatusPanel';
 import { useStudio } from '@/src/studio';
 import { colors, font } from '@/src/theme';
@@ -27,6 +28,9 @@ export default function HomeScreen() {
       <AppBar dot={colors.faint} />
       <ScrollView contentContainerStyle={styles.scroll}>
         <StatusPanel preview={typeof params.panel === 'string' ? params.panel : ''} />
+        <Pressable testID="home-create" style={styles.go} onPress={() => router.push('/(tabs)/create')}>
+          <Text style={styles.goText}>Create</Text>
+        </Pressable>
         <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.chips}>
           {CHIPS.map((chip) => (
             <Pressable
@@ -36,7 +40,7 @@ export default function HomeScreen() {
               onPress={() => {
                 if (chip.id === 'characters') router.push('/(tabs)/shelf');
                 if (chip.id === 'models') router.push('/(tabs)/explore');
-                if (chip.id === '3d') router.push('/(tabs)/cast');
+                if (chip.id === '3d') router.push(CAST_ROUTE);
                 if (chip.id === 'offline') router.push('/offline');
                 if (chip.id === 'recent') router.push('/shorts');
               }}>
@@ -54,23 +58,25 @@ export default function HomeScreen() {
           </View>
         ) : (
           frames.map((item) => (
-            <Pressable key={item.id} style={styles.card} onPress={() => router.push({ pathname: '/watch', params: { id: item.id } })}>
-              <Image source={{ uri: item.imageUris[0] }} style={styles.thumb} contentFit="cover" />
-              <Text style={styles.cardTitle} numberOfLines={2}>
-                {item.finalPrompt || item.userPrompt}
-              </Text>
-              <Text style={styles.meta}>
-                {item.styleName} · {item.width}×{item.height}
-              </Text>
+            <View key={item.id} style={styles.card}>
+              <Pressable onPress={() => router.push({ pathname: '/watch', params: { id: item.id } })}>
+                <Image source={{ uri: item.imageUris[0] }} style={styles.thumb} contentFit="cover" />
+                <Text style={styles.cardTitle} numberOfLines={2}>
+                  {item.finalPrompt || item.userPrompt}
+                </Text>
+                <Text style={styles.meta}>
+                  {item.styleName} · {item.width}×{item.height}
+                </Text>
+              </Pressable>
               <View style={styles.menu}>
-                <Text style={styles.menuText} onPress={() => studio.remix(item)}>
-                  Remix
-                </Text>
-                <Text style={styles.menuText} onPress={() => router.push({ pathname: '/watch', params: { id: item.id } })}>
-                  Open
-                </Text>
+                <Pressable onPress={() => router.push('/(tabs)/create')}>
+                  <Text style={styles.menuText}>Create</Text>
+                </Pressable>
+                <Pressable onPress={() => router.push({ pathname: '/watch', params: { id: item.id } })}>
+                  <Text style={styles.menuText}>Open</Text>
+                </Pressable>
               </View>
-            </Pressable>
+            </View>
           ))
         )}
         <Pressable onPress={() => router.push('/shorts')}>
