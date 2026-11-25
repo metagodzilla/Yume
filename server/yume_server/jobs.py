@@ -92,10 +92,17 @@ def _run(job_id: str, body: Any) -> None:
         job = _JOBS[job_id]
         if job.get("cancel") or job["status"] in {"cancelled", "paused"}:
             return
+    def on_progress(note: str) -> None:
+        with _LOCK:
+            current = _JOBS.get(job_id)
+            if current and current["status"] == "running":
+                current["note"] = note
+                current["progress"] = max(float(current.get("progress") or 0), 0.15)
+
     try:
         from yume_server.generate import generate_images
 
-        images, seeds, model, consistency = generate_images(body)
+        images, seeds, model, consistency, switched = generate_images(body, on_progress=on_progress)
     except Exception as exc:  # noqa: BLE001
         with _LOCK:
             job = _JOBS[job_id]
@@ -110,6 +117,9 @@ def _run(job_id: str, body: Any) -> None:
         job["seeds"] = seeds
         job["model"] = model
         job["consistency"] = consistency
+        job["switched"] = switched
+        if switched and not job.get("note"):
+            job["note"] = f"Switched to {model}"
         job["progress"] = 1
         job["status"] = "done"
 

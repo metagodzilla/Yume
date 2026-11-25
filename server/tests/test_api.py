@@ -42,8 +42,8 @@ def test_use_switches_the_loaded_checkpoint_by_id(client: TestClient) -> None:
         headers=headers,
         json={"prompt": "a shrine", "model": "77", "width": 512, "height": 512, "steps": 1, "scheduler": "euler_a"},
     )
-    assert early.status_code == 503
-    assert "not loaded" in early.json()["detail"].lower()
+    assert early.status_code == 200, early.text
+    assert early.json()["model"] == "Civitai 77" and early.json()["switched"] is True
     use = client.post("/models/use", headers=headers, json={"versionId": 77})
     assert use.status_code == 200, use.text
     loaded = use.json()
@@ -183,6 +183,23 @@ def test_install_jobs_persist_across_restarts(tmp_path, monkeypatch) -> None:
     catalog.ensure_jobs_loaded()
     restored = catalog.install_progress("half")
     assert restored["state"] == "paused" and restored["bytesDone"] == 5 and restored["type"] == "TextualInversion"
+
+
+def test_hires_vae_and_loaded_name() -> None:
+    from yume_server.generate import clip_skip_index, hires_plan, lora_directories, needs_fixed_vae
+
+    assert clip_skip_index(1) == -1 and clip_skip_index(2) == -2
+    assert needs_fixed_vae("Illustrious") and needs_fixed_vae("Pony") and not needs_fixed_vae("SD 1.5")
+
+    class Body:
+        hires_scale = 1.5
+        hires_denoise = 0.4
+        hires_steps = 18
+        hires_upscaler = "4x-AnimeSharp"
+
+    plan = hires_plan(Body())
+    assert plan is not None and plan["denoise"] == 0.4 and plan["steps"] == 18 and plan["scale"] == 1.5
+    assert "/models/loras" in lora_directories()
 
 
 def test_v_prediction_is_detected_and_clip_skip_is_indexed() -> None:

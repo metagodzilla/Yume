@@ -25,7 +25,7 @@ from pydantic import BaseModel, Field
 from yume_mesh.generate import generate_mesh
 from yume_server.catalog import cancel_install, delete_version, ensure_default, ensure_jobs_loaded, install_progress, list_installs, list_models, pause_install, resume_install, set_default, start_install
 from yume_server.errors import add_client_report, list_errors, record_error, sanitize
-from yume_server.generate import A1111_SAMPLERS, SCHEDULERS, generate_images, loaded_version, mark_default_loaded, mock_mode, release_loaded, start_model, start_use, use_progress
+from yume_server.generate import A1111_SAMPLERS, SCHEDULERS, generate_images, loaded_model_name, loaded_version, mark_default_loaded, mock_mode, release_loaded, start_model, start_use, use_progress
 from yume_server.jobs import cancel as cancel_job
 from yume_server.jobs import get as get_job
 from yume_server.jobs import pause as pause_job
@@ -73,7 +73,7 @@ class GenerateIn(BaseModel):
     hires_scale: float | None = None
     hires_denoise: float = 0.45
     hires_upscaler: str = "Latent"
-    hires_steps: int = 15
+    hires_steps: int = 18
     mask: str | None = None
     prediction_type: str | None = None
 
@@ -223,7 +223,7 @@ def health() -> dict[str, Any]:
         "gpu": stats["gpu"],
         "vramUsedMb": stats["vramUsedMb"],
         "vramTotalMb": stats["vramTotalMb"],
-        "model": "Animagine XL 4.0",
+        "model": loaded_model_name(),
         "ready": state["ready"] and not state["error"],
         "startup": progress,
     }
@@ -243,7 +243,7 @@ def ready() -> dict[str, str]:
         raise HTTPException(status_code=503, detail=state["error"])
     if not state["ready"]:
         raise HTTPException(status_code=503, detail="Model is still loading.")
-    return {"status": "ready", "model": "Animagine XL 4.0"}
+    return {"status": "ready", "model": loaded_model_name()}
 
 
 @app.get("/stats")
@@ -332,6 +332,7 @@ class InstallIn(BaseModel):
     name: str | None = None
     filename: str | None = None
     baseModel: str | None = None
+    triggers: list[str] = []
 
 
 class DefaultIn(BaseModel):
@@ -379,7 +380,7 @@ def installs(request: Request) -> dict[str, Any]:
 def install(body: InstallIn, request: Request) -> dict[str, Any]:
     _check_key(request)
     token = request.headers.get("x-civitai-token", "").strip() or None
-    hint = {key: value for key, value in {"type": body.type, "name": body.name, "filename": body.filename, "baseModel": body.baseModel}.items() if value}
+    hint = {key: value for key, value in {"type": body.type, "name": body.name, "filename": body.filename, "baseModel": body.baseModel, "triggers": body.triggers}.items() if value}
     return start_install(body.versionId, token, hint)
 
 
@@ -497,7 +498,7 @@ def generate(body: GenerateIn, request: Request) -> dict[str, Any]:
         raise HTTPException(status_code=503, detail="Model is still loading.")
     _validate(body)
     try:
-        images, seeds, model, consistency = generate_images(body)
+        images, seeds, model, consistency, switched = generate_images(body)
     except FileNotFoundError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except ValueError as exc:
@@ -514,6 +515,7 @@ def generate(body: GenerateIn, request: Request) -> dict[str, Any]:
         "model": model,
         "scheduler": body.scheduler,
         "consistency": consistency,
+        "switched": switched,
     }
 
 
