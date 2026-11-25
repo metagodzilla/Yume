@@ -22,6 +22,7 @@ export type InstalledResource = {
 export type GeneratorState = {
   prompt: string;
   quality: string;
+  qualityEdited: boolean;
   extraPrompt: string;
   negative: string;
   sampler: string;
@@ -85,6 +86,7 @@ export const studioResource = (): InstalledResource => ({
 export const initialGenerator = (): GeneratorState => ({
   prompt: '',
   quality: ANIME_STUDIO_CHECKPOINT.quality,
+  qualityEdited: false,
   extraPrompt: '',
   negative: ANIME_STUDIO_CHECKPOINT.negative,
   sampler: ANIME_STUDIO_CHECKPOINT.sampler,
@@ -167,7 +169,7 @@ export function applyCheckpoint(resource: InstalledResource, recommended?: Recom
     width: preset.width,
     height: preset.height,
     negative: preset.negative,
-    quality: preset.quality,
+    ...(state.qualityEdited ? {} : { quality: preset.quality }),
     qualityTags: true,
     hires: preset.hires,
     hiresScale: preset.hiresScale,
@@ -201,7 +203,7 @@ export function resetModelDefaults(baseModel: string, name = '') {
     width: preset.width,
     height: preset.height,
     negative: preset.negative,
-    quality: preset.quality,
+    ...(state.qualityEdited ? {} : { quality: preset.quality }),
     qualityTags: true,
     hires: preset.hires,
     hiresScale: preset.hiresScale,
@@ -214,7 +216,12 @@ export function resetModelDefaults(baseModel: string, name = '') {
 
 export function resetBuiltPrompt(baseModel: string, name = '') {
   const preset = settingsForCheckpoint(baseModel, name);
-  patchGenerator({ quality: preset.quality, qualityTags: true, extraPrompt: '' });
+  patchGenerator({ quality: preset.quality, qualityEdited: false, qualityTags: true, extraPrompt: '' });
+}
+
+export function resetQualityTags(baseModel: string, name = '') {
+  const preset = settingsForCheckpoint(baseModel, name);
+  patchGenerator({ quality: preset.quality, qualityEdited: false, qualityTags: true });
 }
 
 export function addLora(lora: { name: string; weight: number; modelId?: number; versionId?: number; triggers?: string[]; baseModel?: string }) {

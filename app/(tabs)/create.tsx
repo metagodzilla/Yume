@@ -17,7 +17,7 @@ import { SAMPLERS, sizesFor } from '@/src/lib/defaultModel';
 import { extractLoras } from '@/src/lib/a1111';
 import { loraPage } from '@/src/lib/civitai';
 import { openLink } from '@/src/lib/openLink';
-import { patchGenerator, resetBuiltPrompt, resetModelDefaults, useGenerator } from '@/src/lib/genstore';
+import { patchGenerator, resetBuiltPrompt, resetModelDefaults, resetQualityTags, useGenerator } from '@/src/lib/genstore';
 import { DISK_RESET_NOTE, modelPresence } from '@/src/lib/keptModels';
 import { restoreMissingModels, useRestoringIds } from '@/src/lib/restoreModels';
 import { ensureSelectedLoras } from '@/src/lib/ensureLoras';
@@ -207,16 +207,22 @@ export default function GenerateScreen() {
           multiline
           style={styles.prompt}
         />
-        <Text style={styles.label}>Quality tags</Text>
+        <View style={styles.row}>
+          <Text style={styles.label}>Quality tags</Text>
+          <Pressable testID="reset-quality-tags" onPress={() => resetQualityTags(checkpoint?.baseModel ?? '', checkpoint?.name ?? '')}>
+            <Text style={styles.link}>Reset</Text>
+          </Pressable>
+        </View>
         <TextInput
           testID="gen-quality"
           value={gen.quality}
-          onChangeText={(quality) => patchGenerator({ quality, qualityTags: true })}
+          onChangeText={(quality) => patchGenerator({ quality, qualityEdited: true })}
           placeholder="masterpiece, best quality"
           placeholderTextColor={colors.faint}
           multiline
           style={styles.negative}
         />
+        <Text style={styles.hint}>These tags are added at the end of the sent prompt. Editing them keeps your text when you switch models.</Text>
         <Text style={styles.label}>Extra prompt</Text>
         <TextInput
           testID="gen-extra"
