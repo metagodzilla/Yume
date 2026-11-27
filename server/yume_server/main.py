@@ -236,14 +236,12 @@ async def lifespan(app: FastAPI):
         yield
         return
 
-    from yume_server.features import feature_root
-    from yume_server.runtime_guard import audit_runtime, quarantine_runtime_packages
+    from yume_server.pip_guard import start_sweeper, sweep_feature_installs
+    from yume_server.runtime_guard import audit_runtime
 
-    root = feature_root()
-    for child in root.iterdir():
-        if child.is_dir():
-            quarantine_runtime_packages(child)
+    sweep_feature_installs()
     audit_runtime()
+    start_sweeper()
 
     from yume_server.peft_setup import ensure_peft
     from yume_server.selfheal import start_watch
@@ -399,19 +397,14 @@ def progress() -> dict[str, Any]:
 
 @app.get("/ready")
 def ready() -> dict[str, str]:
-    from yume_server.selfheal import SELF_HEAL_MESSAGE
+    from yume_server.startup import ready_detail
 
     progress = startup_snapshot()
-    if os.environ.get("YUME_READY", "1") == "0":
-        raise HTTPException(status_code=503, detail="Model is still downloading.")
-    if progress.get("stage") == "relocating":
-        raise HTTPException(status_code=503, detail=str(progress.get("message") or SELF_HEAL_MESSAGE))
-    if progress.get("stage") == "error" and progress.get("message"):
-        raise HTTPException(status_code=503, detail=str(progress["message"]))
-    if state["error"]:
-        raise HTTPException(status_code=503, detail=state["error"])
-    if not state["ready"]:
-        raise HTTPException(status_code=503, detail="Model is still loading.")
+    forced = "Model is still downloading." if os.environ.get("YUME_READY", "1") == "0" else None
+    reason = ready_detail(ready=bool(state["ready"]), error=state["error"], progress=progress, forced=forced)
+    if reason:
+        _LOG.warning("ready 503: %s", reason)
+        raise HTTPException(status_code=503, detail=reason)
     return {"status": "ready", "model": loaded_model_name()}
 
 

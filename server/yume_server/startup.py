@@ -138,6 +138,26 @@ def eta_seconds(done: int, total: int, speed: float) -> int | None:
     return int((total - done) / speed)
 
 
+def ready_detail(*, ready: bool, error: str | None, progress: dict[str, Any], forced: str | None = None) -> str | None:
+    """Why /ready is 503. None means the server can accept work."""
+    if forced:
+        return forced
+    if progress.get("stage") == "relocating":
+        return str(progress.get("message") or "Cloud has no internet - moving to a new machine")
+    if progress.get("stage") == "error" and progress.get("message"):
+        return str(progress["message"])
+    if error:
+        return error
+    if ready:
+        return None
+    message = str(progress.get("message") or "Model is still loading.")
+    stage = str(progress.get("stage") or "loading")
+    done = int(progress.get("bytesDone") or 0)
+    total = int(progress.get("bytesTotal") or 0)
+    amounts = f", {done}/{total} bytes" if total else ""
+    return f"{message} (stage {stage}{amounts})"
+
+
 def snapshot() -> dict[str, Any]:
     now = time.monotonic()
     with _LOCK:
