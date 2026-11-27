@@ -175,6 +175,8 @@ class GenerateIn(BaseModel):
     prediction_type: str | None = None
     regions: list[RegionIn] = []
     region_layout: str = "side"
+    region_mode: str = "together"
+    interaction: str = ""
 
 
 def _check_key(request: Request) -> None:

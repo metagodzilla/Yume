@@ -812,6 +812,7 @@ const previewState = {
   vPrediction: false,
   studioStyle: 'off',
   regionLayout: 'side',
+  interaction: '',
   installed: [{ versionId: 1337429, modelId: 1, name: 'Animagine XL 4.0', version: 'v4', type: 'Checkpoint', baseModel: 'SDXL 1.0', filename: 'animagine-xl-4.0.safetensors', hash: '1d5b43ff75', sha256: '', triggers: [], isDefault: true }],
 } as GeneratorState;
 const previewBody = buildSaladGenerateBody(previewState, composeGenerationPrompt(previewState), 1);
@@ -819,6 +820,7 @@ assert(previewBody.loras.length === 1 && previewBody.loras[0]?.name === 'ribbon'
 const regionalState = {
   ...previewState,
   regionLayout: 'side' as const,
+  interaction: 'hugging, kissing',
   loras: [
     { name: 'momo', weight: 0.8, kind: 'character' as const, prompt: 'pink hair', enabled: true },
     { name: 'ink', weight: 0.5, kind: 'style' as const, prompt: 'lineart', enabled: true },
@@ -827,9 +829,12 @@ const regionalState = {
 };
 const regionalPrompt = composeGenerationPrompt(regionalState);
 const regionalBody = buildSaladGenerateBody(regionalState, regionalPrompt, 7);
-assert(regionalPrompt.includes('lineart') && !regionalPrompt.includes('pink hair') && !regionalPrompt.includes('blue eyes'), 'style lora text stays in the global prompt and character text leaves it');
-assert(regionalBody.regions.length === 2 && regionalBody.regions[0]?.lora_name === 'momo' && regionalBody.regions[1]?.lora_name === 'ken' && regionalBody.region_layout === 'side' && regionalBody.loras.some((lora) => lora.kind === 'character'), 'the request splits two characters and still sends every lora');
-assert(buildSaladGenerateBody({ ...previewState, loras: [{ name: 'momo', weight: 0.8, kind: 'character', prompt: 'pink hair' }] }, 'girl', 1).regions.length === 0, 'one character sends no regions');
+const stackedBody = buildSaladGenerateBody({ ...regionalState, regionLayout: 'stack' }, composeGenerationPrompt({ ...regionalState, regionLayout: 'stack' }), 7);
+assert(regionalPrompt.includes('lineart') && regionalPrompt.includes('hugging, kissing') && !regionalPrompt.includes('pink hair') && !regionalPrompt.includes('blue eyes'), 'style and interaction stay in the shared prompt and character text leaves it');
+assert(regionalBody.regions.length === 2 && regionalBody.regions[0]?.lora_name === 'momo' && regionalBody.regions[1]?.lora_name === 'ken' && regionalBody.region_mode === 'together' && regionalBody.interaction === 'hugging, kissing' && regionalBody.loras.some((lora) => lora.kind === 'character') && !('x' in (regionalBody.regions[0] || {})), 'the request is one together pass and still sends every lora');
+assert(regionalBody.region_layout === 'side' && stackedBody.region_layout === 'stack' && stackedBody.region_mode === 'together', 'switching layout keeps the single together pass');
+const soloBody = buildSaladGenerateBody({ ...previewState, interaction: 'kissing', loras: [{ name: 'momo', weight: 0.8, kind: 'character', prompt: 'pink hair' }] }, 'girl', 1);
+assert(soloBody.regions.length === 0 && soloBody.interaction === '' && !soloBody.prompt.includes('kissing'), 'one character sends no regions and ignores the interaction field');
 assert(previewBody.embeddings.length === 1 && previewBody.embeddings[0] === 'easynegative', 'empty embeddings are not sent');
 assert(previewBody.model === '1337429' && previewBody.model_name === 'Animagine XL 4.0' && previewBody.scheduler === 'Euler a' && previewBody.hires_scale === null, 'create payload selects the checkpoint by id');
 assert(modelCardPress().action === 'open-sheet' && modelCardPress().browse === '/(tabs)/explore' && routeLeavesCreate('/models') && !routeLeavesCreate(modelCardPress().browse), 'model card opens the sheet');
@@ -894,7 +899,7 @@ const regions = regionalRequest([
   { name: 'ink', weight: 0.5, kind: 'style', prompt: 'lineart', enabled: true },
   { name: 'ken', weight: 0.7, kind: 'character', prompt: 'blue eyes', enabled: true },
 ], 'side');
-assert(regions?.regions.length === 2 && regions.regions[0]?.loraName === 'momo' && regions.regions[0]?.w === 0.5 && regions.regions[1]?.x === 0.5, 'two characters split the picture and a style lora does not');
+assert(regions?.mode === 'together' && regions.regions.length === 2 && regions.regions[0]?.loraName === 'momo' && regions.layout === 'side' && !('w' in (regions.regions[0] || {})), 'two characters stay one together pass and a style lora does not get a region');
 assert(regionalRequest([{ name: 'momo', weight: 0.8, kind: 'character', prompt: 'pink hair' }], 'side') === null, 'one character stays on the normal prompt');
 assert(illustriousOffer('SDXL 1.0', 'Illustrious', []) === 'install' && illustriousOffer('SDXL 1.0', 'Illustrious', [{ type: 'Checkpoint', baseModel: 'Illustrious' }]) === 'switch', 'illustrious lora offers a matching checkpoint');
 const generatedPrompt = generatePromptFromDescribe({ describe: 'a girl with pink hair taking a selfie in her room', prompt: 'masterpiece', clothes: '', positive: '' });

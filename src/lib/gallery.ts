@@ -110,6 +110,7 @@ export function reusePatch(generation: Generation, imageIndex: number) {
       ...(lora.triggers?.length ? { triggers: lora.triggers } : {}),
     })),
     ...(generation.regionLayout ? { regionLayout: generation.regionLayout } : {}),
+    ...(generation.interaction ? { interaction: generation.interaction } : {}),
   };
 }
 

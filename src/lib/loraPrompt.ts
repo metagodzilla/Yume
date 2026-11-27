@@ -64,15 +64,17 @@ export type LoraCard = {
   kind?: LoraKind;
 };
 
-export type RegionBox = {
+export type RegionPrompt = {
   index: number;
-  x: number;
-  y: number;
-  w: number;
-  h: number;
   prompt: string;
   loraName: string;
   loraWeight: number;
+};
+
+export type TogetherRequest = {
+  mode: 'together';
+  layout: RegionLayout;
+  regions: RegionPrompt[];
 };
 
 /** Civitai character tags become Character. Everything else is Style/Other. */
@@ -86,21 +88,15 @@ export function characterLoras<T extends LoraCard>(loras: T[]): T[] {
   return loras.filter((lora) => lora.kind === 'character' && lora.enabled !== false);
 }
 
-export function assignRegions(characters: LoraCard[], layout: RegionLayout = 'side'): RegionBox[] {
+export function assignRegions(characters: LoraCard[]): RegionPrompt[] {
   const active = characters.filter((lora) => lora.enabled !== false);
-  const count = active.length;
-  if (count < 2) return [];
-  return active.map((lora, index) => {
-    const span = 1 / count;
-    const box = layout === 'stack' ? { x: 0, y: index * span, w: 1, h: span } : { x: index * span, y: 0, w: span, h: 1 };
-    return {
-      index,
-      ...box,
-      prompt: (lora.prompt || '').trim(),
-      loraName: lora.name,
-      loraWeight: lora.weight,
-    };
-  });
+  if (active.length < 2) return [];
+  return active.map((lora, index) => ({
+    index,
+    prompt: (lora.prompt || '').trim(),
+    loraName: lora.name,
+    loraWeight: lora.weight,
+  }));
 }
 
 const triggerCache = new Map<number, string[]>();
@@ -128,8 +124,8 @@ export async function fetchTrainedWords(versionId: number, token?: string | null
   }
 }
 
-/** Two or more characters leave the single-prompt path. One or none stays global. */
-export function regionalRequest(loras: LoraCard[], layout: RegionLayout = 'side'): { layout: RegionLayout; regions: RegionBox[] } | null {
-  const regions = assignRegions(characterLoras(loras), layout);
-  return regions.length >= 2 ? { layout, regions } : null;
+/** Two or more characters share one picture. One or none stays on the normal prompt. */
+export function regionalRequest(loras: LoraCard[], layout: RegionLayout = 'side'): TogetherRequest | null {
+  const regions = assignRegions(characterLoras(loras));
+  return regions.length >= 2 ? { mode: 'together', layout, regions } : null;
 }

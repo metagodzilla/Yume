@@ -425,6 +425,8 @@ def test_generate_accepts_character_regions_and_still_draws(client: TestClient) 
                 {"prompt": "blue eyes", "x": 0.5, "y": 0, "w": 0.5, "h": 1, "lora_name": "ken", "lora_weight": 0.7},
             ],
             "region_layout": "side",
+            "region_mode": "together",
+            "interaction": "hugging",
         },
     )
     body = finish_generate(client, response, headers)

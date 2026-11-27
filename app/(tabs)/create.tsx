@@ -363,6 +363,7 @@ export default function GenerateScreen() {
           ...(lora.triggers?.length ? { triggers: lora.triggers } : {}),
         })),
         regionLayout: gen.regionLayout,
+        interaction: gen.interaction,
         durationMs: Date.now() - started,
       };
       await studio.rememberGeneration(record);
@@ -635,17 +636,27 @@ export default function GenerateScreen() {
           );
         })}
         {characterLoras(gen.loras).length >= 2 ? (
-          <View style={styles.row}>
-            <Pressable testID="layout-side" onPress={() => patchGenerator({ regionLayout: 'side' })}>
-              <Text style={styles.link}>{gen.regionLayout === 'stack' ? 'Side by side' : 'Side by side · on'}</Text>
-            </Pressable>
-            <Pressable testID="layout-stack" onPress={() => patchGenerator({ regionLayout: 'stack' })}>
-              <Text style={styles.link}>{gen.regionLayout === 'stack' ? 'Top and bottom · on' : 'Top and bottom'}</Text>
-            </Pressable>
+          <View style={styles.loraCard}>
+            <Text style={styles.label}>Interaction</Text>
+            <TextInput
+              testID="interaction-prompt"
+              value={gen.interaction || ''}
+              onChangeText={(interaction) => patchGenerator({ interaction })}
+              placeholder="hugging, kissing"
+              placeholderTextColor={colors.faint}
+              multiline
+              style={styles.prompt}
+            />
+            <View style={styles.row}>
+              <Pressable testID="layout-side" onPress={() => patchGenerator({ regionLayout: 'side' })}>
+                <Text style={styles.link}>{gen.regionLayout === 'stack' ? 'Side by side' : 'Side by side · on'}</Text>
+              </Pressable>
+              <Pressable testID="layout-stack" onPress={() => patchGenerator({ regionLayout: 'stack' })}>
+                <Text style={styles.link}>{gen.regionLayout === 'stack' ? 'Top and bottom · on' : 'Top and bottom'}</Text>
+              </Pressable>
+            </View>
+            <Text style={styles.hint}>One picture. The interaction and style cover the whole image. Each character prompt is stronger on their side, and the sides overlap in the middle so they can touch.</Text>
           </View>
-        ) : null}
-        {characterLoras(gen.loras).length >= 2 ? (
-          <Text style={styles.hint}>Each character LoRA is painted in its own area, left to right or top to bottom, so the characters do not blend. Style LoRAs still cover the whole picture.</Text>
         ) : null}
         <View style={styles.row}>
           {parsed.map((lora) => (

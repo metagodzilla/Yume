@@ -157,6 +157,7 @@ export function composeGenerationPrompt(state: GeneratorState, characterText = '
     ...splitPromptTags(state.quality || '').map(normTag),
   ]);
   const regional = characterLoras(state.loras).length >= 2;
+  const interaction = regional ? (state.interaction || '').trim() : '';
   const loraTriggers = state.loras
     .flatMap((lora) => {
       if (lora.enabled === false) return [];
@@ -174,7 +175,7 @@ export function composeGenerationPrompt(state: GeneratorState, characterText = '
     characterText.trim(),
     embeddingTokens(state).join(', '),
   ];
-  const head = [state.prompt.trim(), loraTriggers, (state.clothes || '').trim(), positiveText(state), (state.extraPrompt || '').trim(), style, ...afterStyle]
+  const head = [state.prompt.trim(), loraTriggers, interaction, (state.clothes || '').trim(), positiveText(state), (state.extraPrompt || '').trim(), style, ...afterStyle]
     .filter(Boolean)
     .join(', ');
   const quality = (state.quality || '').trim();
@@ -252,8 +253,10 @@ export type SaladGenerateBody = {
   reference_image: string | null;
   mask: string | null;
   prediction_type: 'epsilon' | 'v_prediction';
-  regions: { prompt: string; x: number; y: number; w: number; h: number; lora_name: string; lora_weight: number }[];
+  regions: { prompt: string; lora_name: string; lora_weight: number }[];
   region_layout: 'side' | 'stack';
+  region_mode: 'together';
+  interaction: string;
 };
 
 export function sentWithTaste(state: GeneratorState, prompt: string, character: Character | null = null): { prompt: string; negative: string } {
@@ -323,14 +326,12 @@ export function buildSaladGenerateBody(
     prediction_type: state.vPrediction ? 'v_prediction' : 'epsilon',
     regions: (regional?.regions || []).map((region) => ({
       prompt: region.prompt,
-      x: region.x,
-      y: region.y,
-      w: region.w,
-      h: region.h,
       lora_name: region.loraName,
       lora_weight: region.loraWeight,
     })),
     region_layout: regional?.layout || 'side',
+    region_mode: 'together',
+    interaction: regional ? (state.interaction || '').trim() : '',
   };
 }
 
@@ -361,10 +362,14 @@ export async function drawFrames(input: {
   const params = generationParams(input.state, tasted.prompt, seeds[0] ?? 0, input.character);
   params.negative = tasted.negative;
   params.prompt = tasted.prompt;
+  if (input.provider !== 'salad' && characterLoras(input.state.loras).length >= 2) {
+    params.prompt = [tasted.prompt, ...characterLoras(input.state.loras).map((lora) => (lora.prompt || '').trim())].filter(Boolean).join(', ');
+  }
   const parameters = formatParameters(params);
   if (input.provider !== 'salad') {
+    const phonePrompt = params.prompt;
     const pngs = renderDemoFrames({
-      prompt: plainPrompt(input.prompt),
+      prompt: plainPrompt(phonePrompt),
       styleId: 'watercolor',
       aspectId: input.state.height >= input.state.width ? 'wallpaper' : 'landscape',
       character: input.character,
