@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import os
+import socket
 import time
 import urllib.error
 import urllib.parse
@@ -113,7 +114,10 @@ def _redirect(headers: dict[str, str]) -> type[urllib.request.HTTPRedirectHandle
     return _Redirect
 
 
-def _urlopen(request: urllib.request.Request, timeout: int = 120) -> Any:
+STALL_SECONDS = 60
+
+
+def _urlopen(request: urllib.request.Request, timeout: int = STALL_SECONDS) -> Any:
     opener = urllib.request.build_opener(_redirect(dict(request.headers)))
     return opener.open(request, timeout=timeout)
 
@@ -160,7 +164,16 @@ def download_resumable(
         request_headers = range_headers(headers, done)
         request = urllib.request.Request(url, headers=request_headers)
         try:
-            response = _urlopen(request, timeout=120)
+            response = _urlopen(request, timeout=STALL_SECONDS)
+        except (TimeoutError, socket.timeout) as exc:
+            attempt += 1
+            if attempt > attempts:
+                raise RuntimeError("The download stalled for 60 seconds. The partial file is still on disk; start it again to resume.") from exc
+            _sleep(retry_delay(attempt))
+            done = os.path.getsize(partial) if os.path.exists(partial) else 0
+            if on_progress:
+                on_progress(done, total or total_hint)
+            continue
         except urllib.error.URLError as exc:
             from yume_server.selfheal import record_network_error
 
@@ -220,13 +233,15 @@ def download_resumable(
                         on_progress(done, total or total_hint)
         except (DownloadPaused, DownloadCancelled):
             raise
-        except Exception:
+        except Exception as exc:
             attempt += 1
             done = os.path.getsize(partial) if os.path.exists(partial) else 0
             if on_progress:
                 on_progress(done, total or total_hint)
             if attempt > attempts:
-                raise RuntimeError("The download stopped. The partial file is still on disk and can be resumed.")
+                if isinstance(exc, (TimeoutError, socket.timeout)):
+                    raise RuntimeError("The download stalled for 60 seconds. The partial file is still on disk; start it again to resume.") from exc
+                raise RuntimeError("The download stopped. The partial file is still on disk and can be resumed.") from exc
             _sleep(retry_delay(attempt))
             continue
         if total and done < total:

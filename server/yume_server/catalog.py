@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import queue
 import threading
 import time
 import urllib.error
@@ -33,6 +34,10 @@ _PENDING_LOAD: int | None = None
 _LOADED_DIR: str | None = None
 _LAST_SAVE = 0.0
 _LOG = logging.getLogger("yume.install")
+DOWNLOAD_LIMIT = 2
+_DOWNLOAD_QUEUE: queue.Queue[tuple[str, int, str | None, dict[str, Any] | None]] = queue.Queue()
+_WORKERS_STARTED = False
+_WORKER_LOCK = threading.Lock()
 DEFAULT_RECORD: dict[str, Any] = {
     "versionId": DEFAULT_VERSION,
     "modelId": 1188071,
@@ -580,8 +585,28 @@ def _describe_version(version_id: int, token: str | None, hint: dict[str, Any] |
     }
 
 
+def _download_worker() -> None:
+    while True:
+        job_id, version_id, token, hint = _DOWNLOAD_QUEUE.get()
+        try:
+            _run_install(job_id, version_id, token, hint)
+        finally:
+            _DOWNLOAD_QUEUE.task_done()
+
+
+def _ensure_workers() -> None:
+    global _WORKERS_STARTED
+    with _WORKER_LOCK:
+        if _WORKERS_STARTED:
+            return
+        _WORKERS_STARTED = True
+        for index in range(DOWNLOAD_LIMIT):
+            threading.Thread(target=_download_worker, name=f"yume-download-{index}", daemon=True).start()
+
+
 def _begin(job_id: str, version_id: int, token: str | None, hint: dict[str, Any] | None) -> None:
-    threading.Thread(target=_run_install, args=(job_id, version_id, civitai_token(token), hint), daemon=True).start()
+    _ensure_workers()
+    _DOWNLOAD_QUEUE.put((job_id, version_id, civitai_token(token), hint))
 
 
 def _maybe_load_restored(version_id: int, kind: str) -> None:

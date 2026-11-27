@@ -328,10 +328,10 @@ def ensure_upscale_weights() -> None:
         cache = os.environ.get("HF_HOME") or os.environ.get("YUME_MODEL_DIR") or "/models"
         from yume_server.startup import note_file, tqdm_factory
 
-        snapshot_download(TILE_REPO, cache_dir=cache, tqdm_class=tqdm_factory("controlnet-tile", "Tile ControlNet", "ControlNet"))
-        note_file("controlnet-tile", name="Tile ControlNet", kind="ControlNet", done=1, total=1, state="done")
-        snapshot_download(LINEART_REPO, cache_dir=cache, tqdm_class=tqdm_factory("controlnet-line", "Lineart ControlNet", "ControlNet"))
-        note_file("controlnet-line", name="Lineart ControlNet", kind="ControlNet", done=1, total=1, state="done")
+        from yume_server.weights import download_controlnet
+
+        download_controlnet(TILE_REPO, cache, "controlnet-tile", "Tile ControlNet")
+        download_controlnet(LINEART_REPO, cache, "controlnet-line", "Lineart ControlNet")
         snapshot_download(IP_REPO, allow_patterns=[f"{IP_SUBFOLDER}/{FACE_WEIGHT}", f"{IP_SUBFOLDER}/image_encoder/**"], cache_dir=cache, tqdm_class=tqdm_factory("ip-adapter-face", "IP-Adapter Face", "IP-Adapter"))
         note_file("ip-adapter-face", name="IP-Adapter Face", kind="IP-Adapter", done=1, total=1, state="done")
         _READY = True

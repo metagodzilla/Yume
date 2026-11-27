@@ -25,7 +25,7 @@ export async function installReleaseApk(url: string, onProgress?: (progress: Dow
     throw new Error('The downloaded APK could not be shared with the Android installer.');
   }
   try {
-    installApk(shared);
+    installApk(shared, file.uri);
   } catch (error) {
     throw new Error(describeUpdateError(error));
   }

@@ -759,6 +759,7 @@ assert(loraPage({ name: 'ribbon' }).label === 'Search on Civitai', 'lora without
 assert(downloadLabel({ bytesWritten: 38_334_282, totalBytes: 76_668_564 }).includes('50%') && downloadLabel({ bytesWritten: 38_334_282, totalBytes: 76_668_564 }).includes('73.1'), 'apk download percent');
 assert(downloadLabel({ bytesWritten: 2048, totalBytes: 0 }).startsWith('Downloading'), 'apk download without a length');
 const denial = describeUpdateError(new Error('java.lang.SecurityException: Permission Denial: reading expo.modules.filesystem.FileSystemFileProvider'));
+assert(describeUpdateError(new Error('INSTALL_FAILED_UPDATE_INCOMPATIBLE: Package signatures do not match the previously installed version')).includes('Uninstall Yume'), 'a new signing key tells the user to uninstall first');
 assert(denial.includes('blocked Yume') && !denial.includes('Permission Denial') && !denial.includes('FileSystemFileProvider'), 'installer error stays readable');
 assert(describeUpdateError(new Error('Android is asking Yume for permission to install apps. Turn on Allow from this source, then tap Update again.')).includes('Allow from this source'), 'unknown-apps prompt stays');
 assert(saladErrorMessage({ aborted: true }).toLowerCase().includes('waking'), 'cold start copy');

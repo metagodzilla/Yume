@@ -10,9 +10,14 @@ export function downloadLabel(progress: DownloadBytes): string {
   return `Downloading ${megabytes(written)} MB`;
 }
 
+export const SIGNATURE_CHANGE = 'This update is signed with a new key. Uninstall Yume, then tap Update again.';
+
 export function describeUpdateError(error: unknown): string {
   const raw = error instanceof Error ? error.message : typeof error === 'string' ? error : '';
   const text = raw.replace(/^[\w.$]+:\s*/g, '').replace(/\s+/g, ' ').trim();
+  if (/UPDATE_INCOMPATIBLE|signatures do not match|INCONSISTENT_CERTIFICATES|signed with a new key|different signing|different certificate/i.test(text)) {
+    return SIGNATURE_CHANGE;
+  }
   if (/Allow from this source|install unknown apps|install-permission screen/i.test(text)) return text;
   if (/ActivityNotFound|no installer|no app that can install/i.test(text)) {
     return 'Android has no installer that can open this APK.';

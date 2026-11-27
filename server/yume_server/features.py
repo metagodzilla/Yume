@@ -30,14 +30,14 @@ FEATURES: dict[str, dict[str, Any]] = {
     },
     "upscaler": {
         "packages": ["spandrel==0.4.1"],
-        "no_deps": False,
+        "no_deps": True,
         "import_name": "spandrel",
         "label": "Anime upscaler runtime",
         "kind": "Upscaler",
     },
     "pose": {
-        "packages": ["controlnet_aux==0.0.9", "opencv-python-headless==4.10.0.84"],
-        "no_deps": False,
+        "packages": ["controlnet_aux==0.0.9", "opencv-python-headless==4.10.0.84", "einops==0.8.0"],
+        "no_deps": True,
         "import_name": "controlnet_aux",
         "label": "OpenPose detector",
         "kind": "Annotator",
@@ -108,8 +108,49 @@ def _imported(name: str) -> bool:
     return True
 
 
+def pip_command(target: Path, packages: list[str], constraints: Path) -> list[str]:
+    """Install with --no-deps and a constraints file so torch, numpy, and CUDA stay put."""
+    return [
+        sys.executable,
+        "-m",
+        "pip",
+        "install",
+        "--disable-pip-version-check",
+        "--no-cache-dir",
+        "--no-deps",
+        "--constraint",
+        str(constraints),
+        "--target",
+        str(target),
+        *packages,
+    ]
+
+
+def _constraints_file(target: Path) -> Path:
+    from importlib.metadata import distributions
+
+    from yume_server.runtime_guard import constraint_text, is_protected_package
+
+    found: list[tuple[str, str]] = []
+    try:
+        for dist in distributions():
+            name = dist.metadata["Name"]
+            if is_protected_package(name):
+                found.append((name, dist.version))
+    except Exception:
+        found = []
+    path = target / "runtime-constraints.txt"
+    path.write_text(constraint_text(found), encoding="utf-8")
+    return path
+
+
 def _activate(name: str) -> None:
-    path = str(feature_root() / name)
+    from yume_server.runtime_guard import quarantine_runtime_packages
+
+    root = feature_root() / name
+    if root.is_dir():
+        quarantine_runtime_packages(root)
+    path = str(root)
     if path not in sys.path:
         sys.path.insert(0, path)
 
@@ -135,22 +176,11 @@ def ensure_feature(name: str) -> bool:
 
         packages: list[str] = list(spec["packages"])
         note_file(f"feature-{name}", name=spec["label"], kind=spec["kind"], done=0, total=len(packages), state="downloading", feature=name)
-        command = [
-            sys.executable,
-            "-m",
-            "pip",
-            "install",
-            "--disable-pip-version-check",
-            "--no-cache-dir",
-            "--target",
-            str(target),
-            *packages,
-        ]
-        if spec["no_deps"]:
-            command.insert(-len(packages), "--no-deps")
-        _LOG.info("installing feature %s into %s", name, target)
+        constraints = _constraints_file(target)
+        _LOG.info("installing feature %s into %s without upgrading torch, numpy, or CUDA", name, target)
         try:
-            subprocess.run(command, check=True, timeout=600)
+            for package in packages:
+                subprocess.run(pip_command(target, [package], constraints), check=True, timeout=600)
         except (OSError, subprocess.SubprocessError):
             _LOG.exception("feature %s failed to install", name)
             note_file(f"feature-{name}", name=spec["label"], kind=spec["kind"], done=0, total=len(packages), state="error", feature=name)
