@@ -12,7 +12,7 @@ IMAGE_TORCH = "2.5.1"
 
 def is_protected_package(name: str) -> bool:
     low = name.lower().replace("_", "-")
-    return low in {"torch", "numpy"} or low.startswith("nvidia-") or low.startswith("nvidia") or low.startswith("cuda")
+    return low in {"torch", "numpy", "triton"} or low.startswith("nvidia-") or low.startswith("nvidia") or low.startswith("cuda")
 
 
 def constraint_text(packages: list[tuple[str, str]]) -> str:

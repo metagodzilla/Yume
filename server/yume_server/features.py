@@ -179,8 +179,12 @@ def ensure_feature(name: str) -> bool:
         constraints = _constraints_file(target)
         _LOG.info("installing feature %s into %s without upgrading torch, numpy, or CUDA", name, target)
         try:
+            from yume_server.pip_guard import run_install
+
             for package in packages:
-                subprocess.run(pip_command(target, [package], constraints), check=True, timeout=600)
+                code = run_install(pip_command(target, [package], constraints), timeout=600)
+                if code != 0:
+                    raise subprocess.CalledProcessError(code, package)
         except (OSError, subprocess.SubprocessError):
             _LOG.exception("feature %s failed to install", name)
             note_file(f"feature-{name}", name=spec["label"], kind=spec["kind"], done=0, total=len(packages), state="error", feature=name)
