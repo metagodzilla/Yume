@@ -65,6 +65,7 @@ export type GeneratorState = {
   checkpointId: number;
   loras: { name: string; weight: number; modelId?: number; versionId?: number; baseModel?: string; triggers?: string[]; triggerGroup?: number; prompt?: string; enabled?: boolean; kind?: 'character' | 'style' }[];
   regionLayout: 'side' | 'stack';
+  interaction: string;
   contentFilter: ContentFilter;
   embeddings: string;
   vae: string;
@@ -148,6 +149,7 @@ export const initialGenerator = (): GeneratorState => ({
   checkpointId: DEFAULT_CHECKPOINT.versionId,
   loras: [],
   regionLayout: 'side',
+  interaction: '',
   embeddings: '',
   vae: '',
   hires: false,

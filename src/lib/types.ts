@@ -133,6 +133,7 @@ export type Generation = {
   saladModel: string;
   loras: LoraSpec[];
   regionLayout?: 'side' | 'stack';
+  interaction?: string;
   warning?: string;
   durationMs?: number;
   favoriteIndexes?: number[];

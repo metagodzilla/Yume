@@ -774,6 +774,10 @@ def sdxl_conditioning(pipe: Any, prompt: str, negative: str, clip_skip: int) -> 
 def generate_images(body: Any, on_progress: Any = None) -> tuple[list[str], list[int], str, str, bool]:
     chosen, switched = ensure_requested_loaded(body, on_progress)
     _prepare_prompt_text(body)
+    from yume_server.regional import active_regions, fold_interaction
+
+    if len(active_regions(body)) >= 2:
+        body.prompt = fold_interaction(str(body.prompt or ""), str(getattr(body, "interaction", "") or ""), True)
     seeds = _seed_list(body)
     consistency = _consistency(body)
     if mock_mode():
@@ -797,13 +801,6 @@ def generate_images(body: Any, on_progress: Any = None) -> tuple[list[str], list
     _apply_scheduler(_PIPE, A1111_SAMPLERS.get(body.scheduler, body.scheduler), v_prediction)
     # LoRA must see the real CLIP modules. Clip skip is applied only for the draw.
     unwrap_clip_skip(_PIPE)
-    from yume_server.regional import active_regions
-
-    pose_on, copy_on, style_on = _reference_flags(body)
-    regional = len(active_regions(body)) >= 2 and not (pose_on or copy_on or style_on)
-    saved_loras = body.loras
-    if regional:
-        body.loras = [lora for lora in (body.loras or []) if str(getattr(lora, "kind", "style") or "style") != "character"]
     adapters = _apply_loras(_PIPE, body.loras)
     strength = float(getattr(body, "strength", 0.45) or 0.45)
     conditioning: dict[str, Any] | None = None
@@ -822,7 +819,6 @@ def generate_images(body: Any, on_progress: Any = None) -> tuple[list[str], list
     try:
         images = _draw_seeds(_PIPE, body, seeds, consistency, strength, conditioning)
     finally:
-        body.loras = saved_loras
         unwrap_clip_skip(_PIPE)
         _clear_loras(_PIPE, adapters)
     return images, seeds, chosen, consistency, switched
@@ -855,16 +851,11 @@ def _draw_seeds(
             common["prompt"] = body.prompt
             common["negative_prompt"] = body.negative_prompt or None
         pose_on, copy_on, style_on = _reference_flags(body)
-        from yume_server.regional import active_regions
+        from yume_server.regional import active_regions, drawing_mode
 
         regions = active_regions(body)
-        if len(regions) >= 2 and not (pose_on or copy_on or style_on):
-            _LOG.info(
-                "regional prompt count=%s layout=%s; each character LoRA stays inside its own area",
-                len(regions),
-                getattr(body, "region_layout", "side"),
-            )
-            result = _draw_regional(pipe, body, common, regions)
+        if drawing_mode(body) == "together" and not (pose_on or copy_on or style_on):
+            result = _draw_together(pipe, body, common, regions, conditioning)
         elif pose_on or copy_on or style_on:
             result = _draw_reference(pipe, body, common, strength, pose_on, copy_on, style_on)
         else:
@@ -875,56 +866,15 @@ def _draw_seeds(
     return images
 
 
-def _draw_regional(pipe: Any, body: Any, common: dict[str, Any], regions: list[Any]) -> Any:
-    """Base picture uses style LoRAs. Each character is inpainted in its rectangle with only that LoRA."""
-    style = [lora for lora in (body.loras or []) if str(getattr(lora, "kind", "style") or "style") != "character"]
-    saved = body.loras
-    body.loras = style
+def _draw_together(pipe: Any, body: Any, common: dict[str, Any], regions: list[Any], conditioning: dict[str, Any] | None) -> Any:
+    """One denoising pass. Soft masks mix character prompts into the shared prompt."""
+    from yume_server.couple import bind_together, unbind_together
+
+    state = bind_together(pipe, body, regions, conditioning)
     try:
-        base = _draw_with_hires(pipe, common, body)
+        return _draw_with_hires(pipe, common, body)
     finally:
-        body.loras = saved
-    image = base.images[0]
-    try:
-        pipe.unload_lora_weights()
-    except Exception:
-        _LOG.info("regional base could not unload style LoRAs before the character passes")
-    for region in regions:
-        image = _inpaint_region(pipe, image, region, body, style, common)
-    return type("Regional", (), {"images": [image]})()
-
-
-def _inpaint_region(pipe: Any, image: Any, region: Any, body: Any, style: list[Any], common: dict[str, Any]) -> Any:
-    from diffusers import StableDiffusionXLInpaintPipeline
-    from PIL import Image, ImageDraw
-
-    width, height = image.size
-    mask = Image.new("L", (width, height), 0)
-    x0 = int(float(region.x) * width)
-    y0 = int(float(region.y) * height)
-    x1 = max(x0 + 8, int((float(region.x) + float(region.w)) * width))
-    y1 = max(y0 + 8, int((float(region.y) + float(region.h)) * height))
-    ImageDraw.Draw(mask).rectangle([x0, y0, x1 - 1, y1 - 1], fill=255)
-    prompt = ", ".join(part for part in (body.prompt, str(region.prompt or "")) if part and str(part).strip())
-    character = type("Lora", (), {"name": region.lora_name, "weight": float(region.lora_weight or 0.8)})()
-    loras = [*style, character] if character.name else style
-    runner = StableDiffusionXLInpaintPipeline(**pipe.components)
-    adapters = _apply_loras(runner, loras)
-    _LOG.info("regional inpaint lora=%s prompt=%s", character.name, prompt[:180])
-    try:
-        result = runner(
-            prompt=prompt,
-            negative_prompt=body.negative_prompt or None,
-            image=image,
-            mask_image=mask,
-            strength=0.65,
-            num_inference_steps=max(8, int(common.get("num_inference_steps") or body.steps) // 2),
-            guidance_scale=body.cfg,
-            generator=common.get("generator"),
-        )
-        return result.images[0]
-    finally:
-        _clear_loras(runner, adapters)
+        unbind_together(state)
 
 
 def _pose_image(body: Any) -> Any:

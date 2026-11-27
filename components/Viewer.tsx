@@ -168,6 +168,7 @@ export function Viewer() {
                         ...(lora.triggers?.length ? { triggers: lora.triggers } : {}),
                       })),
                       regionLayout: generation.regionLayout || 'side',
+                      interaction: generation.interaction || '',
                       referencePose: Boolean(generation.shot?.reference.pose),
                       referenceCopy: Boolean(generation.shot?.reference.copy),
                       referenceStyle: Boolean(generation.shot?.reference.style),
