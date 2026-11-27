@@ -24,6 +24,10 @@ export type LoraSpec = {
   weight: number;
   modelId?: number;
   versionId?: number;
+  prompt?: string;
+  enabled?: boolean;
+  triggers?: string[];
+  kind?: 'character' | 'style';
 };
 
 export type UserStyle = {
@@ -128,6 +132,7 @@ export type Generation = {
   height: number;
   saladModel: string;
   loras: LoraSpec[];
+  regionLayout?: 'side' | 'stack';
   warning?: string;
   durationMs?: number;
   favoriteIndexes?: number[];

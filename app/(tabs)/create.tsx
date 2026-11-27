@@ -17,6 +17,7 @@ import { applyCheckpoint, installLocal, patchGenerator, resetBuiltPrompt, resetM
 import { WAI_ILLUSTRIOUS, baseFamily, baseLabel, illustriousOffer, loraBaseWarning, modelCardPress } from '@/src/lib/checkpoints';
 import { triggerGroups } from '@/src/lib/draw';
 import { runModelInstall } from '@/src/lib/modelInstall';
+import { characterLoras, loraPromptNote, mergeTriggerWords } from '@/src/lib/loraPrompt';
 import { generatePromptFromDescribe, namedPeople, type NamedPerson } from '@/src/lib/positiveTags';
 import { defaultOutfitTags, sentNegative } from '@/src/lib/draw';
 import { STUDIO_SIZES, STUDIO_STYLES } from '@/src/lib/animeStudio';
@@ -356,7 +357,12 @@ export default function GenerateScreen() {
           weight: lora.weight,
           ...(lora.modelId ? { modelId: lora.modelId } : {}),
           ...(lora.versionId ? { versionId: lora.versionId } : {}),
+          ...(lora.prompt != null ? { prompt: lora.prompt } : {}),
+          ...(lora.enabled === false ? { enabled: false } : {}),
+          ...(lora.kind ? { kind: lora.kind } : {}),
+          ...(lora.triggers?.length ? { triggers: lora.triggers } : {}),
         })),
+        regionLayout: gen.regionLayout,
         durationMs: Date.now() - started,
       };
       await studio.rememberGeneration(record);
@@ -576,42 +582,72 @@ export default function GenerateScreen() {
           <Text style={styles.link}>Add LoRA</Text>
         </Pressable>
         <LoraSheet visible={loraSheet} onClose={() => setLoraSheet(false)} />
-        <View style={styles.row}>
-          {gen.loras.map((lora) => {
-            const page = loraPage(lora);
-            const groups = triggerGroups(lora.triggers);
-            const offer = illustriousOffer(checkpoint?.baseModel ?? '', lora.baseModel ?? '', gen.installed);
-            return (
-              <View key={`${lora.name}-${lora.versionId ?? lora.weight}`} style={styles.chipButton}>
-                <Pressable onPress={() => openLink(page.url)}>
-                  <Text style={styles.chipText}>{page.label === 'Search on Civitai' ? `Search ${lora.name}` : lora.name}</Text>
+        {gen.loras.map((lora, index) => {
+          const page = loraPage(lora);
+          const offer = illustriousOffer(checkpoint?.baseModel ?? '', lora.baseModel ?? '', gen.installed);
+          const update = (patch: Partial<typeof lora>) =>
+            patchGenerator({ loras: gen.loras.map((item, itemIndex) => (itemIndex === index ? { ...item, ...patch } : item)) });
+          return (
+            <View key={`${lora.name}-${lora.versionId ?? index}`} style={styles.loraCard}>
+              <View style={styles.row}>
+                <Pressable onPress={() => openLink(page.url)} style={{ flex: 1 }}>
+                  <Text style={styles.checkpointName}>{lora.name}</Text>
                 </Pressable>
-                <Text style={styles.chipText}>{lora.weight}</Text>
-                {groups.slice(1).map((group, index) => (
-                  <Pressable
-                    key={group[0]}
-                    onPress={() =>
-                      patchGenerator({
-                        loras: gen.loras.map((item) => (item === lora ? { ...item, triggerGroup: index + 1 } : item)),
-                      })
-                    }>
-                    <Text style={styles.chipText}>{lora.triggerGroup === index + 1 ? group[0] : `Also ${group[0]}`}</Text>
-                  </Pressable>
-                ))}
-                {offer ? (
-                  <Pressable testID="use-wai-illustrious" onPress={() => void useWaiIllustrious(offer)}>
-                    <Text style={styles.chipText}>{offer === 'switch' ? 'Switch to Illustrious' : 'Install WAI-Illustrious'}</Text>
-                  </Pressable>
-                ) : null}
-                {loraBaseWarning(checkpoint?.baseModel ?? '', lora.baseModel ?? '') ? (
-                  <Text style={styles.chipText}>{loraBaseWarning(checkpoint?.baseModel ?? '', lora.baseModel ?? '')}</Text>
-                ) : null}
-                <Pressable onPress={() => patchGenerator({ loras: gen.loras.filter((item) => item !== lora) })}>
-                  <Text style={styles.chipText}>×</Text>
+                <Pressable testID={`lora-kind-${index}`} onPress={() => update({ kind: lora.kind === 'character' ? 'style' : 'character' })}>
+                  <Text style={styles.link}>{lora.kind === 'character' ? 'Character' : 'Style/Other'}</Text>
+                </Pressable>
+                <Pressable onPress={() => update({ enabled: lora.enabled === false })}>
+                  <Text style={styles.link}>{lora.enabled === false ? 'Off' : 'On'}</Text>
+                </Pressable>
+                <Pressable testID={`lora-remove-${index}`} onPress={() => patchGenerator({ loras: gen.loras.filter((_, itemIndex) => itemIndex !== index) })}>
+                  <Text style={styles.link}>Remove</Text>
                 </Pressable>
               </View>
-            );
-          })}
+              <View style={styles.row}>
+                {[0.4, 0.6, 0.8, 1, 1.2].map((weight) => (
+                  <Pressable key={weight} onPress={() => update({ weight })} style={[styles.chipButton, lora.weight === weight && styles.chipOn]}>
+                    <Text style={styles.chipText}>{weight}</Text>
+                  </Pressable>
+                ))}
+              </View>
+              <TextInput
+                testID={`lora-prompt-${index}`}
+                value={lora.prompt || ''}
+                onChangeText={(prompt) => update({ prompt })}
+                placeholder="This LoRA's prompt"
+                placeholderTextColor={colors.faint}
+                multiline
+                style={styles.prompt}
+              />
+              <Pressable testID={`lora-triggers-${index}`} onPress={() => update({ prompt: mergeTriggerWords(lora.prompt || '', lora.triggers) })}>
+                <Text style={styles.link}>Re-insert triggers</Text>
+              </Pressable>
+              {loraPromptNote(lora.triggers) ? <Text style={styles.hint}>{loraPromptNote(lora.triggers)}</Text> : null}
+              {offer ? (
+                <Pressable testID="use-wai-illustrious" onPress={() => void useWaiIllustrious(offer)}>
+                  <Text style={styles.link}>{offer === 'switch' ? 'Switch to Illustrious' : 'Install WAI-Illustrious'}</Text>
+                </Pressable>
+              ) : null}
+              {loraBaseWarning(checkpoint?.baseModel ?? '', lora.baseModel ?? '') ? (
+                <Text style={styles.hint}>{loraBaseWarning(checkpoint?.baseModel ?? '', lora.baseModel ?? '')}</Text>
+              ) : null}
+            </View>
+          );
+        })}
+        {characterLoras(gen.loras).length >= 2 ? (
+          <View style={styles.row}>
+            <Pressable testID="layout-side" onPress={() => patchGenerator({ regionLayout: 'side' })}>
+              <Text style={styles.link}>{gen.regionLayout === 'stack' ? 'Side by side' : 'Side by side · on'}</Text>
+            </Pressable>
+            <Pressable testID="layout-stack" onPress={() => patchGenerator({ regionLayout: 'stack' })}>
+              <Text style={styles.link}>{gen.regionLayout === 'stack' ? 'Top and bottom · on' : 'Top and bottom'}</Text>
+            </Pressable>
+          </View>
+        ) : null}
+        {characterLoras(gen.loras).length >= 2 ? (
+          <Text style={styles.hint}>Each character LoRA is painted in its own area, left to right or top to bottom, so the characters do not blend. Style LoRAs still cover the whole picture.</Text>
+        ) : null}
+        <View style={styles.row}>
           {parsed.map((lora) => (
             <Text key={`tag-${lora.name}`} style={styles.chip}>
               from prompt {lora.name}:{lora.weight}
@@ -925,6 +961,7 @@ const styles = StyleSheet.create({
   chipOnText: { color: colors.sakura },
   chipText: { color: colors.text, fontFamily: font.bold, fontSize: 13 },
   grid: { flexDirection: 'row', gap: 8 },
+  loraCard: { borderWidth: 1, borderColor: colors.line, borderRadius: 16, padding: 12, gap: 8, backgroundColor: colors.card },
   go: { backgroundColor: colors.sakura, borderRadius: 999, paddingVertical: 14, alignItems: 'center' },
   generate: { backgroundColor: colors.sakura, borderRadius: 999, paddingHorizontal: 14, paddingVertical: 8, minWidth: 148, alignItems: 'center' },
   generateText: { color: colors.text, fontFamily: font.black, fontSize: 14 },

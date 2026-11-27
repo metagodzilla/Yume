@@ -50,6 +50,18 @@ class LoraIn(BaseModel):
     versionId: int | None = None
     baseModel: str | None = None
     triggers: list[str] = []
+    kind: str = "style"
+    prompt: str = ""
+
+
+class RegionIn(BaseModel):
+    prompt: str = ""
+    x: float = 0
+    y: float = 0
+    w: float = 1
+    h: float = 1
+    lora_name: str = ""
+    lora_weight: float = 0.8
 
 
 class TagIn(BaseModel):
@@ -161,6 +173,8 @@ class GenerateIn(BaseModel):
     hires_steps: int = 18
     mask: str | None = None
     prediction_type: str | None = None
+    regions: list[RegionIn] = []
+    region_layout: str = "side"
 
 
 def _check_key(request: Request) -> None:

@@ -195,8 +195,11 @@ export default function ModelScreen() {
                       versionId: version.id,
                       triggers: version.trainedWords,
                       baseModel: version.baseModel,
+                      type: model.type,
+                      tags: model.tags,
                     };
-                    addLora(picked);
+                    const added = addLora(picked);
+                    if (added.message) setStatus(added.message);
                     if (studio.settings.provider !== 'salad') return;
                     const endpoint = normalizeEndpoint(studio.settings.saladEndpoint);
                     const key = await readSaladKey();

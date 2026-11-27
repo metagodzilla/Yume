@@ -104,7 +104,12 @@ export function reusePatch(generation: Generation, imageIndex: number) {
       weight: lora.weight,
       ...(lora.modelId ? { modelId: lora.modelId } : {}),
       ...(lora.versionId ? { versionId: lora.versionId } : {}),
+      ...(lora.prompt != null ? { prompt: lora.prompt } : {}),
+      ...(lora.enabled === false ? { enabled: false } : {}),
+      ...(lora.kind ? { kind: lora.kind } : {}),
+      ...(lora.triggers?.length ? { triggers: lora.triggers } : {}),
     })),
+    ...(generation.regionLayout ? { regionLayout: generation.regionLayout } : {}),
   };
 }
 

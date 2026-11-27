@@ -2,6 +2,7 @@ import { useSyncExternalStore } from 'react';
 
 import type { ContentFilter } from '@/src/lib/civitai';
 import { ANIME_STUDIO_CHECKPOINT, STUDIO_APPLIED, type StudioStyleId } from '@/src/lib/animeStudio';
+import { detectLoraKind, mergeTriggerWords } from '@/src/lib/loraPrompt';
 import { settleSavedPrompts } from '@/src/lib/positiveTags';
 import { settingsForCheckpoint, type RecommendedSettings } from '@/src/lib/checkpoints';
 import { DEFAULT_CHECKPOINT } from '@/src/lib/defaultModel';
@@ -62,7 +63,8 @@ export type GeneratorState = {
   qualityTags: boolean;
   triggers: boolean;
   checkpointId: number;
-  loras: { name: string; weight: number; modelId?: number; versionId?: number; baseModel?: string; triggers?: string[]; triggerGroup?: number }[];
+  loras: { name: string; weight: number; modelId?: number; versionId?: number; baseModel?: string; triggers?: string[]; triggerGroup?: number; prompt?: string; enabled?: boolean; kind?: 'character' | 'style' }[];
+  regionLayout: 'side' | 'stack';
   contentFilter: ContentFilter;
   embeddings: string;
   vae: string;
@@ -145,6 +147,7 @@ export const initialGenerator = (): GeneratorState => ({
   triggers: true,
   checkpointId: DEFAULT_CHECKPOINT.versionId,
   loras: [],
+  regionLayout: 'side',
   embeddings: '',
   vae: '',
   hires: false,
@@ -267,19 +270,39 @@ export function resetQualityTags(baseModel: string, name = '') {
   patchGenerator({ quality: preset.quality, qualityEdited: false, qualityTags: true });
 }
 
-export function addLora(lora: { name: string; weight: number; modelId?: number; versionId?: number; triggers?: string[]; baseModel?: string }) {
+export function addLora(lora: { name: string; weight: number; modelId?: number; versionId?: number; triggers?: string[]; baseModel?: string; kind?: 'character' | 'style'; tags?: string[]; type?: string }): { ok: boolean; message: string | null } {
   const same = (item: GeneratorState['loras'][number]) =>
     lora.versionId && item.versionId ? item.versionId === lora.versionId : item.name === lora.name;
+  const existing = state.loras.find(same);
+  if (!existing && state.loras.length >= 10) {
+    return { ok: false, message: 'You can use up to 10 LoRAs. Remove one before adding another.' };
+  }
+  const triggers = lora.triggers?.length ? lora.triggers : existing?.triggers;
+  const prompt = mergeTriggerWords(existing?.prompt || '', triggers);
+  const kind = existing?.kind || detectLoraKind({ type: lora.type, tags: lora.tags, name: lora.name, kind: lora.kind });
   const others = state.loras.filter((item) => !same(item));
   patchGenerator({
-    loras: [...others, { name: lora.name, weight: lora.weight, modelId: lora.modelId, versionId: lora.versionId, baseModel: lora.baseModel, triggers: lora.triggers, triggerGroup: 0 }],
+    loras: [...others, { name: lora.name, weight: lora.weight, modelId: lora.modelId, versionId: lora.versionId, baseModel: lora.baseModel, triggers, triggerGroup: existing?.triggerGroup ?? 0, prompt, enabled: existing?.enabled !== false, kind }],
     triggers: true,
   });
   if (lora.versionId) {
     void import('@/src/lib/restoreModels').then(({ keepInstalled }) =>
-      keepInstalled({ versionId: lora.versionId!, type: 'LORA', name: lora.name, triggers: lora.triggers }),
+      keepInstalled({ versionId: lora.versionId!, type: 'LORA', name: lora.name, triggers }),
     );
   }
+  return { ok: true, message: prompt.trim() ? null : 'This LoRA has no trigger words.' };
+}
+
+export async function addLoraWithTriggers(
+  lora: { name: string; weight: number; modelId?: number; versionId?: number; triggers?: string[]; baseModel?: string; kind?: 'character' | 'style'; tags?: string[]; type?: string },
+  token?: string | null,
+): Promise<{ ok: boolean; message: string | null }> {
+  let triggers = lora.triggers;
+  if ((!triggers || !triggers.length) && lora.versionId) {
+    const { fetchTrainedWords } = await import('@/src/lib/loraPrompt');
+    triggers = await fetchTrainedWords(lora.versionId, token);
+  }
+  return addLora({ ...lora, triggers });
 }
 
 export function rememberServerModels(records: InstalledResource[]) {

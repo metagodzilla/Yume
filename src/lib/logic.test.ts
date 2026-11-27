@@ -25,6 +25,7 @@ import { renderDemoFrames } from '@/src/lib/render';
 import { describeUpdateError, downloadLabel } from '@/src/lib/apkInstall';
 import { baseFamily, baseLabel, defaultsForBase, familyPreset, illustriousOffer, settingsForCheckpoint, modelCardPress, routeLeavesCreate } from '@/src/lib/checkpoints';
 import { modelsToRestore, modelPresence } from '@/src/lib/keptModels';
+import { assembleLoraPrompts, detectLoraKind, loraCapMessage, loraRoundTrip, mergeTriggerWords, regionalRequest } from '@/src/lib/loraPrompt';
 import { friendlyLoraMessage, loraChoices, loraStem, missingSelectedLoras } from '@/src/lib/loraGate';
 import { applyAppearance, assignReferences, mergeAppearances, pickFrontIndex, referenceImages } from '@/src/lib/fromImage';
 import { blankCharacter } from '@/src/lib/id';
@@ -810,10 +811,25 @@ const previewState = {
   extraPrompt: 'shiny eyes',
   vPrediction: false,
   studioStyle: 'off',
+  regionLayout: 'side',
   installed: [{ versionId: 1337429, modelId: 1, name: 'Animagine XL 4.0', version: 'v4', type: 'Checkpoint', baseModel: 'SDXL 1.0', filename: 'animagine-xl-4.0.safetensors', hash: '1d5b43ff75', sha256: '', triggers: [], isDefault: true }],
 } as GeneratorState;
 const previewBody = buildSaladGenerateBody(previewState, composeGenerationPrompt(previewState), 1);
-assert(previewBody.loras.length === 1 && previewBody.loras[0]?.name === 'ribbon', 'empty lora is not sent');
+assert(previewBody.loras.length === 1 && previewBody.loras[0]?.name === 'ribbon' && previewBody.regions.length === 0, 'empty lora is not sent and one style lora stays global');
+const regionalState = {
+  ...previewState,
+  regionLayout: 'side' as const,
+  loras: [
+    { name: 'momo', weight: 0.8, kind: 'character' as const, prompt: 'pink hair', enabled: true },
+    { name: 'ink', weight: 0.5, kind: 'style' as const, prompt: 'lineart', enabled: true },
+    { name: 'ken', weight: 0.7, kind: 'character' as const, prompt: 'blue eyes', enabled: true },
+  ],
+};
+const regionalPrompt = composeGenerationPrompt(regionalState);
+const regionalBody = buildSaladGenerateBody(regionalState, regionalPrompt, 7);
+assert(regionalPrompt.includes('lineart') && !regionalPrompt.includes('pink hair') && !regionalPrompt.includes('blue eyes'), 'style lora text stays in the global prompt and character text leaves it');
+assert(regionalBody.regions.length === 2 && regionalBody.regions[0]?.lora_name === 'momo' && regionalBody.regions[1]?.lora_name === 'ken' && regionalBody.region_layout === 'side' && regionalBody.loras.some((lora) => lora.kind === 'character'), 'the request splits two characters and still sends every lora');
+assert(buildSaladGenerateBody({ ...previewState, loras: [{ name: 'momo', weight: 0.8, kind: 'character', prompt: 'pink hair' }] }, 'girl', 1).regions.length === 0, 'one character sends no regions');
 assert(previewBody.embeddings.length === 1 && previewBody.embeddings[0] === 'easynegative', 'empty embeddings are not sent');
 assert(previewBody.model === '1337429' && previewBody.model_name === 'Animagine XL 4.0' && previewBody.scheduler === 'Euler a' && previewBody.hires_scale === null, 'create payload selects the checkpoint by id');
 assert(modelCardPress().action === 'open-sheet' && modelCardPress().browse === '/(tabs)/explore' && routeLeavesCreate('/models') && !routeLeavesCreate(modelCardPress().browse), 'model card opens the sheet');
@@ -862,6 +878,24 @@ addLora({ name: 'extra', weight: 0.5, triggers: ['should not land in prompt'] })
 assert(getGenerator().prompt === 'girl, manga', 'addLora leaves the prompt box alone');
 const triggered = composeGenerationPrompt(added);
 assert(triggered.startsWith('girl, manga, ribbon hair') && !triggered.toLowerCase().includes('monochrome') && triggered.endsWith('absurdres'), 'first trigger group is used and blocklisted lora tags are dropped');
+assert(mergeTriggerWords('pink hair, solo', ['Pink Hair', 'blue eyes']) === 'pink hair, solo, blue eyes', 'trigger words fill a lora prompt without duplicates');
+assert(loraCapMessage(9) === null && loraCapMessage(10)?.includes('10'), 'an eleventh lora is refused');
+const cappedBefore = getGenerator().loras;
+patchGenerator({ loras: Array.from({ length: 10 }, (_, index) => ({ name: `cap-${index}`, weight: 0.8 })) });
+const refusedLora = addLora({ name: 'eleventh', weight: 0.8, triggers: ['sparkle'] });
+assert(refusedLora.ok === false && (refusedLora.message || '').includes('10') && getGenerator().loras.length === 10, 'the eleventh lora is not added');
+patchGenerator({ loras: cappedBefore });
+assert(assembleLoraPrompts('girl', [{ prompt: 'pink hair', enabled: true }, { prompt: '  ', enabled: true }, { prompt: 'smile', enabled: false }, { prompt: 'blue eyes', enabled: true }]) === 'girl, pink hair, blue eyes', 'lora prompts follow the main prompt and skip blanks');
+const savedLoras = loraRoundTrip([{ name: 'momo', weight: 0.8, prompt: 'pink hair', enabled: true, triggers: ['pink hair'], kind: 'character' as const }]);
+assert(savedLoras[0]?.prompt === 'pink hair' && savedLoras[0]?.kind === 'character', 'a lora prompt survives a save and load');
+assert(detectLoraKind({ tags: ['character', 'anime'], name: 'Momo' }) === 'character' && detectLoraKind({ type: 'LORA', tags: ['clothing'], name: 'ribbon' }) === 'style', 'character tags are detected and other loras stay style');
+const regions = regionalRequest([
+  { name: 'momo', weight: 0.8, kind: 'character', prompt: 'pink hair', enabled: true },
+  { name: 'ink', weight: 0.5, kind: 'style', prompt: 'lineart', enabled: true },
+  { name: 'ken', weight: 0.7, kind: 'character', prompt: 'blue eyes', enabled: true },
+], 'side');
+assert(regions?.regions.length === 2 && regions.regions[0]?.loraName === 'momo' && regions.regions[0]?.w === 0.5 && regions.regions[1]?.x === 0.5, 'two characters split the picture and a style lora does not');
+assert(regionalRequest([{ name: 'momo', weight: 0.8, kind: 'character', prompt: 'pink hair' }], 'side') === null, 'one character stays on the normal prompt');
 assert(illustriousOffer('SDXL 1.0', 'Illustrious', []) === 'install' && illustriousOffer('SDXL 1.0', 'Illustrious', [{ type: 'Checkpoint', baseModel: 'Illustrious' }]) === 'switch', 'illustrious lora offers a matching checkpoint');
 const generatedPrompt = generatePromptFromDescribe({ describe: 'a girl with pink hair taking a selfie in her room', prompt: 'masterpiece', clothes: '', positive: '' });
 assert(!generatedPrompt.error && generatedPrompt.prompt.includes('1girl') && generatedPrompt.prompt.includes('pink hair') && generatedPrompt.prompt.includes('masterpiece'), 'generate prompt fills tags offline and keeps hand edits');

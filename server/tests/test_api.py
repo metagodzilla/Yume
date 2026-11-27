@@ -408,6 +408,29 @@ def test_generate_returns_pngs_seed_scheduler_and_loras(client: TestClient) -> N
     assert (width, height) == (832, 1216)
 
 
+def test_generate_accepts_character_regions_and_still_draws(client: TestClient) -> None:
+    headers = {"Authorization": "Bearer test-key"}
+    response = client.post(
+        "/generate",
+        headers=headers,
+        json={
+            "prompt": "two people, shrine",
+            "loras": [
+                {"name": "momo", "weight": 0.8, "kind": "character", "prompt": "pink hair"},
+                {"name": "ink", "weight": 0.5, "kind": "style", "prompt": "lineart"},
+                {"name": "ken", "weight": 0.7, "kind": "character", "prompt": "blue eyes"},
+            ],
+            "regions": [
+                {"prompt": "pink hair", "x": 0, "y": 0, "w": 0.5, "h": 1, "lora_name": "momo", "lora_weight": 0.8},
+                {"prompt": "blue eyes", "x": 0.5, "y": 0, "w": 0.5, "h": 1, "lora_name": "ken", "lora_weight": 0.7},
+            ],
+            "region_layout": "side",
+        },
+    )
+    body = finish_generate(client, response, headers)
+    assert body["images"] and body["images"][0]
+
+
 def test_generate_rejects_a_bad_size_and_unknown_scheduler(client: TestClient) -> None:
     headers = {"Authorization": "Bearer test-key"}
     size = client.post("/generate", headers=headers, json={"prompt": "x", "width": 100, "height": 100})
