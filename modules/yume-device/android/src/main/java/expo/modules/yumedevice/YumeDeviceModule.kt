@@ -17,6 +17,7 @@ import android.provider.Settings
 import expo.modules.kotlin.modules.Module
 import expo.modules.kotlin.modules.ModuleDefinition
 import java.io.File
+import java.security.MessageDigest
 
 class YumeDeviceModule : Module() {
   override fun definition() = ModuleDefinition {
@@ -24,8 +25,12 @@ class YumeDeviceModule : Module() {
     Function("read") {
       readDevice(appContext.reactContext)
     }
-    Function("installApk") { contentUri: String ->
+    Function("installApk") { contentUri: String, apkPath: String ->
       val context = appContext.reactContext ?: throw IllegalStateException("Yume is not attached to Android yet.")
+      val local = localApkPath(apkPath)
+      if (local != null && signaturesDiffer(context, local)) {
+        throw IllegalStateException("This update is signed with a new key. Uninstall Yume, then tap Update again.")
+      }
       val uri = Uri.parse(contentUri)
       if (uri.scheme != "content") {
         throw IllegalArgumentException("The installer needs a content URI from Yume's file provider.")
@@ -109,6 +114,45 @@ private fun cpuPercent(): Double? {
   val cores = Runtime.getRuntime().availableProcessors().coerceAtLeast(1)
   val cpuSeconds = (second - first) / 100.0
   return (cpuSeconds / elapsed / cores * 100.0).coerceIn(0.0, 100.0)
+}
+
+private fun localApkPath(value: String): String? {
+  val trimmed = value.trim()
+  if (trimmed.startsWith("file:")) return Uri.parse(trimmed).path
+  if (trimmed.startsWith("/")) return trimmed
+  return null
+}
+
+private fun certDigests(info: android.content.pm.PackageInfo?): Set<String> {
+  if (info == null) return emptySet()
+  val signatures = if (Build.VERSION.SDK_INT >= 28) {
+    val signing = info.signingInfo ?: return emptySet()
+    if (signing.hasMultipleSigners()) signing.apkContentsSigners else signing.signingCertificateHistory
+  } else {
+    @Suppress("DEPRECATION")
+    info.signatures
+  } ?: return emptySet()
+  val digest = MessageDigest.getInstance("SHA-256")
+  return signatures.map { signature ->
+    digest.reset()
+    digest.digest(signature.toByteArray()).joinToString("") { "%02x".format(it) }
+  }.toSet()
+}
+
+private fun signaturesDiffer(context: Context, apkPath: String): Boolean {
+  return try {
+    val flags = if (Build.VERSION.SDK_INT >= 28) {
+      PackageManager.GET_SIGNING_CERTIFICATES
+    } else {
+      @Suppress("DEPRECATION")
+      PackageManager.GET_SIGNATURES
+    }
+    val installed = certDigests(context.packageManager.getPackageInfo(context.packageName, flags))
+    val incoming = certDigests(context.packageManager.getPackageArchiveInfo(apkPath, flags))
+    installed.isNotEmpty() && incoming.isNotEmpty() && installed.intersect(incoming).isEmpty()
+  } catch (_: Exception) {
+    false
+  }
 }
 
 private fun procTicks(): Long? {

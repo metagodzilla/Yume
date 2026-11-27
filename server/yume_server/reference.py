@@ -56,8 +56,9 @@ def ensure_reference_weights() -> None:
         cache = os.environ.get("HF_HOME") or os.environ.get("YUME_MODEL_DIR") or "/models"
         from yume_server.startup import note_file, tqdm_factory
 
-        snapshot_download(CONTROLNET_REPO, cache_dir=cache, tqdm_class=tqdm_factory("controlnet-pose", "OpenPose ControlNet", "ControlNet"))
-        note_file("controlnet-pose", name="OpenPose ControlNet", kind="ControlNet", done=1, total=1, state="done")
+        from yume_server.weights import download_controlnet
+
+        download_controlnet(CONTROLNET_REPO, cache, "controlnet-pose", "OpenPose ControlNet")
         snapshot_download(IP_REPO, allow_patterns=[f"{IP_SUBFOLDER}/ip-adapter-plus_sdxl_vit-h.*", f"{IP_SUBFOLDER}/image_encoder/**"], cache_dir=cache, tqdm_class=tqdm_factory("ip-adapter", "IP-Adapter", "IP-Adapter"))
         note_file("ip-adapter", name="IP-Adapter", kind="IP-Adapter", done=1, total=1, state="done")
         _READY = True

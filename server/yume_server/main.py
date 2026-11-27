@@ -236,6 +236,15 @@ async def lifespan(app: FastAPI):
         yield
         return
 
+    from yume_server.features import feature_root
+    from yume_server.runtime_guard import audit_runtime, quarantine_runtime_packages
+
+    root = feature_root()
+    for child in root.iterdir():
+        if child.is_dir():
+            quarantine_runtime_packages(child)
+    audit_runtime()
+
     from yume_server.peft_setup import ensure_peft
     from yume_server.selfheal import start_watch
 
