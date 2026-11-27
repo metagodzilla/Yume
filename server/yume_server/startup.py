@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+import logging
 import threading
 import time
 from typing import Any
+
+_LOG = logging.getLogger("yume.startup")
 
 _LOCK = threading.Lock()
 _STATE: dict[str, Any] = {
@@ -15,6 +18,7 @@ _STATE: dict[str, Any] = {
 }
 _SPEED = {"at": 0.0, "done": 0, "rate": 0.0}
 _FILES: dict[str, dict[str, Any]] = {}
+_DOWNLOAD_LOG = {"at": 0.0, "percent": -1}
 
 
 def mark(stage: str, message: str, *, done: int | None = None, total: int | None = None) -> None:
@@ -27,9 +31,28 @@ def mark(stage: str, message: str, *, done: int | None = None, total: int | None
             _STATE["bytesTotal"] = max(0, int(total))
 
 
-def note_download(done: int, total: int) -> None:
-    mark("downloading", "Downloading model", done=done, total=total)
-    note_file("checkpoint", name="Checkpoint", kind="Checkpoint", done=done, total=total, state="downloading")
+def note_download(done: int, total: int, *, name: str = "Checkpoint") -> None:
+    done = max(0, int(done or 0))
+    total = max(0, int(total or 0))
+    finished = total > 0 and done >= total
+    mark("downloading", f"Downloading {name}", done=done, total=total)
+    note_file("checkpoint", name=name, kind="Checkpoint", done=done, total=total, state="done" if finished else "downloading")
+    _log_download(name, done, total, finished)
+
+
+def _log_download(name: str, done: int, total: int, finished: bool) -> None:
+    """Log checkpoint bytes often enough that a multi-minute WAI download is not silent."""
+    now = time.monotonic()
+    percent = int(done * 100 / total) if total > 0 else 0
+    with _LOCK:
+        speed = float((_FILES.get("checkpoint") or {}).get("speed") or 0)
+        last = float(_DOWNLOAD_LOG["at"] or 0)
+        last_percent = int(_DOWNLOAD_LOG["percent"])
+        if not finished and last and now - last < 5 and percent == last_percent:
+            return
+        _DOWNLOAD_LOG["at"] = now
+        _DOWNLOAD_LOG["percent"] = percent
+    _LOG.info("checkpoint download %s %s/%s bytes (%s%%) %.2f MB/s", name, done, total, percent, speed / (1024 * 1024))
 
 
 def note_file(key: str, *, name: str, kind: str, done: int = 0, total: int = 0, state: str = "downloading", version_id: int | None = None, feature: str | None = None) -> None:

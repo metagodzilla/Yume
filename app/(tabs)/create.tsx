@@ -1,8 +1,8 @@
 import * as Clipboard from 'expo-clipboard';
-import { router } from 'expo-router';
-import { useEffect, useRef, useState } from 'react';
+import { router, useFocusEffect } from 'expo-router';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { Image } from 'expo-image';
-import { Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
+import { ActivityIndicator, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { CheckpointSheet } from '@/components/CheckpointSheet';
@@ -17,14 +17,14 @@ import { applyCheckpoint, installLocal, patchGenerator, resetBuiltPrompt, resetM
 import { WAI_ILLUSTRIOUS, baseFamily, baseLabel, illustriousOffer, loraBaseWarning, modelCardPress } from '@/src/lib/checkpoints';
 import { triggerGroups } from '@/src/lib/draw';
 import { runModelInstall } from '@/src/lib/modelInstall';
-import { describeParts, keepManualTags, namedPeople, supportTags, type NamedPerson } from '@/src/lib/positiveTags';
+import { characterLoras, loraPromptNote, mergeTriggerWords } from '@/src/lib/loraPrompt';
+import { generatePromptFromDescribe, namedPeople, type NamedPerson } from '@/src/lib/positiveTags';
 import { defaultOutfitTags, sentNegative } from '@/src/lib/draw';
 import { STUDIO_SIZES, STUDIO_STYLES } from '@/src/lib/animeStudio';
 import { SAMPLERS, sizesFor } from '@/src/lib/defaultModel';
 import { extractLoras } from '@/src/lib/a1111';
 import { loraPage } from '@/src/lib/civitai';
 import { openLink } from '@/src/lib/openLink';
-import { getGenerator } from '@/src/lib/genstore';
 import { DISK_RESET_NOTE, modelPresence } from '@/src/lib/keptModels';
 import { restoreMissingModels, useRestoringIds } from '@/src/lib/restoreModels';
 import { ensureSelectedLoras } from '@/src/lib/ensureLoras';
@@ -35,15 +35,23 @@ import { persistPng, readApiKey, readCivitaiToken, readPng, readSaladKey } from 
 import { pickLocalImages } from '@/src/lib/fromImage';
 import { bytesToBase64 } from '@/src/lib/base64';
 import { bodySizeFromHeight, type BodySize } from '@/src/lib/referencePicture';
+import { useCloudGate } from '@/src/lib/cloudGate';
+import { cloudIsWaiting, phoneDropNote, shouldUsePhone } from '@/src/lib/phoneFallback';
+import { consumeCloudRedo, consumePhoneGenerate } from '@/src/lib/cloudRedo';
 import { captureShot, suggestedSettings } from '@/src/lib/taste';
 import { useTasteProfile } from '@/src/lib/tasteStore';
 import { uid } from '@/src/lib/id';
+import { addJob, applyThermal, finishJob, reportJob } from '@/src/lib/queuestore';
+import { readPhone } from '@/src/lib/device';
+import { classifyHeat, throttleSteps } from '@/src/lib/phonePower';
+import { getThrottle } from '@/src/lib/thermalState';
 import { useStudio } from '@/src/studio';
 import { colors, font } from '@/src/theme';
 import type { Generation } from '@/src/lib/types';
 
 export default function GenerateScreen() {
   const studio = useStudio();
+  const cloud = useCloudGate();
   const gen = useGenerator();
   const [loraSheet, setLoraSheet] = useState(false);
   const [status, setStatus] = useState<string | null>(null);
@@ -74,59 +82,51 @@ export default function GenerateScreen() {
     characters: studio.characters.filter((item) => item.saved || item.id === studio.selectedCharacterId),
     loras: [...gen.installed.filter((item) => /lora/i.test(item.type)), ...gen.loras],
   });
-  const peopleKey = people.map((person) => `${person.name}:${person.gender}:${(person.triggers ?? []).join('/')}:${(person.tags ?? []).join('/')}`).join('|');
-  const describeKey = [
-    gen.describe,
-    gen.promptAuto ? '1' : '0',
-    gen.positiveAuto ? '1' : '0',
-    gen.clothesAuto ? '1' : '0',
-    gen.studioStyle,
-    checkpoint?.baseModel ?? '',
-    character?.hairColor ?? '',
-    character?.hairStyle ?? '',
-    character?.eyeColor ?? '',
-    character?.outfit ?? '',
-    character?.expression ?? '',
-    character?.pose ?? '',
-    character?.setting ?? '',
-    character?.lighting ?? '',
-    peopleKey,
-  ].join('|');
-  useEffect(() => {
-    if (!gen.describe.trim()) return;
-    const timer = setTimeout(() => {
-      const current = getGenerator();
-      const patch: { prompt?: string; positive?: string; clothes?: string; autoPrompt?: string; autoPositive?: string; autoClothes?: string } = {};
-      const parts = describeParts(current.describe, people);
-      if (current.promptAuto) {
-        const prompt = keepManualTags(parts.prompt, current.prompt, current.autoPrompt ?? '', 'auto');
-        if (prompt && prompt !== current.prompt) patch.prompt = prompt;
-        if (parts.prompt !== (current.autoPrompt ?? '')) patch.autoPrompt = parts.prompt;
+  const [promptBusy, setPromptBusy] = useState(false);
+  const [promptError, setPromptError] = useState<string | null>(null);
+
+  async function generatePrompt() {
+    setPromptBusy(true);
+    setPromptError(null);
+    try {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      const result = generatePromptFromDescribe({
+        describe: gen.describe,
+        prompt: gen.prompt,
+        clothes: gen.clothes || '',
+        positive: gen.positive,
+        autoPrompt: gen.autoPrompt,
+        autoClothes: gen.autoClothes,
+        autoPositive: gen.autoPositive,
+        people,
+        baseModel: checkpoint?.baseModel,
+        style: gen.studioStyle,
+        character,
+      });
+      if (result.error) {
+        setPromptError(result.error);
+        return;
       }
-      if (current.clothesAuto) {
-        const clothes = keepManualTags(parts.clothes, current.clothes || '', current.autoClothes ?? '', 'auto');
-        if (clothes !== (current.clothes || '')) patch.clothes = clothes;
-        if (parts.clothes !== (current.autoClothes ?? '')) patch.autoClothes = parts.clothes;
-        if (character && clothes !== (character.clothesPrompt ?? '')) {
-          void studio.commitCharacter({ ...character, clothesPrompt: clothes });
-        }
+      patchGenerator({
+        prompt: result.prompt,
+        clothes: result.clothes,
+        positive: result.positive,
+        autoPrompt: result.autoPrompt,
+        autoClothes: result.autoClothes,
+        autoPositive: result.autoPositive,
+        promptAuto: false,
+        clothesAuto: false,
+        positiveAuto: false,
+      });
+      if (character && result.clothes !== (character.clothesPrompt ?? '')) {
+        void studio.commitCharacter({ ...character, clothesPrompt: result.clothes });
       }
-      if (current.positiveAuto) {
-        const generated = supportTags({
-          text: current.describe,
-          baseModel: checkpoint?.baseModel,
-          style: current.studioStyle,
-          character,
-          people,
-        });
-        const positive = keepManualTags(generated, current.positive, current.autoPositive ?? '', 'auto');
-        if (positive !== current.positive) patch.positive = positive;
-        if (generated !== (current.autoPositive ?? '')) patch.autoPositive = generated;
-      }
-      if (patch.prompt != null || patch.positive != null || patch.clothes != null || patch.autoPrompt != null || patch.autoPositive != null || patch.autoClothes != null) patchGenerator(patch);
-    }, 350);
-    return () => clearTimeout(timer);
-  }, [describeKey]);
+    } catch (caught) {
+      setPromptError(caught instanceof Error ? caught.message : 'The prompt could not be generated.');
+    } finally {
+      setPromptBusy(false);
+    }
+  }
 
   useEffect(() => {
     void import('@/src/lib/genstore').then(({ hydrateFromDisk }) => hydrateFromDisk());
@@ -234,8 +234,14 @@ export default function GenerateScreen() {
     }
   }
 
-  async function generate() {
+  async function generate(forcedPhone = false) {
     if (busy) return;
+    const onPhone = shouldUsePhone({
+      provider: studio.settings.provider,
+      gate: cloud.gate,
+      auto: studio.settings.autoPhoneWhileCloud !== false,
+      forced: forcedPhone,
+    });
     const prompt = composeGenerationPrompt(gen, character ? characterClause(character) : '');
     if (!prompt.trim()) {
       setError('Write a prompt. Quality tags can be turned off if you want the box to be the whole prompt.');
@@ -244,12 +250,22 @@ export default function GenerateScreen() {
     setBusy(true);
     setError(null);
     const started = Date.now();
-    setStatus(studio.settings.provider === 'salad' ? 'Sending it to Salad…' : 'Drawing on this phone…');
+    const phoneNote = onPhone ? phoneDropNote({ loras: gen.loras.filter((lora) => lora.name.trim()).length, reference: Boolean(gen.referencePose || gen.referenceCopy || gen.referenceStyle) }) : '';
+    setStatus(onPhone ? 'Drawing on this phone…' : studio.settings.provider === 'salad' ? 'Sending it to Salad…' : 'Drawing on this phone…');
+    const phoneJob = onPhone ? addJob('offline-generate', `On this phone · ${(gen.prompt || 'picture').slice(0, 42)}`) : null;
     try {
+      if (onPhone) {
+        const reading = await readPhone();
+        const heat = classifyHeat({ tempC: reading.tempC, thermalStatus: reading.thermalStatus, lowPower: studio.settings.lowPower });
+        if (heat === 'hot' || getThrottle().pauseQueue) {
+          applyThermal('pause');
+          throw new Error('Phone is hot. The queue is paused until it cools.');
+        }
+      }
       const chosen = chooseSeeds({ locked: !gen.seedRandom, seedText: gen.seed, count: gen.count });
       const seed = chosen.requestSeed;
       const [saladKey] = await Promise.all([readSaladKey(), readApiKey()]);
-      if (studio.settings.provider === 'salad') {
+      if (studio.settings.provider === 'salad' && !onPhone) {
         const endpoint = normalizeEndpoint(studio.settings.saladEndpoint);
         const token = await readCivitaiToken().catch(() => null);
         if (endpoint && saladKey) {
@@ -262,12 +278,15 @@ export default function GenerateScreen() {
           });
         }
       }
-      const initPng = referenceUri && (gen.referencePose || gen.referenceCopy || gen.referenceStyle) ? await readPng(referenceUri) : null;
+      const phoneState = onPhone
+        ? { ...gen, loras: [], referencePose: false, referenceCopy: false, referenceStyle: false, ...throttleSteps(gen.steps, gen.count, getThrottle()) }
+        : gen;
+      const initPng = !onPhone && referenceUri && (gen.referencePose || gen.referenceCopy || gen.referenceStyle) ? await readPng(referenceUri) : null;
       const result = await drawFrames({
-        state: gen,
+        state: phoneState,
         prompt,
         seed,
-        provider: studio.settings.provider,
+        provider: onPhone ? 'demo' : studio.settings.provider,
         endpoint: normalizeEndpoint(studio.settings.saladEndpoint),
         apiKey: saladKey,
         character,
@@ -318,9 +337,11 @@ export default function GenerateScreen() {
         characterId: character?.id ?? null,
         characterName: character?.name ?? null,
         imageUris,
-        source: studio.settings.provider === 'salad' ? 'salad' : 'demo',
+        source: onPhone || studio.settings.provider !== 'salad' ? 'demo' : 'salad',
         model: params.model,
-        provider: studio.settings.provider === 'salad' ? 'salad' : 'demo',
+        provider: onPhone || studio.settings.provider !== 'salad' ? 'demo' : 'salad',
+        phoneRan: onPhone,
+        warning: [phoneNote, result.warning].filter(Boolean).join(' '),
         enhance: false,
         seed: (result.seeds[0] ?? chosen.seeds[0]) ?? null,
         seeds: result.seeds.length ? result.seeds : chosen.seeds,
@@ -330,22 +351,28 @@ export default function GenerateScreen() {
         width: gen.width,
         height: gen.height,
         saladModel: checkpoint?.filename ?? '',
-        loras: gen.loras.map((lora, index) => ({
+        loras: onPhone ? [] : gen.loras.map((lora, index) => ({
           id: `${lora.name}-${index}`,
           name: lora.name,
           weight: lora.weight,
           ...(lora.modelId ? { modelId: lora.modelId } : {}),
           ...(lora.versionId ? { versionId: lora.versionId } : {}),
+          ...(lora.prompt != null ? { prompt: lora.prompt } : {}),
+          ...(lora.enabled === false ? { enabled: false } : {}),
+          ...(lora.kind ? { kind: lora.kind } : {}),
+          ...(lora.triggers?.length ? { triggers: lora.triggers } : {}),
         })),
-        warning: result.warning,
+        regionLayout: gen.regionLayout,
         durationMs: Date.now() - started,
       };
       await studio.rememberGeneration(record);
       const used = result.seeds.length ? result.seeds : chosen.seeds;
       setLastSeeds(used);
-      setStatus(`${result.warning ? `${result.warning} ` : ''}Seed ${used.join(', ')}.`);
+      if (phoneJob) finishJob(phoneJob.id);
+      setStatus(`${phoneNote ? `${phoneNote} ` : ''}${result.warning ? `${result.warning} ` : ''}Seed ${used.join(', ')}.`);
     } catch (caught) {
       const message = friendlyLoraMessage(caught instanceof Error ? caught.message : 'The image could not be drawn.');
+      if (phoneJob) reportJob(phoneJob.id, 0, message, 'failed');
       setError(message);
       const endpoint = normalizeEndpoint(studio.settings.saladEndpoint);
       rememberFault({ time: Date.now(), source: 'generate', message, endpoint });
@@ -355,6 +382,23 @@ export default function GenerateScreen() {
       setBusy(false);
     }
   }
+
+  const generateRef = useRef(generate);
+  generateRef.current = generate;
+  useFocusEffect(
+    useCallback(() => {
+      if (consumePhoneGenerate()) {
+        void generateRef.current(true);
+        return;
+      }
+      if (!consumeCloudRedo()) return;
+      if (cloud.gate !== 'ready') {
+        setError('The cloud is not ready yet. New pictures stay on the phone until it is.');
+        return;
+      }
+      void generateRef.current(false);
+    }, [cloud.gate]),
+  );
 
   return (
     <SafeAreaView style={styles.safe} edges={['top']}>
@@ -378,53 +422,14 @@ export default function GenerateScreen() {
           multiline
           style={styles.prompt}
         />
-        <Text style={styles.hint}>Everyday words. Yume turns them into tags in the Prompt box.</Text>
+        <Text style={styles.hint}>Everyday words. Tap Generate prompt to turn them into tags. Nothing is filled until you tap it, online or offline.</Text>
         <View style={styles.row}>
           <Text style={styles.label}>{CREATE_PROMPT_FIELDS[1]}</Text>
-          <Pressable
-            testID="positive-auto"
-            onPress={() => {
-              const next = !gen.promptAuto;
-              if (!next) {
-                patchGenerator({ promptAuto: false });
-                return;
-              }
-              const parts = gen.describe.trim() ? describeParts(gen.describe, people) : { prompt: '', clothes: '' };
-              const support = gen.describe.trim()
-                ? supportTags({ text: gen.describe, baseModel: checkpoint?.baseModel, style: gen.studioStyle, character, people })
-                : '';
-              patchGenerator({
-                promptAuto: true,
-                positiveAuto: true,
-                ...(parts.prompt
-                  ? {
-                      prompt: keepManualTags(parts.prompt, gen.prompt, gen.autoPrompt ?? '', gen.promptAuto ? 'auto' : 'edited'),
-                      positive: keepManualTags(support, gen.positive, gen.autoPositive ?? '', gen.positiveAuto ? 'auto' : 'edited'),
-                      autoPrompt: parts.prompt,
-                      autoPositive: support,
-                    }
-                  : {}),
-              });
-            }}>
-            <Text style={styles.link}>{gen.promptAuto ? 'Auto on' : 'Auto off'}</Text>
-          </Pressable>
-          <Pressable
-            testID="positive-regenerate"
-            onPress={() => {
-              const parts = describeParts(gen.describe, people);
-              const support = supportTags({ text: gen.describe, baseModel: checkpoint?.baseModel, style: gen.studioStyle, character, people });
-              patchGenerator({
-                promptAuto: true,
-                positiveAuto: true,
-                prompt: keepManualTags(parts.prompt, gen.prompt, gen.autoPrompt ?? '', gen.promptAuto ? 'auto' : 'edited'),
-                positive: keepManualTags(support, gen.positive, gen.autoPositive ?? '', gen.positiveAuto ? 'auto' : 'edited'),
-                autoPrompt: parts.prompt,
-                autoPositive: support,
-              });
-            }}>
-            <Text style={styles.link}>Regenerate</Text>
+          <Pressable testID="generate-prompt" style={styles.generate} disabled={promptBusy} onPress={() => void generatePrompt()}>
+            {promptBusy ? <ActivityIndicator color="#fff" /> : <Text style={styles.generateText}>Generate prompt</Text>}
           </Pressable>
         </View>
+        {promptError ? <Text testID="prompt-error" style={styles.error}>{promptError}</Text> : null}
         <TextInput
           testID="gen-prompt"
           value={gen.prompt}
@@ -434,37 +439,11 @@ export default function GenerateScreen() {
           multiline
           style={styles.prompt}
         />
-        <Text style={styles.hint}>Filled from Describe, without clothing. Editing this box turns Auto off until you tap Regenerate.</Text>
+        <Text style={styles.hint}>Filled from Describe when you tap Generate prompt, without clothing. Your own edits in this box are kept.</Text>
         <View style={styles.row}>
           <Text style={styles.label}>{CREATE_PROMPT_FIELDS[2]}</Text>
-          <Pressable
-            testID="clothes-auto"
-            onPress={() => {
-              const next = !gen.clothesAuto;
-              if (!next) {
-                patchGenerator({ clothesAuto: false });
-                return;
-              }
-              const clothes = describeParts(gen.describe, people).clothes;
-              patchGenerator({
-                clothesAuto: true,
-                clothes: keepManualTags(clothes, gen.clothes || '', gen.autoClothes ?? '', gen.clothesAuto ? 'auto' : 'edited'),
-                autoClothes: clothes,
-              });
-            }}>
-            <Text style={styles.link}>{gen.clothesAuto ? 'Auto on' : 'Auto off'}</Text>
-          </Pressable>
-          <Pressable
-            testID="clothes-regenerate"
-            onPress={() => {
-              const clothes = describeParts(gen.describe, people).clothes;
-              patchGenerator({
-                clothesAuto: true,
-                clothes: keepManualTags(clothes, gen.clothes || '', gen.autoClothes ?? '', gen.clothesAuto ? 'auto' : 'edited'),
-                autoClothes: clothes,
-              });
-            }}>
-            <Text style={styles.link}>Regenerate</Text>
+          <Pressable testID="clothes-regenerate" onPress={() => void generatePrompt()}>
+            <Text style={styles.link}>Generate prompt</Text>
           </Pressable>
           <Pressable
             testID="clear-clothes"
@@ -487,7 +466,7 @@ export default function GenerateScreen() {
           multiline
           style={styles.prompt}
         />
-        <Text style={styles.hint}>Outfit only. Editing this box turns its Auto off, so you can change clothes and keep the rest. It is saved on the selected character.</Text>
+        <Text style={styles.hint}>Outfit only. Generate prompt fills this from the description and keeps your own edits. It is saved on the selected character.</Text>
         <Text style={styles.label}>{CREATE_PROMPT_FIELDS[3]}</Text>
         <TextInput
           testID="gen-positive"
@@ -499,7 +478,7 @@ export default function GenerateScreen() {
           style={styles.negative}
         />
         <Text style={styles.hint}>
-          Auto adds detail tags for {baseFamily(checkpoint?.baseModel ?? '')}, the style, and the selected character. Editing this box keeps your tags. They stay when you switch models.
+          Generate prompt adds detail tags for {baseFamily(checkpoint?.baseModel ?? '')}, the style, and the selected character. Your own tags stay when you switch models.
         </Text>
         <Text style={styles.label}>{CREATE_PROMPT_FIELDS[4]}</Text>
         <TextInput
@@ -603,42 +582,72 @@ export default function GenerateScreen() {
           <Text style={styles.link}>Add LoRA</Text>
         </Pressable>
         <LoraSheet visible={loraSheet} onClose={() => setLoraSheet(false)} />
-        <View style={styles.row}>
-          {gen.loras.map((lora) => {
-            const page = loraPage(lora);
-            const groups = triggerGroups(lora.triggers);
-            const offer = illustriousOffer(checkpoint?.baseModel ?? '', lora.baseModel ?? '', gen.installed);
-            return (
-              <View key={`${lora.name}-${lora.versionId ?? lora.weight}`} style={styles.chipButton}>
-                <Pressable onPress={() => openLink(page.url)}>
-                  <Text style={styles.chipText}>{page.label === 'Search on Civitai' ? `Search ${lora.name}` : lora.name}</Text>
+        {gen.loras.map((lora, index) => {
+          const page = loraPage(lora);
+          const offer = illustriousOffer(checkpoint?.baseModel ?? '', lora.baseModel ?? '', gen.installed);
+          const update = (patch: Partial<typeof lora>) =>
+            patchGenerator({ loras: gen.loras.map((item, itemIndex) => (itemIndex === index ? { ...item, ...patch } : item)) });
+          return (
+            <View key={`${lora.name}-${lora.versionId ?? index}`} style={styles.loraCard}>
+              <View style={styles.row}>
+                <Pressable onPress={() => openLink(page.url)} style={{ flex: 1 }}>
+                  <Text style={styles.checkpointName}>{lora.name}</Text>
                 </Pressable>
-                <Text style={styles.chipText}>{lora.weight}</Text>
-                {groups.slice(1).map((group, index) => (
-                  <Pressable
-                    key={group[0]}
-                    onPress={() =>
-                      patchGenerator({
-                        loras: gen.loras.map((item) => (item === lora ? { ...item, triggerGroup: index + 1 } : item)),
-                      })
-                    }>
-                    <Text style={styles.chipText}>{lora.triggerGroup === index + 1 ? group[0] : `Also ${group[0]}`}</Text>
-                  </Pressable>
-                ))}
-                {offer ? (
-                  <Pressable testID="use-wai-illustrious" onPress={() => void useWaiIllustrious(offer)}>
-                    <Text style={styles.chipText}>{offer === 'switch' ? 'Switch to Illustrious' : 'Install WAI-Illustrious'}</Text>
-                  </Pressable>
-                ) : null}
-                {loraBaseWarning(checkpoint?.baseModel ?? '', lora.baseModel ?? '') ? (
-                  <Text style={styles.chipText}>{loraBaseWarning(checkpoint?.baseModel ?? '', lora.baseModel ?? '')}</Text>
-                ) : null}
-                <Pressable onPress={() => patchGenerator({ loras: gen.loras.filter((item) => item !== lora) })}>
-                  <Text style={styles.chipText}>×</Text>
+                <Pressable testID={`lora-kind-${index}`} onPress={() => update({ kind: lora.kind === 'character' ? 'style' : 'character' })}>
+                  <Text style={styles.link}>{lora.kind === 'character' ? 'Character' : 'Style/Other'}</Text>
+                </Pressable>
+                <Pressable onPress={() => update({ enabled: lora.enabled === false })}>
+                  <Text style={styles.link}>{lora.enabled === false ? 'Off' : 'On'}</Text>
+                </Pressable>
+                <Pressable testID={`lora-remove-${index}`} onPress={() => patchGenerator({ loras: gen.loras.filter((_, itemIndex) => itemIndex !== index) })}>
+                  <Text style={styles.link}>Remove</Text>
                 </Pressable>
               </View>
-            );
-          })}
+              <View style={styles.row}>
+                {[0.4, 0.6, 0.8, 1, 1.2].map((weight) => (
+                  <Pressable key={weight} onPress={() => update({ weight })} style={[styles.chipButton, lora.weight === weight && styles.chipOn]}>
+                    <Text style={styles.chipText}>{weight}</Text>
+                  </Pressable>
+                ))}
+              </View>
+              <TextInput
+                testID={`lora-prompt-${index}`}
+                value={lora.prompt || ''}
+                onChangeText={(prompt) => update({ prompt })}
+                placeholder="This LoRA's prompt"
+                placeholderTextColor={colors.faint}
+                multiline
+                style={styles.prompt}
+              />
+              <Pressable testID={`lora-triggers-${index}`} onPress={() => update({ prompt: mergeTriggerWords(lora.prompt || '', lora.triggers) })}>
+                <Text style={styles.link}>Re-insert triggers</Text>
+              </Pressable>
+              {loraPromptNote(lora.triggers) ? <Text style={styles.hint}>{loraPromptNote(lora.triggers)}</Text> : null}
+              {offer ? (
+                <Pressable testID="use-wai-illustrious" onPress={() => void useWaiIllustrious(offer)}>
+                  <Text style={styles.link}>{offer === 'switch' ? 'Switch to Illustrious' : 'Install WAI-Illustrious'}</Text>
+                </Pressable>
+              ) : null}
+              {loraBaseWarning(checkpoint?.baseModel ?? '', lora.baseModel ?? '') ? (
+                <Text style={styles.hint}>{loraBaseWarning(checkpoint?.baseModel ?? '', lora.baseModel ?? '')}</Text>
+              ) : null}
+            </View>
+          );
+        })}
+        {characterLoras(gen.loras).length >= 2 ? (
+          <View style={styles.row}>
+            <Pressable testID="layout-side" onPress={() => patchGenerator({ regionLayout: 'side' })}>
+              <Text style={styles.link}>{gen.regionLayout === 'stack' ? 'Side by side' : 'Side by side · on'}</Text>
+            </Pressable>
+            <Pressable testID="layout-stack" onPress={() => patchGenerator({ regionLayout: 'stack' })}>
+              <Text style={styles.link}>{gen.regionLayout === 'stack' ? 'Top and bottom · on' : 'Top and bottom'}</Text>
+            </Pressable>
+          </View>
+        ) : null}
+        {characterLoras(gen.loras).length >= 2 ? (
+          <Text style={styles.hint}>Each character LoRA is painted in its own area, left to right or top to bottom, so the characters do not blend. Style LoRAs still cover the whole picture.</Text>
+        ) : null}
+        <View style={styles.row}>
           {parsed.map((lora) => (
             <Text key={`tag-${lora.name}`} style={styles.chip}>
               from prompt {lora.name}:{lora.weight}
@@ -788,6 +797,12 @@ export default function GenerateScreen() {
         {gen.referenceStyle ? <Strength testID="style-strength" value={gen.referenceStyleStrength ?? 0.55} onChange={(referenceStyleStrength) => patchGenerator({ referenceStyleStrength })} /> : null}
         <Text style={styles.hint}>Pose, the whole picture, and art style can be on together. Clothes, the character, and the LoRAs still apply. The skeleton is the pose after it is fitted.</Text>
         <TasteRow />
+        {cloud.toast ? <Text testID="cloud-toast" style={styles.ok}>{cloud.toast}</Text> : null}
+        {studio.settings.provider === 'salad' && cloudIsWaiting(cloud.gate) ? (
+          <Pressable testID="generate-on-phone" style={styles.chipButton} onPress={() => void generate(true)}>
+            <Text style={styles.chipText}>Generate on my phone now</Text>
+          </Pressable>
+        ) : null}
         <Pressable testID="gen-generate" style={styles.go} disabled={busy} onPress={() => void generate()}>
           <Text style={styles.goText}>{busy ? 'Drawing…' : `Generate ${gen.count}`}</Text>
         </Pressable>
@@ -946,7 +961,10 @@ const styles = StyleSheet.create({
   chipOnText: { color: colors.sakura },
   chipText: { color: colors.text, fontFamily: font.bold, fontSize: 13 },
   grid: { flexDirection: 'row', gap: 8 },
+  loraCard: { borderWidth: 1, borderColor: colors.line, borderRadius: 16, padding: 12, gap: 8, backgroundColor: colors.card },
   go: { backgroundColor: colors.sakura, borderRadius: 999, paddingVertical: 14, alignItems: 'center' },
+  generate: { backgroundColor: colors.sakura, borderRadius: 999, paddingHorizontal: 14, paddingVertical: 8, minWidth: 148, alignItems: 'center' },
+  generateText: { color: colors.text, fontFamily: font.black, fontSize: 14 },
   goText: { color: colors.ink, fontFamily: font.black, fontSize: 16 },
   ok: { color: colors.ok, fontFamily: font.semibold, fontSize: 14, lineHeight: 20 },
   error: { color: colors.danger, fontFamily: font.semibold, fontSize: 14, lineHeight: 20 },

@@ -92,8 +92,12 @@ export function cloudChecklist(input: {
   probeError?: string;
   pullPercent?: number | null;
   pullEta?: string | null;
+  /** Salad instance state. A running container has finished the image pull even when `started` is still empty. */
+  instanceState?: string;
   modelDone?: number | null;
   modelTotal?: number | null;
+  /** Bytes came from Salad container logs while the gateway was still closed. */
+  modelFromLogs?: boolean;
   restoreTotal?: number;
   restorePercent?: number | null;
 }): { phase: CloudPhase; pill: string; liveTitle: string; steps: ChecklistStep[]; authBlocked: boolean; overall: number | null } {
@@ -105,7 +109,9 @@ export function cloudChecklist(input: {
     input.healthReady === false ||
     /download|loading|not ready/i.test(`${input.readyDetail || ''} ${input.startupMessage || ''}`);
   const modelEvidence = input.modelDone != null || /model|download|loading|not ready/i.test(`${input.readyDetail || ''} ${input.startupMessage || ''}`);
-  const softwareDownload = (input.downloading ?? 0) > 0 || (input.pullPercent != null && !healthUp);
+  const loggedModel = Boolean(input.modelFromLogs) && (input.modelTotal ?? 0) > 0 && input.modelDone != null;
+  const pullSettled = imagePullSettled(input);
+  const softwareDownload = !pullSettled && ((input.downloading ?? 0) > 0 || (input.pullPercent != null && !healthUp));
   let index = 0;
   let phase: CloudPhase = 'starting';
   let pill = 'Starting...';
@@ -140,10 +146,10 @@ export function cloudChecklist(input: {
   if (softwareDownload && !healthUp) {
     index = 2;
     liveTitle = 'Downloading server software (Salad)';
-  } else if (modelWait && healthUp && modelEvidence) {
+  } else if ((modelWait && healthUp && modelEvidence) || (((input.instanceState || '').toLowerCase() === 'running' || (input.running ?? 0) > 0 || pullSettled) && loggedModel)) {
     index = 4;
     liveTitle = 'Downloading model on cloud (first start can take ~15-25 min)';
-  } else if ((input.creating ?? 0) > 0 || healthUp || (input.running ?? 0) > 0 || input.groupStatus === 'running') {
+  } else if (pullSettled || (input.creating ?? 0) > 0 || healthUp || (input.running ?? 0) > 0 || input.groupStatus === 'running' || (input.instanceState || '').toLowerCase() === 'running') {
     index = 3;
     liveTitle = 'Starting up';
   } else if ((input.allocating ?? 0) > 0 || input.groupStatus === 'deploying') {
@@ -185,6 +191,12 @@ export function sessionUsd(upSec: number, hourly: number): number {
 
 export function capReached(spent: number, cap: number): boolean {
   return cap > 0 && spent >= cap - 0.0001;
+}
+
+/** Salad state running plus pulling_progress 1.0 means the image is on the machine. The started flag is not required. */
+export function imagePullSettled(input: { instanceState?: string; running?: number; pullPercent?: number | null }): boolean {
+  const running = (input.instanceState || '').toLowerCase() === 'running' || (input.running ?? 0) > 0;
+  return running && input.pullPercent != null && input.pullPercent >= 100;
 }
 
 function paint(current: number, input: { pullPercent?: number | null; modelDone?: number | null; modelTotal?: number | null; restorePercent?: number | null }): ChecklistStep[] {

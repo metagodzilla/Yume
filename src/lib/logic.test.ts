@@ -25,6 +25,7 @@ import { renderDemoFrames } from '@/src/lib/render';
 import { describeUpdateError, downloadLabel } from '@/src/lib/apkInstall';
 import { baseFamily, baseLabel, defaultsForBase, familyPreset, illustriousOffer, settingsForCheckpoint, modelCardPress, routeLeavesCreate } from '@/src/lib/checkpoints';
 import { modelsToRestore, modelPresence } from '@/src/lib/keptModels';
+import { assembleLoraPrompts, detectLoraKind, loraCapMessage, loraRoundTrip, mergeTriggerWords, regionalRequest } from '@/src/lib/loraPrompt';
 import { friendlyLoraMessage, loraChoices, loraStem, missingSelectedLoras } from '@/src/lib/loraGate';
 import { applyAppearance, assignReferences, mergeAppearances, pickFrontIndex, referenceImages } from '@/src/lib/fromImage';
 import { blankCharacter } from '@/src/lib/id';
@@ -34,7 +35,7 @@ import { CAST_ROUTE, castRouteOpensScreen } from '@/src/lib/routes';
 import { chooseSeeds } from '@/src/lib/seeds';
 import { redactValue, reportDocument } from '@/src/lib/reportText';
 import { CREATE_PROMPT_FIELDS } from '@/src/lib/createFields';
-import { describeParts, describeToTags, isClothesTag, keepManualTags, namedPeople, settleSavedPrompts, supportTags } from '@/src/lib/positiveTags';
+import { describeParts, describeToTags, generatePromptFromDescribe, isClothesTag, keepManualTags, namedPeople, settleSavedPrompts, supportTags } from '@/src/lib/positiveTags';
 import { defaultOutfitTags, pickCleanTriggerGroup, sentNegative } from '@/src/lib/draw';
 import { bodySizeFromHeight, referenceGenerateFields } from '@/src/lib/referencePicture';
 import { applyTaste, captureShot, castVote, emptyTaste, hideTasteItem, learnTaste, suggestedSettings } from '@/src/lib/taste';
@@ -47,14 +48,21 @@ import { buildSaladBody, classifyGatewayInput, friendlyGatewayMessage, generateU
 import { browsingParams, civitaiModelUrl, filterModels, loraPage, pickPreview, thumbnailUrl, type CivitaiModel } from '@/src/lib/civitai';
 import { buildYumeContainerGroup, choicesFromGpuClasses, costLine, describeDeploy, groupStatusOf, maskKey, normalizeSaladKey, pickDefaultGpu, saladFailureMessage, saladRequest, serverUrlFromLink, shouldIdleStop, shouldIdleWarn } from '@/src/lib/saladCloud';
 import { containerGroupUrl, liveContainerGroup, validateSaladKey } from '@/src/lib/cloudActions';
-import { capReached, checkLine, cloudChecklist, deploymentForEndpoint, formatCostLine, resolveHourly, RTX_4090_LOW_HOURLY, sessionUsd, uptimeSeconds } from '@/src/lib/cloudSteps';
+import { capReached, checkLine, cloudChecklist, deploymentForEndpoint, formatCostLine, imagePullSettled, resolveHourly, RTX_4090_LOW_HOURLY, sessionUsd, uptimeSeconds } from '@/src/lib/cloudSteps';
 import { CLOUD_STOP_CHECK } from '@/src/lib/cloudRun';
 import { CLOUD_OFF_INSTALL, canUseAsDefault, cloudIsOff, installAction, installRequest, isServerInstalled } from '@/src/lib/installGate';
 import { dropTiles, filterTiles, galleryTiles, reusePatch } from '@/src/lib/gallery';
 import type { Generation } from '@/src/lib/types';
 import { pullPercent, readSaladInstances, reallocateTarget } from '@/src/lib/saladCloud';
-import { emptyCloudWatch, observeCloud, STUCK_QUIET_MS } from '@/src/lib/stuckCloud';
+import { logQueryBody, progressFromLogs, readLogEntries } from '@/src/lib/saladLogs';
+import { emptyCloudWatch, observeCloud, STUCK_QUIET_MS, STUCK_STATE_MS } from '@/src/lib/stuckCloud';
+import { DEFAULT_SETTINGS } from '@/src/lib/types';
 import { fileLine, filesForPhase, formatReadyIn, overallEtaSeconds, softwareDetail } from '@/src/lib/startupEta';
+import { getCloudSnapshot, setCloudGate } from '@/src/lib/cloudGate';
+import { compareDirection } from '@/src/lib/compare';
+import { cloudPollMs, shouldRestoreBoot } from '@/src/lib/cloudPoll';
+import { emptyImagesMessage, isTransientNetwork, jobIdFromPictureResponse, retryDelayMs } from '@/src/lib/cloudJob';
+import { cloudIsWaiting, phoneDropNote, shouldUsePhone } from '@/src/lib/phoneFallback';
 import { areaCounts } from '@/src/lib/checkRows';
 import { classifyHeat, estimatePowerWatts, shouldKeepScreenAwake, throttleFor, throttleSteps } from '@/src/lib/phonePower';
 import { composeSheet, decodePng } from '@/src/lib/sheet';
@@ -603,6 +611,30 @@ assert(downloading.phase === 'starting' && downloading.steps[4]?.state === 'curr
 assert(downloading.liveTitle.toLowerCase().includes('downloading model'), 'model download title');
 const imagePull = cloudChecklist({ hasEndpoint: true, downloading: 1, readyStatus: 503, pullPercent: 37 });
 assert(imagePull.liveTitle === 'Downloading server software (Salad)' && imagePull.steps[2]?.state === 'current' && imagePull.steps[4]?.state === 'todo', 'image pull is not the model download');
+const booted = cloudChecklist({
+  hasEndpoint: true,
+  groupStatus: 'running',
+  running: 1,
+  instanceState: 'running',
+  pullPercent: 100,
+  healthStatus: 503,
+  readyStatus: 503,
+});
+assert(imagePullSettled({ instanceState: 'running', pullPercent: 100 }) && !imagePullSettled({ instanceState: 'running', pullPercent: 37 }) && !imagePullSettled({ instanceState: 'downloading', pullPercent: 100 }), 'a running instance with a full pull has the image');
+assert(booted.liveTitle === 'Starting up' && booted.steps[2]?.state === 'done' && booted.steps[3]?.state === 'current', 'running with pulling_progress 1.0 leaves the software step even if started is empty');
+const waiBar = cloudChecklist({
+  hasEndpoint: true,
+  instanceState: 'running',
+  running: 1,
+  pullPercent: 100,
+  healthStatus: 200,
+  readyStatus: 503,
+  healthReady: false,
+  startupMessage: 'Downloading WAI-illustrious-SDXL',
+  modelDone: 1_000,
+  modelTotal: 4_000,
+});
+assert(waiBar.steps[4]?.state === 'current' && waiBar.steps[4]?.percent === 25 && waiBar.steps[2]?.state === 'done', 'WAI bytes fill the model bar once the server answers');
 const slowPull = softwareDetail([{ at: 0, percent: 10 }, { at: 60_000, percent: 11 }], 11);
 assert(slowPull.line.includes('1.0%/min') && slowPull.line.includes('11%'), 'software line shows percent and rate');
 const stuckPull = observeCloud(emptyCloudWatch(), { now: 0, instanceState: 'downloading', pullingPercent: 10, updateTime: 't', readyStatus: 503, healthStatus: null, modelDone: null, startupMessage: '', active: true }, true);
@@ -611,9 +643,62 @@ assert(stillStuck.kind === 'stuck' && stillStuck.autoMove, 'an unchanged pull is
 const movingPull = observeCloud(emptyCloudWatch(), { now: 0, instanceState: 'downloading', pullingPercent: 10, updateTime: 't', readyStatus: 503, healthStatus: null, modelDone: null, startupMessage: '', active: true }, true);
 const slowWatch = observeCloud(movingPull.watch, { now: 60_000, instanceState: 'downloading', pullingPercent: 11, updateTime: 't2', readyStatus: 503, healthStatus: null, modelDone: null, startupMessage: '', active: true }, true);
 assert(slowWatch.kind === 'slow' && !slowWatch.autoMove, 'a slow moving pull is not auto-moved');
+const probeBlind = { now: 0, instanceState: 'running', pullingPercent: 100, updateTime: 't', readyStatus: 503, healthStatus: 503, modelDone: null, startupMessage: '', active: true };
+const loadedQuiet = observeCloud(observeCloud(emptyCloudWatch(), probeBlind, true).watch, { ...probeBlind, now: STUCK_QUIET_MS }, true);
+assert(loadedQuiet.kind !== 'stuck' || loadedQuiet.autoMove, 'a running instance with no logs is the only running auto-move');
+assert(loadedQuiet.kind === 'stuck' && loadedQuiet.autoMove, 'running with no logs and no health for 10 min can auto-move');
+const logged = observeCloud(observeCloud(emptyCloudWatch(), { ...probeBlind, logAt: 0 }, true).watch, { ...probeBlind, now: STUCK_QUIET_MS - 1, logAt: STUCK_QUIET_MS - 1 }, true);
+assert(logged.kind === 'ok' && !logged.autoMove, 'a fresh server log is progress while the gateway is 503');
+const healthy = observeCloud(observeCloud(emptyCloudWatch(), { ...probeBlind, healthStatus: 200 }, true).watch, { ...probeBlind, now: STUCK_STATE_MS, healthStatus: 200 }, true);
+assert(healthy.kind === 'ok' && !healthy.autoMove, 'health 200 is progress even when Salad ready stays false');
+const creating = observeCloud(observeCloud(emptyCloudWatch(), { ...probeBlind, instanceState: 'creating', pullingPercent: null }, true).watch, { ...probeBlind, now: STUCK_QUIET_MS, instanceState: 'creating', pullingPercent: null }, true);
+assert(!creating.autoMove, 'creating does not auto-move');
+assert(DEFAULT_SETTINGS.autoFixStuckCloud === false, 'auto-fix stays off until it is turned on');
+const loggedBytes = progressFromLogs(readLogEntries({
+  items: [
+    { time: '2026-11-25T19:27:00Z', text_log: 'checkpoint download WAI-illustrious-SDXL 2000000000/6946000000 bytes (29%) 12.50 MB/s' },
+    { time: '2026-11-25T19:22:19Z', text_log: 'Uvicorn running on http://0.0.0.0:8080' },
+  ],
+}));
+assert(loggedBytes.bytesDone === 2_000_000_000 && loggedBytes.bytesTotal === 6_946_000_000 && loggedBytes.name === 'WAI-illustrious-SDXL' && (loggedBytes.bytesPerSecond ?? 0) > 1_000_000 && loggedBytes.logAt != null, 'Salad logs carry the WAI byte bar');
+assert(logQueryBody({ group: 'yume-server', instanceId: 'inst-1', start: '2026-11-25T19:00:00Z', end: '2026-11-25T19:30:00Z' }).query.includes('instance_id = "inst-1"'), 'log query is scoped to the instance');
+const fromLogs = cloudChecklist({
+  hasEndpoint: true,
+  instanceState: 'running',
+  running: 1,
+  pullPercent: 100,
+  healthStatus: 503,
+  readyStatus: 503,
+  modelDone: loggedBytes.bytesDone,
+  modelTotal: loggedBytes.bytesTotal,
+  modelFromLogs: true,
+  startupMessage: loggedBytes.message,
+});
+assert(fromLogs.steps[4]?.state === 'current' && fromLogs.steps[4]?.percent === 29 && fromLogs.steps[2]?.state === 'done', 'a closed gateway still shows the logged model bar');
 const weights = filesForPhase(5, [{ name: 'Tile ControlNet', type: 'ControlNet', versionId: null, bytesDone: 10, bytesTotal: 20, speed: 1024 * 1024, state: 'downloading', etaSeconds: 90 }, { name: 'WAI', type: 'Checkpoint', versionId: 1, bytesDone: 1, bytesTotal: 2, speed: 1, state: 'done', etaSeconds: null }]);
 assert(weights.length === 1 && weights[0]?.name === 'Tile ControlNet' && fileLine(weights[0]!).includes('MB') && fileLine({ ...weights[0]!, state: 'waiting' }) === 'waiting', 'each weight file has its own line');
 assert(formatReadyIn(overallEtaSeconds(2, 120, 0)).startsWith('Ready in ~'), 'overall estimate is a ready-in line');
+assert(shouldUsePhone({ provider: 'salad', gate: 'starting', auto: true }) && !shouldUsePhone({ provider: 'salad', gate: 'ready', auto: true }) && shouldUsePhone({ provider: 'salad', gate: 'stopped', auto: false, forced: true }), 'phone fallback only while the cloud is not ready');
+const cloudSnap = getCloudSnapshot();
+assert(getCloudSnapshot() === cloudSnap && cloudSnap.gate === 'unknown', 'cloud status snapshot stays the same object across reads');
+setCloudGate('unknown');
+assert(getCloudSnapshot() === cloudSnap, 'setting the same cloud status does not notify');
+setCloudGate('stopped');
+const stoppedSnap = getCloudSnapshot();
+assert(stoppedSnap !== cloudSnap && stoppedSnap.gate === 'stopped' && getCloudSnapshot() === stoppedSnap, 'a real cloud status change replaces the snapshot once');
+setCloudGate('ready');
+const readySnap = getCloudSnapshot();
+assert(readySnap.gate === 'ready' && readySnap.toast === 'Cloud is ready. New pictures use the cloud.' && getCloudSnapshot() === readySnap, 'becoming ready toasts once');
+setCloudGate('ready');
+assert(getCloudSnapshot() === readySnap, 'repeating ready does not toast again');
+assert(cloudIsWaiting('slow') && phoneDropNote({ loras: 1, reference: true }).includes('LoRA') && phoneDropNote({ loras: 1, reference: true }).includes('clothes prompt'), 'phone keeps the prompt and says what the cloud must do');
+assert(compareDirection(390) === 'column' && compareDirection(800) === 'row', 'a narrow screen stacks the original above the results');
+assert(cloudPollMs(true) === 60_000 && cloudPollMs(false) === 5_000 && !shouldRestoreBoot('boot-1', 'boot-1') && shouldRestoreBoot('boot-2', 'boot-1'), 'a ready cloud restores once per boot and polls slowly');
+assert(isTransientNetwork('fetch failed: java.net.UnknownHostException: Unable to resolve host persimmon.salad.cloud') && retryDelayMs(0) === 1000 && retryDelayMs(8) === 15_000, 'a phone DNS blip retries the poll');
+const queuedPicture = { id: 'jobabc', status: 'queued', progress: 0, images: [] as string[] };
+assert(jobIdFromPictureResponse(queuedPicture) === 'jobabc' && emptyImagesMessage(queuedPicture) === null, 'a job id is not an empty picture');
+assert(jobIdFromPictureResponse({ images: ['abc'], id: 'old', status: 'done' }) === null && emptyImagesMessage({ images: ['abc'] }) === null, 'a finished image response is used as-is');
+assert(emptyImagesMessage({ images: [] }) === 'Salad returned no images.', 'only a body with no job and no images is empty');
 const moving = cloudChecklist({ hasEndpoint: true, healthStatus: 503, readyStatus: 503, readyDetail: 'Cloud has no internet - moving to a new machine', startupMessage: 'Cloud has no internet - moving to a new machine' });
 assert(moving.liveTitle === 'Cloud has no internet - moving to a new machine' && moving.pill === 'Moving', 'dead network tells the phone the machine is moving');
 const locked = cloudChecklist({ hasEndpoint: true, healthStatus: 403, readyStatus: 403 });
@@ -726,10 +811,25 @@ const previewState = {
   extraPrompt: 'shiny eyes',
   vPrediction: false,
   studioStyle: 'off',
+  regionLayout: 'side',
   installed: [{ versionId: 1337429, modelId: 1, name: 'Animagine XL 4.0', version: 'v4', type: 'Checkpoint', baseModel: 'SDXL 1.0', filename: 'animagine-xl-4.0.safetensors', hash: '1d5b43ff75', sha256: '', triggers: [], isDefault: true }],
 } as GeneratorState;
 const previewBody = buildSaladGenerateBody(previewState, composeGenerationPrompt(previewState), 1);
-assert(previewBody.loras.length === 1 && previewBody.loras[0]?.name === 'ribbon', 'empty lora is not sent');
+assert(previewBody.loras.length === 1 && previewBody.loras[0]?.name === 'ribbon' && previewBody.regions.length === 0, 'empty lora is not sent and one style lora stays global');
+const regionalState = {
+  ...previewState,
+  regionLayout: 'side' as const,
+  loras: [
+    { name: 'momo', weight: 0.8, kind: 'character' as const, prompt: 'pink hair', enabled: true },
+    { name: 'ink', weight: 0.5, kind: 'style' as const, prompt: 'lineart', enabled: true },
+    { name: 'ken', weight: 0.7, kind: 'character' as const, prompt: 'blue eyes', enabled: true },
+  ],
+};
+const regionalPrompt = composeGenerationPrompt(regionalState);
+const regionalBody = buildSaladGenerateBody(regionalState, regionalPrompt, 7);
+assert(regionalPrompt.includes('lineart') && !regionalPrompt.includes('pink hair') && !regionalPrompt.includes('blue eyes'), 'style lora text stays in the global prompt and character text leaves it');
+assert(regionalBody.regions.length === 2 && regionalBody.regions[0]?.lora_name === 'momo' && regionalBody.regions[1]?.lora_name === 'ken' && regionalBody.region_layout === 'side' && regionalBody.loras.some((lora) => lora.kind === 'character'), 'the request splits two characters and still sends every lora');
+assert(buildSaladGenerateBody({ ...previewState, loras: [{ name: 'momo', weight: 0.8, kind: 'character', prompt: 'pink hair' }] }, 'girl', 1).regions.length === 0, 'one character sends no regions');
 assert(previewBody.embeddings.length === 1 && previewBody.embeddings[0] === 'easynegative', 'empty embeddings are not sent');
 assert(previewBody.model === '1337429' && previewBody.model_name === 'Animagine XL 4.0' && previewBody.scheduler === 'Euler a' && previewBody.hires_scale === null, 'create payload selects the checkpoint by id');
 assert(modelCardPress().action === 'open-sheet' && modelCardPress().browse === '/(tabs)/explore' && routeLeavesCreate('/models') && !routeLeavesCreate(modelCardPress().browse), 'model card opens the sheet');
@@ -778,7 +878,29 @@ addLora({ name: 'extra', weight: 0.5, triggers: ['should not land in prompt'] })
 assert(getGenerator().prompt === 'girl, manga', 'addLora leaves the prompt box alone');
 const triggered = composeGenerationPrompt(added);
 assert(triggered.startsWith('girl, manga, ribbon hair') && !triggered.toLowerCase().includes('monochrome') && triggered.endsWith('absurdres'), 'first trigger group is used and blocklisted lora tags are dropped');
+assert(mergeTriggerWords('pink hair, solo', ['Pink Hair', 'blue eyes']) === 'pink hair, solo, blue eyes', 'trigger words fill a lora prompt without duplicates');
+assert(loraCapMessage(9) === null && loraCapMessage(10)?.includes('10'), 'an eleventh lora is refused');
+const cappedBefore = getGenerator().loras;
+patchGenerator({ loras: Array.from({ length: 10 }, (_, index) => ({ name: `cap-${index}`, weight: 0.8 })) });
+const refusedLora = addLora({ name: 'eleventh', weight: 0.8, triggers: ['sparkle'] });
+assert(refusedLora.ok === false && (refusedLora.message || '').includes('10') && getGenerator().loras.length === 10, 'the eleventh lora is not added');
+patchGenerator({ loras: cappedBefore });
+assert(assembleLoraPrompts('girl', [{ prompt: 'pink hair', enabled: true }, { prompt: '  ', enabled: true }, { prompt: 'smile', enabled: false }, { prompt: 'blue eyes', enabled: true }]) === 'girl, pink hair, blue eyes', 'lora prompts follow the main prompt and skip blanks');
+const savedLoras = loraRoundTrip([{ name: 'momo', weight: 0.8, prompt: 'pink hair', enabled: true, triggers: ['pink hair'], kind: 'character' as const }]);
+assert(savedLoras[0]?.prompt === 'pink hair' && savedLoras[0]?.kind === 'character', 'a lora prompt survives a save and load');
+assert(detectLoraKind({ tags: ['character', 'anime'], name: 'Momo' }) === 'character' && detectLoraKind({ type: 'LORA', tags: ['clothing'], name: 'ribbon' }) === 'style', 'character tags are detected and other loras stay style');
+const regions = regionalRequest([
+  { name: 'momo', weight: 0.8, kind: 'character', prompt: 'pink hair', enabled: true },
+  { name: 'ink', weight: 0.5, kind: 'style', prompt: 'lineart', enabled: true },
+  { name: 'ken', weight: 0.7, kind: 'character', prompt: 'blue eyes', enabled: true },
+], 'side');
+assert(regions?.regions.length === 2 && regions.regions[0]?.loraName === 'momo' && regions.regions[0]?.w === 0.5 && regions.regions[1]?.x === 0.5, 'two characters split the picture and a style lora does not');
+assert(regionalRequest([{ name: 'momo', weight: 0.8, kind: 'character', prompt: 'pink hair' }], 'side') === null, 'one character stays on the normal prompt');
 assert(illustriousOffer('SDXL 1.0', 'Illustrious', []) === 'install' && illustriousOffer('SDXL 1.0', 'Illustrious', [{ type: 'Checkpoint', baseModel: 'Illustrious' }]) === 'switch', 'illustrious lora offers a matching checkpoint');
+const generatedPrompt = generatePromptFromDescribe({ describe: 'a girl with pink hair taking a selfie in her room', prompt: 'masterpiece', clothes: '', positive: '' });
+assert(!generatedPrompt.error && generatedPrompt.prompt.includes('1girl') && generatedPrompt.prompt.includes('pink hair') && generatedPrompt.prompt.includes('masterpiece'), 'generate prompt fills tags offline and keeps hand edits');
+const blankPrompt = generatePromptFromDescribe({ describe: '   ', prompt: 'keep me', clothes: '', positive: '' });
+assert(blankPrompt.error?.includes('description') && blankPrompt.prompt === 'keep me', 'an empty description is an error and does not clear the prompt');
 const selfie = describeToTags('a girl with pink hair taking a selfie in her room');
 assert(selfie === '1girl, solo, pink hair, selfie, holding phone, bedroom, indoors', `describe becomes danbooru tags: ${selfie}`);
 assert(supportTags({ text: 'a girl with pink hair taking a selfie in her room', baseModel: 'SDXL 1.0', style: 'anime' }).includes('detailed eyes') && !supportTags({ text: 'a girl with pink hair taking a selfie in her room', baseModel: 'SDXL 1.0', style: 'anime' }).includes('1girl'), 'positive adds detail tags only');

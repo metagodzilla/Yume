@@ -8,7 +8,7 @@ import { ModelThumb } from '@/components/ModelThumb';
 import { rememberFault } from '@/src/lib/reportText';
 import { civitaiModelUrl, errorText, loraFileName, loraPage, searchCivitai, type CivitaiModel, type ContentFilter } from '@/src/lib/civitai';
 import { BASE_MODELS, MODEL_TYPES, SORTS } from '@/src/lib/defaultModel';
-import { addLora, patchGenerator, useGenerator } from '@/src/lib/genstore';
+import { addLora, addLoraWithTriggers, patchGenerator, useGenerator } from '@/src/lib/genstore';
 import { ensureSelectedLoras } from '@/src/lib/ensureLoras';
 import { normalizeEndpoint } from '@/src/lib/salad';
 import { readCivitaiToken, readSaladKey } from '@/src/lib/storage';
@@ -156,12 +156,17 @@ export default function ModelsScreen() {
                 onLongPress={() =>
                   version &&
                   lora &&
-                  addLora({
+                  void addLoraWithTriggers({
                     name: loraFileName(version, model.name),
                     weight: 0.8,
                     modelId: model.id,
                     versionId: version.id,
                     triggers: version.trainedWords,
+                    baseModel: version.baseModel,
+                    type: model.type,
+                    tags: model.tags,
+                  }).then((result) => {
+                    if (result.message) setLoraNote(result.message);
                   })
                 }>
                 <ModelThumb model={model} filter={gen.contentFilter} />
@@ -187,8 +192,11 @@ export default function ModelsScreen() {
                       versionId: version.id,
                       triggers: version.trainedWords,
                       baseModel: version.baseModel,
+                      type: model.type,
+                      tags: model.tags,
                     };
-                    addLora(picked);
+                    const added = addLora(picked);
+                    if (added.message) setLoraNote(added.message);
                     if (studio.settings.provider !== 'salad') return;
                     void (async () => {
                       const endpoint = normalizeEndpoint(studio.settings.saladEndpoint);

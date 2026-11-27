@@ -24,6 +24,10 @@ export type LoraSpec = {
   weight: number;
   modelId?: number;
   versionId?: number;
+  prompt?: string;
+  enabled?: boolean;
+  triggers?: string[];
+  kind?: 'character' | 'style';
 };
 
 export type UserStyle = {
@@ -113,6 +117,8 @@ export type Generation = {
   characterId: string | null;
   characterName: string | null;
   imageUris: string[];
+  /** The page or photo these results were made from, kept so history can compare. */
+  originalUri?: string;
   source: 'demo' | 'openai' | 'salad';
   model: string;
   provider: ProviderId;
@@ -126,9 +132,12 @@ export type Generation = {
   height: number;
   saladModel: string;
   loras: LoraSpec[];
+  regionLayout?: 'side' | 'stack';
   warning?: string;
   durationMs?: number;
   favoriteIndexes?: number[];
+  /** This picture was drawn on the phone while the cloud was not ready. */
+  phoneRan?: boolean;
   /** Settings stored with a like or dislike. Stays on this phone. */
   shot?: import('@/src/lib/taste').ImageShot;
 };
@@ -162,8 +171,12 @@ export type Settings = {
   idleStopMinutes: number;
   lowPower: boolean;
   serverUpdateCheck: boolean;
-  /** Move a Salad machine that stops making progress. On unless turned off. */
+  /** Move a Salad machine that stops making progress. Off until turned on. */
   autoFixStuckCloud?: boolean;
+  /** The person chose the auto-fix setting. Older installs stay off. */
+  autoFixStuckChosen?: boolean;
+  /** Draw on the phone while Salad is still starting. On unless turned off. */
+  autoPhoneWhileCloud?: boolean;
 };
 
 export type Session = {
@@ -220,7 +233,9 @@ export const DEFAULT_SETTINGS: Settings = {
   idleStopMinutes: 0,
   lowPower: false,
   serverUpdateCheck: true,
-  autoFixStuckCloud: true,
+  autoFixStuckCloud: false,
+  autoFixStuckChosen: false,
+  autoPhoneWhileCloud: true,
 };
 
 export const DEFAULT_SESSION: Session = {

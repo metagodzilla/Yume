@@ -4,7 +4,8 @@ import { Modal, Pressable, ScrollView, StyleSheet, Text, View } from 'react-nati
 
 import { fetchResources } from '@/src/lib/checkpointUse';
 import { loraBaseWarning, toInstalled, type CatalogCheckpoint } from '@/src/lib/checkpoints';
-import { addLora, useGenerator } from '@/src/lib/genstore';
+import { addLoraWithTriggers, useGenerator } from '@/src/lib/genstore';
+import { readCivitaiToken } from '@/src/lib/storage';
 import { loraChoices } from '@/src/lib/loraGate';
 import { readKeptLibrary } from '@/src/lib/restoreModels';
 import { normalizeEndpoint } from '@/src/lib/salad';
@@ -104,13 +105,19 @@ export function LoraSheet({ visible, onClose }: { visible: boolean; onClose: () 
                     testID={`add-lora-${item.versionId}`}
                     onPress={() => {
                       const resource = toInstalled(item);
-                      addLora({
-                        name: resource.filename || resource.name,
-                        weight: strength,
-                        modelId: resource.modelId,
-                        versionId: resource.versionId,
-                        triggers: resource.triggers,
-                      });
+                      void (async () => {
+                        const token = await readCivitaiToken().catch(() => null);
+                        const result = await addLoraWithTriggers({
+                          name: resource.filename || resource.name,
+                          weight: strength,
+                          modelId: resource.modelId,
+                          versionId: resource.versionId,
+                          triggers: resource.triggers,
+                          baseModel: resource.baseModel,
+                          type: resource.type,
+                        }, token);
+                        setError(result.message);
+                      })();
                     }}>
                     <Text style={styles.link}>{added ? 'Update' : 'Add'}</Text>
                   </Pressable>

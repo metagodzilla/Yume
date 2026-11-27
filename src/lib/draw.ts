@@ -5,9 +5,11 @@ import { DEFAULT_CHECKPOINT } from '@/src/lib/defaultModel';
 import type { GeneratorState } from '@/src/lib/genstore';
 import { embedParameters } from '@/src/lib/pngmeta';
 import { renderDemoFrames } from '@/src/lib/render';
+import { followJob, jobIdFromPictureResponse } from '@/src/lib/cloudJob';
 import { classifyGatewayInput, generateUrl, saladErrorMessage } from '@/src/lib/salad';
 import { expandSeeds } from '@/src/lib/seeds';
 import { normalizeSaladKey } from '@/src/lib/saladCloud';
+import { characterLoras, regionalRequest } from '@/src/lib/loraPrompt';
 import { characterOutfitTags, isClothesTag } from '@/src/lib/positiveTags';
 import { characterClause } from '@/src/lib/prompt';
 import { applyTaste, currentTaste, tagsOf } from '@/src/lib/taste';
@@ -17,17 +19,20 @@ export function embeddingTokens(state: GeneratorState): string[] {
   return state.embeddings.split(',').map((item) => item.trim()).filter(Boolean);
 }
 
-export function namedLoras(state: GeneratorState, prompt: string): { name: string; weight: number; versionId?: number; baseModel?: string; triggers?: string[] }[] {
+export function namedLoras(state: GeneratorState, prompt: string): { name: string; weight: number; kind: 'character' | 'style'; versionId?: number; baseModel?: string; triggers?: string[] }[] {
   const extracted = extractLoras(prompt);
   const combined = [...state.loras, ...extracted.loras.filter((tag) => !state.loras.some((item) => item.name === tag.name))];
   return combined
+    .filter((lora) => !('enabled' in lora) || lora.enabled !== false)
     .map((lora) => {
       const versionId = 'versionId' in lora && typeof lora.versionId === 'number' ? lora.versionId : undefined;
       const baseModel = 'baseModel' in lora && typeof lora.baseModel === 'string' ? lora.baseModel : undefined;
       const triggers = 'triggers' in lora && Array.isArray(lora.triggers) ? lora.triggers.filter((item) => typeof item === 'string') : undefined;
+      const kind: 'character' | 'style' = 'kind' in lora && lora.kind === 'character' ? 'character' : 'style';
       return {
         name: lora.name.trim(),
         weight: Number(lora.weight) || 0,
+        kind,
         ...(versionId ? { versionId } : {}),
         ...(baseModel ? { baseModel } : {}),
         ...(triggers?.length ? { triggers } : {}),
@@ -151,16 +156,19 @@ export function composeGenerationPrompt(state: GeneratorState, characterText = '
     ...splitPromptTags(style).map(normTag),
     ...splitPromptTags(state.quality || '').map(normTag),
   ]);
-  const loraTriggers = state.triggers
-    ? state.loras
-        .flatMap((lora) => {
-          const match = state.installed.find(
-            (item) => (lora.versionId && item.versionId === lora.versionId) || item.filename === lora.name || item.name === lora.name,
-          );
-          return loraTriggerTags(lora, match, reserved, typed);
-        })
-        .join(', ')
-    : '';
+  const regional = characterLoras(state.loras).length >= 2;
+  const loraTriggers = state.loras
+    .flatMap((lora) => {
+      if (lora.enabled === false) return [];
+      if (regional && lora.kind === 'character') return [];
+      if (typeof lora.prompt === 'string') return lora.prompt.trim() ? [lora.prompt.trim()] : [];
+      if (!state.triggers) return [];
+      const match = state.installed.find(
+        (item) => (lora.versionId && item.versionId === lora.versionId) || item.filename === lora.name || item.name === lora.name,
+      );
+      return loraTriggerTags(lora, match, reserved, typed);
+    })
+    .join(', ');
   const afterStyle = [
     state.triggers ? (checkpoint?.triggers ?? []).join(', ') : '',
     characterText.trim(),
@@ -222,7 +230,7 @@ export type SaladGenerateBody = {
   model_name: string;
   model_hash: string;
   clip_skip: number;
-  loras: { name: string; weight: number; versionId?: number; baseModel?: string; triggers?: string[] }[];
+  loras: { name: string; weight: number; kind?: 'character' | 'style'; versionId?: number; baseModel?: string; triggers?: string[] }[];
   embeddings: string[];
   vae: string | null;
   hires_scale: number | null;
@@ -244,6 +252,8 @@ export type SaladGenerateBody = {
   reference_image: string | null;
   mask: string | null;
   prediction_type: 'epsilon' | 'v_prediction';
+  regions: { prompt: string; x: number; y: number; w: number; h: number; lora_name: string; lora_weight: number }[];
+  region_layout: 'side' | 'stack';
 };
 
 export function sentWithTaste(state: GeneratorState, prompt: string, character: Character | null = null): { prompt: string; negative: string } {
@@ -267,6 +277,7 @@ export function buildSaladGenerateBody(
 ): SaladGenerateBody {
   const tasted = sentWithTaste(state, prompt, character);
   const params = generationParams(state, tasted.prompt, seed, character);
+  const regional = regionalRequest(state.loras, state.regionLayout || 'side');
   return {
     prompt: tasted.prompt,
     negative_prompt: tasted.negative,
@@ -284,6 +295,7 @@ export function buildSaladGenerateBody(
     loras: scaleLoraStack(namedLoras(state, prompt)).map((lora) => ({
       name: lora.name,
       weight: lora.weight,
+      kind: lora.kind || 'style',
       ...(lora.versionId ? { versionId: lora.versionId } : {}),
       ...(lora.baseModel ? { baseModel: lora.baseModel } : {}),
       ...(lora.triggers?.length ? { triggers: lora.triggers } : {}),
@@ -309,6 +321,16 @@ export function buildSaladGenerateBody(
     reference_image: initPng ? bytesToBase64(initPng) : null,
     mask: maskPng ? bytesToBase64(maskPng) : null,
     prediction_type: state.vPrediction ? 'v_prediction' : 'epsilon',
+    regions: (regional?.regions || []).map((region) => ({
+      prompt: region.prompt,
+      x: region.x,
+      y: region.y,
+      w: region.w,
+      h: region.h,
+      lora_name: region.loraName,
+      lora_weight: region.loraWeight,
+    })),
+    region_layout: regional?.layout || 'side',
   };
 }
 
@@ -392,8 +414,29 @@ export async function drawFrames(input: {
   }
   const raw = await response.text();
   if (!response.ok) throw new Error(saladErrorMessage({ aborted: false, status: response.status, body: raw, url: target }));
-  const body = JSON.parse(raw) as { images?: string[]; seeds?: number[] };
+  let body = JSON.parse(raw) as { id?: string; status?: string; images?: string[]; seeds?: number[] };
+  const jobId = jobIdFromPictureResponse(body);
+  if (jobId) {
+    const done = await followJob({
+      id: jobId,
+      read: () => readGenerateJob(`${endpoint}/jobs/${jobId}`, apiKey),
+      result: () => readGenerateJob(`${endpoint}/jobs/${jobId}/result`, apiKey),
+    });
+    body = done;
+  }
   if (!body.images?.length) throw new Error('Salad returned no images.');
   const returned = Array.isArray(body.seeds) ? body.seeds.filter((seed) => typeof seed === 'number' && seed >= 0) : [];
   return { pngs: body.images.map((item) => base64ToBytes(item)), parameters, seeds: returned.length ? returned : seeds };
+}
+
+async function readGenerateJob(url: string, apiKey: string): Promise<{ id?: string; status?: string; images?: string[]; seeds?: number[]; error?: string; detail?: string }> {
+  let response: Response;
+  try {
+    response = await fetch(url, { headers: { Authorization: `Bearer ${apiKey}`, 'X-Api-Key': apiKey, 'Salad-Api-Key': apiKey } });
+  } catch (error) {
+    throw new Error(error instanceof Error ? error.message : 'fetch failed');
+  }
+  const payload = (await response.json().catch(() => ({}))) as { id?: string; status?: string; images?: string[]; seeds?: number[]; error?: string; detail?: string };
+  if (!response.ok) throw new Error(payload.detail || payload.error || `HTTP ${response.status}`);
+  return payload;
 }

@@ -210,7 +210,14 @@ def ensure_opt_default() -> dict[str, Any]:
 
 def materialize_checkpoint(record: dict[str, Any]) -> dict[str, Any]:
     """Download a checkpoint that is not already on disk. Uses YUME_CIVITAI_TOKEN when the request has none."""
-    _materialize(record, civitai_token(None))
+    name = str(record.get("name") or "Checkpoint")
+
+    def report(done: int, total: int) -> None:
+        from yume_server.startup import note_download
+
+        note_download(int(done), int(total or record.get("bytes") or 0), name=name)
+
+    _materialize(record, civitai_token(None), report)
     _store_record(record)
     return record
 

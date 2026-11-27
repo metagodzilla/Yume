@@ -51,7 +51,7 @@ export default function QueueScreen() {
                 <View key={job.id} style={styles.card}>
                   <Text style={styles.name}>{job.title}</Text>
                   <Text style={styles.body}>
-                    {job.kind} · {Math.round(job.progress * 100)}%{job.reason ? ` · ${job.reason}` : ''}
+                    {job.kind === 'offline-generate' ? 'On this phone' : job.kind} · {Math.round(job.progress * 100)}%{job.reason ? ` · ${job.reason}` : ''}
                   </Text>
                   <View style={styles.row}>
                     {job.status !== 'paused' ? (

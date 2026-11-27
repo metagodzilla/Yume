@@ -8,6 +8,7 @@ import time
 from typing import Any
 
 STARTED = time.time()
+BOOT_ID = f"{int(STARTED)}-{os.getpid()}"
 
 
 def _loaded_name() -> str:
@@ -34,6 +35,7 @@ def collect() -> dict[str, Any]:
         "diskFreeMb": disk.get("free"),
         "diskTotalMb": disk.get("total"),
         "uptimeSec": int(time.time() - STARTED),
+        "bootId": BOOT_ID,
         "model": _loaded_name(),
         "modelLoaded": os.environ.get("YUME_READY", "1") != "0",
         "source": gpu.get("source") or ("mock" if mock else "host"),

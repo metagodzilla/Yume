@@ -10,6 +10,7 @@ import {
   saladRequest,
   type GpuChoice,
 } from '@/src/lib/saladCloud';
+import { logQueryBody } from '@/src/lib/saladLogs';
 import type { CloudDeployment } from '@/src/lib/storage';
 
 export function liveContainerGroup(): CloudDeployment {
@@ -95,6 +96,24 @@ export async function readContainerGroup(apiKey: string, deployment: CloudDeploy
 
 export async function readContainerInstances(apiKey: string, deployment: CloudDeployment, fetchImpl?: typeof fetch) {
   return saladRequest({ apiKey, path: `${groupPath(deployment)}/instances`, fetchImpl });
+}
+
+export async function queryContainerLogs(input: {
+  apiKey: string;
+  organization: string;
+  group: string;
+  instanceId?: string;
+  start: string;
+  end: string;
+  fetchImpl?: typeof fetch;
+}) {
+  return saladRequest({
+    apiKey: input.apiKey,
+    path: `/organizations/${encodeURIComponent(input.organization)}/log-entries`,
+    method: 'POST',
+    body: logQueryBody({ group: input.group, instanceId: input.instanceId, start: input.start, end: input.end }),
+    fetchImpl: input.fetchImpl,
+  });
 }
 
 export function reallocateInstancePath(deployment: CloudDeployment, instanceId: string): string {

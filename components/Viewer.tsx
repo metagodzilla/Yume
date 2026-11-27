@@ -9,6 +9,7 @@ import { TasteButtons } from '@/components/TasteButtons';
 import { metadataLines, reusePatch } from '@/src/lib/gallery';
 import { confirmAction } from '@/src/lib/confirm';
 import { patchGenerator } from '@/src/lib/genstore';
+import { requestCloudRedo } from '@/src/lib/cloudRedo';
 import { copyText, saveImageToLibrary, shareImage } from '@/src/lib/media';
 import { useStudio } from '@/src/studio';
 import { colors, font } from '@/src/theme';
@@ -21,12 +22,14 @@ export function Viewer() {
   const [busy, setBusy] = useState(false);
   const [details, setDetails] = useState(false);
   const [scale, setScale] = useState(1);
+  const [showOriginal, setShowOriginal] = useState(false);
   const scaleRef = useRef(1);
   const viewerKey = viewer ? `${viewer.title}:${viewer.index}:${viewer.images.length}` : '';
 
   useEffect(() => {
     setNote(null);
     setScale(1);
+    setShowOriginal(false);
     scaleRef.current = 1;
   }, [viewerKey]);
 
@@ -68,6 +71,8 @@ export function Viewer() {
   const uri = viewer.images[viewer.index];
   const frame = viewer.frames?.[viewer.index];
   const generation = frame ? studio.history.find((item) => item.id === frame.generationId) : viewer.generationId ? studio.history.find((item) => item.id === viewer.generationId) : undefined;
+  const original = generation?.originalUri;
+  const shown = scale > 1 && showOriginal && original ? original : uri;
   const imageIndex = frame?.imageIndex ?? viewer.index;
   const favorite = generation ? (generation.favoriteIndexes ?? []).includes(imageIndex) : false;
   const prompt = generation?.finalPrompt || generation?.userPrompt || viewer.prompt;
@@ -102,8 +107,10 @@ export function Viewer() {
         </View>
 
         <View style={styles.stage} {...swipe.panHandlers}>
-          {uri ? (
-            <Image source={{ uri }} style={[styles.image, { transform: [{ scale }] }]} contentFit="contain" cachePolicy="memory-disk" />
+          {shown ? (
+            <Pressable style={styles.image} disabled={!(scale > 1 && original)} onPress={() => setShowOriginal((value) => !value)}>
+              <Image source={{ uri: shown }} style={[styles.image, { transform: [{ scale }] }]} contentFit="contain" cachePolicy="memory-disk" />
+            </Pressable>
           ) : null}
         </View>
 
@@ -118,6 +125,7 @@ export function Viewer() {
               {prompt || 'Character sheet only'}
             </Text>
           )}
+          {scale > 1 && original ? <Text style={styles.note}>{showOriginal ? 'Original. Tap the picture for this result.' : 'Result. Tap the picture for the original.'}</Text> : null}
           {note ? <Text style={styles.note}>{note}</Text> : null}
           <View style={styles.actions}>
             <Action icon="download-outline" label="Save" onPress={() => run(() => saveImageToLibrary(uri, filename))} />
@@ -141,6 +149,35 @@ export function Viewer() {
                 label={favorite ? 'Favorited' : 'Favorite'}
                 onPress={() => void studio.toggleFavorite(generation.id, imageIndex)}
               />
+              {generation.phoneRan ? (
+                <Action
+                  icon="cloud-upload-outline"
+                  label="Redo on cloud"
+                  onPress={() => {
+                    patchGenerator({
+                      prompt: generation.userPrompt,
+                      clothes: generation.shot?.clothes || '',
+                      negative: generation.negative,
+                      loras: generation.loras.map((lora) => ({
+                        name: lora.name,
+                        weight: lora.weight,
+                        ...(lora.versionId ? { versionId: lora.versionId } : {}),
+                        ...(lora.prompt != null ? { prompt: lora.prompt } : {}),
+                        ...(lora.enabled === false ? { enabled: false } : {}),
+                        ...(lora.kind ? { kind: lora.kind } : {}),
+                        ...(lora.triggers?.length ? { triggers: lora.triggers } : {}),
+                      })),
+                      regionLayout: generation.regionLayout || 'side',
+                      referencePose: Boolean(generation.shot?.reference.pose),
+                      referenceCopy: Boolean(generation.shot?.reference.copy),
+                      referenceStyle: Boolean(generation.shot?.reference.style),
+                    });
+                    requestCloudRedo();
+                    closeViewer();
+                    router.push('/(tabs)/create');
+                  }}
+                />
+              ) : null}
               <Action
                 icon="refresh-outline"
                 label="Reuse"

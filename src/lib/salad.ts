@@ -1,4 +1,5 @@
 import { base64ToBytes, bytesToBase64 } from '@/src/lib/base64';
+import { followJob, jobIdFromPictureResponse, type JobView } from '@/src/lib/cloudJob';
 import { summarizeHttpBody } from '@/src/lib/reportText';
 import { normalizeSaladKey } from '@/src/lib/saladCloud';
 import type { LoraSpec, SamplerId } from '@/src/lib/types';
@@ -202,6 +203,24 @@ export function endpointDiffersFromLive(saved: string): boolean {
 
 type SaladResponse = { images?: unknown; seeds?: unknown; model?: unknown; consistency?: unknown };
 
+async function readSaladJob(url: string, apiKey: string, fetchImpl: typeof fetch): Promise<SaladResponse & JobView> {
+  let response: Response;
+  try {
+    response = await fetchImpl(url, { headers: { Authorization: `Bearer ${apiKey}`, 'X-Api-Key': apiKey, 'Salad-Api-Key': apiKey } });
+  } catch (error) {
+    throw new Error(error instanceof Error ? error.message : 'fetch failed');
+  }
+  const raw = await response.text();
+  let parsed: SaladResponse & JobView & { detail?: string } = {};
+  try {
+    parsed = raw ? (JSON.parse(raw) as SaladResponse & JobView & { detail?: string }) : {};
+  } catch {
+    parsed = { detail: raw };
+  }
+  if (!response.ok) throw new Error(parsed.detail || parsed.error || `HTTP ${response.status}`);
+  return parsed;
+}
+
 export async function generateSalad(
   input: {
     endpoint: string;
@@ -249,6 +268,16 @@ export async function generateSalad(
     parsed = JSON.parse(raw) as SaladResponse;
   } catch {
     throw new Error('Salad answered, but not with image data. Check that the endpoint is the Yume container.');
+  }
+  const queued = parsed as SaladResponse & JobView;
+  const jobId = jobIdFromPictureResponse(queued);
+  if (jobId) {
+    const done = await followJob({
+      id: jobId,
+      read: () => readSaladJob(`${endpoint}/jobs/${jobId}`, apiKey, fetchImpl),
+      result: () => readSaladJob(`${endpoint}/jobs/${jobId}/result`, apiKey, fetchImpl),
+    });
+    parsed = done;
   }
   if (!Array.isArray(parsed.images) || parsed.images.length === 0) {
     throw new Error('Salad returned no images. If the node just woke up, try once more.');

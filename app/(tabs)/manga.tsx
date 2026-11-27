@@ -5,7 +5,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { AppBar } from '@/components/AppBar';
 import { CharacterReference, type ReferencePick, emptyReference } from '@/components/CharacterReference';
-import { CompareSlider } from '@/components/CompareSlider';
+import { ResultCompare } from '@/components/ResultCompare';
 import { PictureSource } from '@/components/PictureSource';
 import { cloudPost, imageBytes, imageField, pictureRecord } from '@/src/lib/cloudPicture';
 import { planTarget, pngSize, redrawDenoise, type FramePreset } from '@/src/lib/framePlan';
@@ -33,8 +33,9 @@ export default function MangaScreen() {
   const [strokes, setStrokes] = useState<Stroke[]>([]);
   const [erase, setErase] = useState(false);
   const [mask, setMask] = useState<string | null>(null);
-  const [after, setAfter] = useState<string | null>(null);
+  const [results, setResults] = useState<string[]>([]);
   const [note, setNote] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const frame = useRef({ width: 1, height: 1 });
   const eraseRef = useRef(false);
@@ -73,6 +74,7 @@ export default function MangaScreen() {
     if (!bytes || busy) return;
     setBusy(true);
     setNote(null);
+    setError(null);
     try {
       const key = (await readSaladKey()) || '';
       const result = await cloudPost(studio.settings.saladEndpoint, key, '/manga', {
@@ -98,23 +100,30 @@ export default function MangaScreen() {
         strokes,
       });
       if (!result.image) throw new Error('The cloud did not return a picture.');
-      setAfter(`data:image/png;base64,${result.image}`);
+      if (result.image === imageField(bytes)) throw new Error('The cloud returned the original page. The picture was not changed.');
+      setResults((current) => [...current, `data:image/png;base64,${result.image}`]);
       const bubbles = typeof result.bubbles === 'number' ? ` ${result.bubbles} text areas kept.` : '';
       setNote(job === 'edit' ? `Character swapped.${bubbles}` : `Page redrawn.${bubbles}`);
     } catch (caught) {
-      setNote(caught instanceof Error ? caught.message : 'The redraw failed.');
+      setError(caught instanceof Error ? caught.message : 'The redraw failed.');
     } finally {
       setBusy(false);
     }
   }
 
   async function save() {
-    if (!after) return;
+    if (!bytes || !results.length) return;
     const id = uid('manga');
-    const uri = await persistPng(`${id}-0.png`, imageBytes(after.split(',')[1] || ''));
+    const originalUri = await persistPng(`${id}-original.png`, bytes);
+    const uris: string[] = [];
+    for (let index = 0; index < results.length; index += 1) {
+      uris.push(await persistPng(`${id}-${index}.png`, imageBytes(results[index]?.split(',')[1] || '')));
+    }
     await studio.rememberGeneration(pictureRecord({
       id,
-      uri,
+      uri: uris[0] || '',
+      uris,
+      originalUri,
       prompt: prompt || (job === 'edit' ? 'manga edit' : 'manga redraw'),
       negative: '',
       model: 'WAI-Illustrious',
@@ -122,7 +131,7 @@ export default function MangaScreen() {
       height: target?.height || 0,
       provider: studio.settings.provider,
     }));
-    setNote('Saved to the gallery.');
+    setNote('Saved to history.');
   }
 
   return (
@@ -135,7 +144,7 @@ export default function MangaScreen() {
           <Pressable testID="job-edit" onPress={() => setJob('edit')} style={[styles.chip, job === 'edit' && styles.on]}><Text style={styles.chipText}>Edit</Text></Pressable>
         </View>
         <Text style={styles.body}>{job === 'edit' ? 'Tap the person to replace. Brush the mask, then pick your character. The pose is fitted to her body.' : 'Redraws the page in the same layout. Speech bubbles are put back on top.'}</Text>
-        <PictureSource label="Choose a manga page" uri={null} onPick={(next, shown) => { setBytes(next); setPreview(shown); setAfter(null); setMask(null); }} />
+        <PictureSource label="Choose a manga page" uri={null} onPick={(next, shown) => { setBytes(next); setPreview(shown); setResults([]); setMask(null); setError(null); }} />
         {preview ? (
           <View
             style={styles.stage}
@@ -188,8 +197,9 @@ export default function MangaScreen() {
         <Pressable testID="manga-go" style={styles.go} disabled={busy || !bytes} onPress={() => void run()}>
           <Text style={styles.goText}>{busy ? 'Working…' : job === 'edit' ? 'Swap character' : 'Redraw'}</Text>
         </Pressable>
-        {preview && after ? <CompareSlider before={preview} after={after} /> : null}
-        {after ? <Pressable testID="manga-save" onPress={() => void save()}><Text style={styles.link}>Save to gallery</Text></Pressable> : null}
+        {preview && results.length ? <ResultCompare original={preview} results={results} /> : null}
+        {results.length ? <Pressable testID="manga-save" onPress={() => void save()}><Text style={styles.link}>Save to history</Text></Pressable> : null}
+        {error ? <Text testID="manga-error" style={styles.error}>{error}</Text> : null}
         {note ? <Text style={styles.hint}>{note}</Text> : null}
       </ScrollView>
     </SafeAreaView>
@@ -213,6 +223,7 @@ const styles = StyleSheet.create({
   title: { color: colors.text, fontFamily: font.logo, fontSize: 28 },
   body: { color: colors.muted, fontFamily: font.semibold, fontSize: 14, lineHeight: 20 },
   hint: { color: colors.faint, fontFamily: font.semibold, fontSize: 12, lineHeight: 17 },
+  error: { color: colors.danger, fontFamily: font.semibold, fontSize: 14, lineHeight: 20 },
   row: { flexDirection: 'row', alignItems: 'center', gap: 8, flexWrap: 'wrap' },
   chip: { borderRadius: 999, borderWidth: 1, borderColor: colors.line, paddingHorizontal: 12, paddingVertical: 8 },
   on: { borderColor: colors.sakura, backgroundColor: colors.cardAlt },

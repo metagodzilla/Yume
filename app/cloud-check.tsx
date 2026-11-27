@@ -4,6 +4,7 @@ import { Platform, Pressable, ScrollView, StyleSheet, Text, View } from 'react-n
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { probe } from '@/src/lib/connection';
+import { followJob, jobIdFromPictureResponse } from '@/src/lib/cloudJob';
 import { classifyGatewayInput, redactSecrets } from '@/src/lib/salad';
 import { normalizeSaladKey } from '@/src/lib/saladCloud';
 import { pushLog } from '@/src/lib/log';
@@ -65,7 +66,30 @@ export default function CloudCheckScreen() {
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${key}`, 'Salad-Api-Key': key },
         body: JSON.stringify({ prompt: 'test', width: 512, height: 512, steps: 1, scheduler: 'Euler a' }),
       }, 20000);
-      next.push(tiny.ok ? { name: 'Test picture', status: 'pass', detail: `A 512px frame returned in ${tiny.ms} ms.` } : { name: 'Test picture', status: 'fail', detail: tiny.body?.detail || tiny.error || 'The test picture failed. The gateway may have timed out near 100 seconds.' });
+      const jobId = tiny.ok ? jobIdFromPictureResponse(tiny.body) : null;
+      if (jobId) {
+        try {
+          const headers = { Authorization: `Bearer ${key}`, 'Salad-Api-Key': key, 'X-Api-Key': key };
+          await followJob({
+            id: jobId,
+            read: async () => {
+              const status = await probe(`${endpoint}/jobs/${jobId}`, { headers }, 20_000);
+              if (!status.ok) throw new Error(status.body?.detail || status.error || 'No job with that id.');
+              return status.body as { id?: string; status?: string; error?: string; note?: string; ready?: boolean };
+            },
+            result: async () => {
+              const result = await probe(`${endpoint}/jobs/${jobId}/result`, { headers }, 20_000);
+              if (!result.ok) throw new Error(result.body?.detail || result.error || 'The result is not ready.');
+              return result.body as { images?: string[] };
+            },
+          });
+          next.push({ name: 'Test picture', status: 'pass', detail: `The test job finished after ${tiny.ms} ms to start.` });
+        } catch (error) {
+          next.push({ name: 'Test picture', status: 'fail', detail: error instanceof Error ? error.message : 'The test picture failed.' });
+        }
+      } else {
+        next.push(tiny.ok ? { name: 'Test picture', status: 'pass', detail: `A 512px frame returned in ${tiny.ms} ms.` } : { name: 'Test picture', status: 'fail', detail: tiny.body?.detail || tiny.error || 'The test picture failed. The gateway may have timed out near 100 seconds.' });
+      }
     }
     if (studio.settings.meshEndpoint.trim()) {
       const mesh = await probe(`${studio.settings.meshEndpoint.replace(/\/+$/, '')}/health`, {}, 8000);
